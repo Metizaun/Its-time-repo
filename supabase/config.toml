@@ -1,0 +1,47 @@
+
+[api]
+enabled = true
+schemas = ["crm", "graphql_public"]
+extra_search_path = ["public", "extensions", "crm"]
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = []
+
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[auth.mfa.phone]
+enroll_enabled = false
+verify_enabled = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+secure_password_change = false
+max_frequency = "1m0s"
+otp_length = 8
+otp_expiry = 3600
+
+[functions.send-user-invitation]
+enabled = true
+verify_jwt = true
+import_map = "./functions/send-user-invitation/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/send-user-invitation/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/send-user-invitation/*.html" ]
+
+[functions.buscar-leads]
+enabled = true
+verify_jwt = true
+import_map = "./functions/buscar-leads/deno.json"
+entrypoint = "./functions/buscar-leads/index.ts"

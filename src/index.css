@@ -1,0 +1,284 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Crm Its time - Design System */
+
+@layer base {
+  :root {
+    /* Light mode */
+    --background: 0 0% 96%;       /* #f5f5f5 (mais quente que branco puro, dá menos “lavado”) */
+    --foreground: 0 0% 9%;        /* texto primário (mantido) */
+
+    --card: 0 0% 100%;            /* cards continuam brancos */
+    --card-foreground: 0 0% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    /* ------------ BRAND COLORS (atualizadas) ------------- */
+    /* Primary -> Verde exato pedido: hsl(168, 97%, 45%) */
+    --primary: 168 97% 45%;
+    --primary-foreground: 0 0% 6%; /* texto sobre primary -> preto suave (quase preto) */
+
+    /* Secondary / Accent -> Cyan (#00C4EB) */
+    --secondary: 190 95% 47%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 96%;            /* elementos sutis (mantidos) */
+    --muted-foreground: 0 0% 45%; /* labels / grid / axis (MANTER — não mexer) */
+
+    --accent: 168 97% 45%;        /* deixar o accent igual ao primary - destaque */
+    --accent-foreground: 0 0% 96%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* Mantive border parecido, só um toque para definição */
+    --border: 0 0% 88%;           /* slightly stronger than before for nicer card definition */
+    --input: 0 0% 89%;
+    --ring: 168 97% 45%;          /* foco usa a cor primária (boa acessibilidade visual) */
+    --radius: 0.75rem;
+    
+    /* Custom tokens */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 9%;
+    
+    /* Kanban columns (mantive as cores que já estavam) */
+    --kanban-novo: 199 89% 48%;
+    --kanban-atendimento: 48 96% 53%;
+    --kanban-orcamento: 262 52% 47%;
+    --kanban-fechado: 142 71% 45%;
+    --kanban-perdido: 0 84% 60%;
+    --kanban-remarketing: 280 65% 60%;
+  }
+
+  .dark {
+    /* Dark mode - Crm Its time palette */
+    --background: 0 0% 9%;        /* #161616 - já era próximo (mantive 9%) */
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 96%;
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 96%;
+
+    /* Primary/Accent atualizados para o verde exato */
+    --primary: 168 97% 45%;
+    --primary-foreground: 0 0% 6%; /* texto sobre primary -> preto suave (como no seu print) */
+
+    --secondary: 190 95% 47%;
+    --secondary-foreground: 0 0% 96%;
+
+    --muted: 0 0% 20%;
+    --muted-foreground: 0 0% 60%;   /* labels/grid do dark (mantive) */
+
+    --accent: 168 97% 45%;
+    --accent-foreground: 0 0% 96%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 168 97% 45%;
+
+    /* Custom tokens */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 9%;
+    
+    /* Kanban columns - dark mode optimized */
+    --kanban-novo: 199 89% 48%;
+    --kanban-atendimento: 48 96% 53%;
+    --kanban-orcamento: 262 52% 47%;
+    --kanban-fechado: 142 71% 45%;
+    --kanban-perdido: 0 84% 60%;
+    --kanban-remarketing: 280 65% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold;
+  }
+}
+
+@layer utilities {
+  /* Card hover effects */
+  .hover-lift {
+    @apply transition-all duration-200 hover:-translate-y-1 hover:shadow-lg;
+  }
+  
+  /* Skeleton animation */
+  @keyframes pulse-subtle {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  
+  .animate-pulse-subtle {
+    animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  
+  /* Drag placeholder */
+  .drag-placeholder {
+    @apply border-2 border-dashed border-primary/50 bg-primary/5 rounded-lg;
+  }
+  
+  /* Focus visible */
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.btn {
+  width: 70px;
+  height: 36px;
+  border-radius: 50px;
+  background: linear-gradient(145deg,#e6e6e6,#fff);
+  box-shadow: 3px 3px 8px #d0d0d0,-3px -3px 8px #ffffff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  transition: 0.3s ease-in-out;
+}
+
+.dark .btn {
+  background: #1c1c1c;
+  box-shadow: inset 3px 3px 8px #151515, inset -3px -3px 8px #222;
+}
+
+.btn__indicator {
+  height: 28px;
+  width: 28px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.3s ease-in-out;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 2px 2px 4px #ccc, inset -2px -2px 4px #fff;
+}
+
+.dark .btn__indicator {
+  transform: translateX(34px);
+  background: #03e3b6;
+}
+
+.btn__icon {
+  font-size: 16px;
+  color: #ffcb00;
+  transition: 0.3s ease-in-out;
+}
+
+.dark .btn__icon {
+  color: white;
+}
+
+.btn__icon.animated {
+  animation: spin 0.5s ease;
+}
+
+@keyframes spin {
+  50% { transform: rotate(180deg); opacity: .2; }
+  100% { transform: rotate(360deg); opacity: 1; }
+}
+
+/* 1) overflow responsive: ícone pode vazar em telas < 850px, fica escondido em >=850px */
+.card-overflow-responsive {
+  overflow: visible; /* mobile / default: deixa o ícone ultrapassar */
+}
+@media (min-width: 850px) {
+  .card-overflow-responsive {
+    overflow: hidden; /* desktop/maior: evita vazamento */
+  }
+}
+
+/* 2) tamanho responsivo do ícone (usa clamp: min, prefer, max) */
+.card-icon-size {
+  width: clamp(34px, 6vw, 48px);
+  height: clamp(34px, 6vw, 48px);
+}
+
+/* valor estatístico responsivo — mobile first */
+.stat-value {
+  font-weight: 600;
+  line-height: 1.1;
+  font-size: clamp(1rem, 4vw, 1.375rem); /* 16px → ~22px */
+  white-space: nowrap; /* ✅ impede quebrar R$ em outra linha */
+  overflow-wrap: normal; 
+  word-break: normal;
+  max-width: 100%;
+}
+
+
+/* telas médias (tablets) — limite até ~24px */
+@media (min-width: 640px) {
+  .stat-value {
+    font-size: clamp(1.125rem, 3vw, 1.5rem); /* 18px → 24px */
+    margin-top: 24px;
+  }
+}
+
+/* telas grandes — limite leve ~26px */
+@media (min-width: 1024px) {
+  .stat-value {
+    font-size: clamp(1.25rem, 2vw, 1.625rem); /* 20px → ~26px */
+  }
+}
+
+/* linha de luz premium estilo site */
+.kanban-light-bar {
+  position: absolute;
+  top: 0;
+  left: 28px;
+  right: 28px;
+  height: 2px;
+  border-radius: 2px;
+  pointer-events: none;
+  background: linear-gradient(90deg, var(--kanban-color, #03E3B6), transparent);
+  opacity: 0.7;
+
+  /* sombra realista e suave */
+  box-shadow:
+      0 0 4px rgba(3, 227, 182, 0.35),
+      0 0 12px rgba(3, 227, 182, 0.15);
+
+  transition:
+    opacity .25s ease,
+    box-shadow .25s ease,
+    transform .25s ease;
+}
+
+/* quando arrasta ou foca */
+.kanban-light-bar-active {
+  opacity: 1;
+  box-shadow:
+      0 0 6px rgba(3, 227, 182, 0.45),
+      0 0 18px rgba(3, 227, 182, 0.25),
+      inset 0 1px 1px rgba(255,255,255,0.2);
+  transform: translateY(-1px);
+}

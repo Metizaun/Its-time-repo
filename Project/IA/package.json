@@ -1,0 +1,49 @@
+{
+  "name": "sdr-agent-gemini",
+  "version": "1.0.0",
+  "description": "Sistema multi-tenant de agentes SDR com Gemini API",
+  "main": "dist/api-server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch api-server.ts",
+    "automation:worker": "tsx automation-worker.ts",
+    "build": "tsc",
+    "start": "node dist/api-server.js",
+    "test": "jest",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"**/*.{ts,json,md}\""
+  },
+  "keywords": [
+    "sdr",
+    "whatsapp",
+    "bot",
+    "gemini",
+    "ai",
+    "multi-tenant",
+    "crm"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.45.4",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.15.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

@@ -1,0 +1,91 @@
+/* === Animated Theme Toggle Button === */
+
+.btn {
+  width: 70px;
+  height: 36px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  cursor: pointer;
+
+  /* Light mode base */
+  background: linear-gradient(145deg, #e6e6e6, #ffffff);
+  border: 1px solid rgba(0,0,0,0.08);
+  box-shadow:
+    3px 3px 8px rgba(0,0,0,0.08),
+    -3px -3px 8px rgba(255,255,255,0.6);
+
+  transition:
+    background .25s ease,
+    box-shadow .25s ease,
+    transform .12s ease,
+    border .25s ease;
+}
+
+/* === DARK MODE BUTTON === */
+.dark .btn {
+  background: rgba(22, 22, 22, 0.65);
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(8px);
+  box-shadow:
+    inset 3px 3px 8px rgba(0,0,0,0.55),
+    inset -3px -3px 8px rgba(255,255,255,0.03),
+    0 0 12px rgba(3, 227, 182, 0.18);
+}
+
+/* Indicator orb */
+.btn__indicator {
+  height: 28px;
+  width: 28px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  transition:
+    transform .28s cubic-bezier(.2,.9,.2,1),
+    background .25s ease,
+    box-shadow .25s ease;
+
+  box-shadow:
+    inset 2px 2px 6px rgba(0,0,0,0.06),
+    inset -2px -2px 6px rgba(255,255,255,0.8);
+}
+
+/* Dark orb glow */
+.dark .btn__indicator {
+  transform: translateX(34px);
+  background: #03e3b6;
+  box-shadow:
+    0 0 10px rgba(3, 227, 182, 0.35),
+    inset 0 0 6px rgba(0,0,0,0.4);
+}
+
+/* Icon (FA) */
+.btn__icon {
+  font-size: 14px;
+  color: #ffcb00;
+  transition: transform .35s ease, opacity .25s ease, color .2s ease;
+}
+
+/* Dark mode icon */
+.dark .btn__icon {
+  color: white;
+}
+
+/* Spin animation */
+.btn__icon.animated {
+  animation: spinToggle .45s ease;
+}
+
+@keyframes spinToggle {
+  50% { transform: rotate(180deg); opacity: .2; }
+  100% { transform: rotate(360deg); opacity: 1; }
+}
+
+/* Hover lift */
+.btn:hover {
+  transform: translateY(-2px);
+}
