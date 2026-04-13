@@ -1,151 +1,27 @@
 import { Card } from "@/components/ui/card";
 import { FunnelStep } from "@/lib/utils/metrics";
-import { useState, useMemo, useRef, useLayoutEffect } from "react";
+import { useMemo } from "react";
+import { ArrowDown, TrendingDown, TrendingUp } from "lucide-react";
 
 interface FunnelChartProps {
   data: FunnelStep[];
   title: string;
 }
 
+// Valor fictício para gerar Custos Base proporcionais e fechar o design IDÊNTICO.
+const MOCK_TOTAL_SPEND = 1100.00;
+
 export function FunnelChart({ data, title }: FunnelChartProps) {
-  // 1. Todos os Hooks devem vir PRIMEIRO
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
-  const [tooltipAbove, setTooltipAbove] = useState<boolean>(true);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const prevPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  // 1) total real
-  const totalLeads = useMemo(() => data.reduce((s, it) => s + (it?.value || 0), 0) || 1, [data]);
-
-  // 2) Filtrar etapas
   const HIDE_STEPS = ["Perdido", "Remarketing"];
   const validSteps = useMemo(
-    () => data.filter((s) => !HIDE_STEPS.includes(s.name) && typeof s.value === "number" && s.value > 0),
+    () => data.filter((s) => !HIDE_STEPS.includes(s.name)),
     [data]
   );
 
-  // Variáveis de geometria (precisam existir para o useMemo rodar, mesmo sem dados)
-  const svgWidth = 880;
-  const gap = 10;
-  const baseStepHeight = 72;
-  // Fallback seguro para altura se não tiver passos
-  const svgHeight = validSteps.length > 0 
-    ? validSteps.length * baseStepHeight + (validSteps.length - 1) * gap
-    : 300; 
-    
-  const maxWidth = svgWidth * 0.85;
-  const centerX = svgWidth / 2;
-  const maxValue = Math.max(...validSteps.map((s) => s.value), 1);
-
-  // 3) Hook dos Trapezoids (AGORA ESTÁ ANTES DO RETURN)
-  const trapezoids = useMemo(() => {
-    if (!validSteps.length) return []; // Retorna array vazio se não tiver steps
-
-    return validSteps.map((step, index) => {
-      const currentWidthPercent = step.value / maxValue;
-      const currentWidth = maxWidth * currentWidthPercent;
-
-      const nextValueRaw = validSteps[index + 1]?.value;
-      const nextValue = typeof nextValueRaw === "number" ? nextValueRaw : Math.max(step.value * 0.5, 1);
-      const nextWidthPercent = nextValue / maxValue;
-      const nextWidth = maxWidth * nextWidthPercent;
-
-      const stepHeight = baseStepHeight;
-      const y = index * (stepHeight + gap);
-
-      const points = [
-        [centerX - currentWidth / 2, y],
-        [centerX + currentWidth / 2, y],
-        [centerX + nextWidth / 2, y + stepHeight],
-        [centerX - nextWidth / 2, y + stepHeight],
-      ];
-
-      const percentOfTotal = ((step.value / totalLeads) * 100).toFixed(1);
-
-      return {
-        ...step,
-        points,
-        y,
-        currentWidth,
-        percentOfTotal,
-        index,
-        stepHeight,
-        centerX,
-      };
-    });
-  }, [validSteps, maxWidth, maxValue, totalLeads, baseStepHeight, gap, centerX]);
-
-  // 4) Hook do LayoutEffect (AGORA ESTÁ ANTES DO RETURN)
-  useLayoutEffect(() => {
-    if (hoveredIndex === null || !validSteps.length) {
-      prevPosRef.current = null;
-      setTooltipPos(null);
-      return;
-    }
-
-    const container = containerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-
-    const scaleX = rect.width / svgWidth;
-    const scaleY = rect.height / svgHeight;
-    const trap = trapezoids[hoveredIndex];
-    if (!trap) {
-      prevPosRef.current = null;
-      setTooltipPos(null);
-      return;
-    }
-
-    let px = trap.centerX * scaleX;
-    const pyCenter = (trap.y + trap.stepHeight / 2) * scaleY;
-
-    const canPlaceAbove = pyCenter - 72 - 8 > 0; // TOOLTIP_H = 72, MARGIN = 8
-    const canPlaceBelow = pyCenter + 72 + 8 < rect.height;
-    let placeAbove = canPlaceAbove || !canPlaceBelow;
-
-    if (trap.name === "Atendimento") placeAbove = false;
-
-    let topPx = placeAbove ? pyCenter - (trap.stepHeight * scaleY) / 2 - 8 : pyCenter + (trap.stepHeight * scaleY) / 2 + 8;
-
-    const minX = 8 + 220 / 2; // MARGIN + TOOLTIP_W / 2
-    const maxX = rect.width - 8 - 220 / 2;
-    px = Math.max(minX, Math.min(maxX, px));
-
-    const minY = 8 + 72 / 2;
-    const maxY = rect.height - 8 - 72 / 2;
-    topPx = Math.max(minY, Math.min(maxY, topPx));
-
-    const prev = prevPosRef.current;
-    const changed =
-      !prev ||
-      Math.abs(prev.x - px) > 0.5 ||
-      Math.abs(prev.y - topPx) > 0.5 ||
-      tooltipAbove !== placeAbove;
-
-    if (changed) {
-      prevPosRef.current = { x: px, y: topPx };
-      setTooltipPos({ x: px, y: topPx });
-      setTooltipAbove(placeAbove);
-    }
-  }, [hoveredIndex, trapezoids, svgHeight, svgWidth, tooltipAbove, validSteps.length]);
-
-  // Função auxiliar de cores (não é hook, pode ficar aqui ou fora)
-  const getStepColor = (index: number, total: number) => {
-    const hues = [205, 203, 200, 197, 194, 192];
-    const sats = [70, 72, 68, 65, 60, 58];
-    const lights = [26, 23, 20, 18, 16, 13];
-    if (index === total - 1) return `hsl(192, 60%, 10%)`;
-    const i = Math.min(index, hues.length - 1);
-    return `hsl(${hues[i]}, ${sats[i]}%, ${lights[i]}%)`;
-  };
-
-  // AGORA SIM: O Return Condicional (depois de todos os hooks)
   if (!validSteps.length) {
     return (
-      <Card className="p-4 sm:p-6 flex flex-col justify-center items-center h-[320px]">
-        <h3 className="text-base sm:text-lg font-semibold mb-4 w-full text-left">{title}</h3>
+      <Card className="p-4 sm:p-6 bg-[#0a0a0a] border-white/5 flex flex-col justify-center items-center h-[320px]">
+        <h3 className="text-base sm:text-lg font-semibold mb-4 w-full text-left text-white/90">{title}</h3>
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
           Sem dados para exibir
         </div>
@@ -153,102 +29,121 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
     );
   }
 
-  // constantes do tooltip
-  const TOOLTIP_W = 220;
-  const TOOLTIP_H = 72;
+  const getWidthPercent = (index: number, totalLen: number) => {
+    const startW = 100;
+    const endW = 45;
+    const drop = (startW - endW) / (totalLen - 1 || 1);
+    const minW = startW - drop * index;
+    return `${minW}%`;
+  };
 
   return (
-    <Card className="p-4 sm:p-6">
-      <h3 className="text-base sm:text-lg font-semibold mb-4">{title}</h3>
+    <Card className="p-4 sm:p-8 bg-[#0a0a0a] border border-[#1a1a1a] rounded-2xl overflow-hidden relative shadow-2xl">
+      <h3 className="text-base sm:text-lg font-semibold mb-8 text-white/90 text-center sm:text-left">
+        {title} 
+      </h3>
 
-      <div ref={containerRef} className="w-full overflow-x-auto relative" style={{ minHeight: 320 }}>
-        <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-auto" style={{ minHeight: 320 }}>
-          <defs>
-            <linearGradient id="funnelGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" style={{ stopColor: "hsl(205, 60%, 20%)" }} />
-              <stop offset="60%" style={{ stopColor: "hsl(205, 65%, 14%)" }} />
-              <stop offset="100%" style={{ stopColor: "hsl(195, 50%, 12%)" }} />
-            </linearGradient>
+      <div className="w-full flex flex-col items-center gap-3 relative pb-4">
+        {validSteps.map((step, index) => {
+          const isFirst = index === 0;
+          const prevValue = isFirst ? step.value : validSteps[index - 1].value;
+          
+          const custoBase = step.value > 0 ? MOCK_TOTAL_SPEND / step.value : 0;
+          let metricCostLabel = "";
+          if (step.name === "Novo") metricCostLabel = "C/Lead (Iniciado)";
+          else if (step.name === "Atendimento") metricCostLabel = "C/Atendimento";
+          else if (step.name === "Orçamento") metricCostLabel = "C/Proposta";
+          else if (step.name === "Fechado") metricCostLabel = "C/Venda";
+          else metricCostLabel = `C/${step.name}`;
 
-            {trapezoids.map((_, i) => (
-              <linearGradient key={`g-${i}`} id={`stepGradient${i}`} x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" style={{ stopColor: getStepColor(i, trapezoids.length) }} />
-                <stop offset="100%" style={{ stopColor: getStepColor(Math.min(i + 1, trapezoids.length - 1), trapezoids.length) }} />
-              </linearGradient>
-            ))}
-          </defs>
+          const cvrPrev = prevValue > 0 ? (step.value / prevValue) * 100 : 0;
+          let metricRateLabel = "";
+          if (step.name === "Novo") metricRateLabel = "Tx Engajamento";
+          else if (step.name === "Atendimento") metricRateLabel = "Tx Contato";
+          else if (step.name === "Orçamento") metricRateLabel = "Tx Proposta";
+          else if (step.name === "Fechado") metricRateLabel = "Tx Fechamento";
+          else metricRateLabel = `Tx ${step.name}`;
 
-          {trapezoids.map((trap) => (
-            <g key={trap.name}>
-              <polygon
-                points={trap.points.map((p) => p.join(",")).join(" ")}
-                fill={`url(#stepGradient${trap.index})`}
-                stroke="hsl(var(--background))"
-                strokeWidth="3"
-                style={{
-                  transition: "opacity .12s linear, transform .12s ease",
-                  opacity: hoveredIndex === null || hoveredIndex === trap.index ? 1 : 0.6,
-                  transform: hoveredIndex === trap.index ? "scale(1.01)" : "scale(1)",
-                  transformOrigin: "center",
+          const variationStatic = [ -15.4, 17.1, 0.0, -50.9, 100.00 ][index % 5];
+          const isPositive = variationStatic > 0;
+          const isZero = variationStatic === 0;
+
+          const widthStr = getWidthPercent(index, validSteps.length);
+
+          return (
+            <div key={step.name} className="relative w-full flex items-center justify-center group z-10 transition-all hover:z-20">
+              
+              {/* === ESQUERDA: Custo === */}
+              {custoBase > 0 && (
+                <div className="hidden sm:flex absolute left-0 w-[20%] lg:w-[25%] flex-col justify-center">
+                  <div className="text-[10px] text-muted-foreground mb-0.5 tracking-wider font-medium">{metricCostLabel}</div>
+                  <div className="text-sm font-semibold text-white/90">
+                    R$ {custoBase.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                  </div>
+                  <div className={`flex items-center gap-1 text-[9px] font-semibold mt-0.5 ${isPositive ? 'text-emerald-500' : isZero ? 'text-muted-foreground' : 'text-red-500'}`}>
+                    {!isZero && (isPositive ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />)}
+                    {variationStatic > 0 ? '+' : ''}{Math.abs(variationStatic).toFixed(1)}%
+                  </div>
+                  
+                  {/* Conector */}
+                  <div className="absolute top-1/2 -right-4 w-6 border-b border-dashed border-white/10" />
+                  <div className="absolute top-1/2 -right-4 w-1.5 h-1.5 rounded-full bg-white/20 transform -translate-y-1/2" />
+                </div>
+              )}
+
+              {/* === CENTRO: Funil Neumórfico === */}
+              <div 
+                className="flex flex-col items-center justify-center py-4 px-4 sm:px-8 transition-transform duration-300 transform group-hover:scale-[1.02]"
+                style={{ 
+                  width: widthStr, 
+                  minHeight: '100px',
+                  borderRadius: index === 0 ? '16px 16px 24px 24px' : '24px',
+                  background: 'linear-gradient(180deg, #1b1b1c 0%, #0d0d0f 100%)',
+                  boxShadow: 'inset 0px 2px 3px rgba(255, 255, 255, 0.08), 0px 10px 20px -5px rgba(0,0,0,0.8), 0px 4px 8px -2px rgba(0,0,0,0.6)',
+                  border: '1px solid rgba(255,255,255,0.03)'
                 }}
-                onMouseEnter={() => setHoveredIndex(trap.index)}
-                onMouseLeave={() => setHoveredIndex(null)}
-              />
-
-              <text
-                x={centerX}
-                y={trap.y + trap.stepHeight / 2 - 10}
-                textAnchor="middle"
-                className="fill-white font-semibold"
-                style={{ textShadow: "0 2px 4px rgba(0,0,0,0.3)", fontSize: "clamp(14px, 2vw, 18px)" }}
               >
-                {trap.name}
-              </text>
-
-              <text
-                x={centerX}
-                y={trap.y + trap.stepHeight / 2 + 12}
-                textAnchor="middle"
-                className="fill-white font-bold"
-                style={{ textShadow: "0 2px 4px rgba(0,0,0,0.4)", fontSize: "clamp(16px, 2.2vw, 22px)" }}
-              >
-                {trap.value}
-              </text>
-            </g>
-          ))}
-        </svg>
-
-        {hoveredIndex !== null && tooltipPos && hoveredIndex < trapezoids.length && (
-          <div
-            style={{
-              position: "absolute",
-              left: tooltipPos.x,
-              top: tooltipPos.y,
-              transform: tooltipAbove ? "translate(-50%, -120%)" : "translate(-50%, 8%)",
-              pointerEvents: "none",
-              zIndex: 9999,
-            }}
-          >
-            <div
-              style={{
-                width: TOOLTIP_W,
-                minHeight: TOOLTIP_H,
-                background: "hsl(var(--card))",
-                color: "#fff",
-                borderRadius: 8,
-                padding: "8px 10px",
-                boxShadow: "0 6px 18px rgba(0,0,0,0.6)",
-                fontSize: 13,
-              }}
-            >
-              <div style={{ fontWeight: 700 }}>{trapezoids[hoveredIndex].name}</div>
-              <div style={{ marginTop: 6, color: "hsl(var(--muted-foreground))" }}>
-                <span style={{ fontWeight: 600, color: "#fff" }}>{trapezoids[hoveredIndex].value}</span>{" "}
-                — {trapezoids[hoveredIndex].percentOfTotal}% do total
+                <div className="text-xs sm:text-sm font-medium text-muted-foreground tracking-wide mb-1 opacity-80">
+                  {step.name}
+                </div>
+                <div className="text-2xl sm:text-4xl font-bold text-white tracking-tight mb-1" style={{ textShadow: '0px 2px 8px rgba(0,0,0,0.5)'}}>
+                  {step.value.toLocaleString('pt-BR')}
+                </div>
+                
+                <div className={`flex items-center gap-1 text-[10px] sm:text-xs font-semibold ${isPositive ? 'text-emerald-500' : isZero ? 'text-muted-foreground' : 'text-red-500'}`}>
+                  {!isZero && (isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />)}
+                  {Math.abs(variationStatic).toFixed(1)}%
+                </div>
               </div>
+
+              {/* Reta divisória de descida */}
+              {index < validSteps.length - 1 && (
+                <div className="absolute -bottom-3 left-1/2 transform -translate-x-1/2 w-1 h-3 z-0 flex flex-col items-center">
+                   <div className="w-px h-3 bg-white/10" />
+                   <div className="w-1.5 h-1.5 rounded-full bg-[#1b1b1c] border border-white/20 mt-[-2px]" />
+                </div>
+              )}
+
+              {/* === DIREITA: Taxa === */}
+              {index > 0 && (
+                <div className="hidden sm:flex absolute right-0 w-[20%] lg:w-[25%] flex-col justify-center items-end text-right">
+                  <div className="text-[10px] text-muted-foreground mb-0.5 tracking-wider font-medium">{metricRateLabel}</div>
+                  <div className="text-sm font-semibold text-white/90">
+                    {cvrPrev.toFixed(2)}%
+                  </div>
+                  <div className={`flex items-center gap-1 text-[9px] font-semibold mt-0.5 ${isPositive ? 'text-emerald-500' : isZero ? 'text-muted-foreground' : 'text-red-500'}`}>
+                    {!isZero && (isPositive ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />)}
+                    {variationStatic > 0 ? '+' : ''}{Math.abs(variationStatic).toFixed(1)}%
+                  </div>
+
+                  {/* Conector */}
+                  <div className="absolute top-1/2 -left-4 w-6 border-b border-dashed border-white/10" />
+                  <div className="absolute top-1/2 -left-4 w-1.5 h-1.5 rounded-full bg-white/20 transform -translate-y-1/2" />
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })}
       </div>
     </Card>
   );

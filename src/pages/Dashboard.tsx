@@ -89,26 +89,26 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 bg-[#040405] w-full min-h-[calc(100vh-80px)] p-4 sm:p-8 rounded-3xl text-white">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold">Dashboard</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white/90">Dashboard</h1>
+          <p className="text-white/40 mt-1.5 text-sm font-medium">
             Visão geral do desempenho de vendas
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-2">
+        <div className="flex flex-col sm:flex-row gap-3">
           <Select value={selectedInstance} onValueChange={setSelectedInstance} disabled={instancesLoading}>
-            <SelectTrigger className="w-full sm:w-[210px]">
+            <SelectTrigger className="w-full sm:w-[210px] bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
               <div className="flex items-center gap-2 flex-1 min-w-0">
-                <Building2 className="w-4 h-4" />
-                <div className="flex-1 min-w-0">
+                <Building2 className="w-4 h-4 text-white/60" />
+                <div className="flex-1 min-w-0 text-white/80">
                   <SelectValue className="truncate block" placeholder="Todas as instâncias" />
                 </div>
               </div>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="bg-[#121214] border-white/10 text-white">
               <SelectItem value="todas">Todas as instâncias</SelectItem>
               {instances.map((instance) => (
                 <SelectItem key={instance.instancia} value={instance.instancia}>
@@ -118,17 +118,15 @@ export default function Dashboard() {
             </SelectContent>
           </Select>
 
-          {/* O seletor de período atualiza o contexto global 'ui.periodFilter', 
-              que dispara o recálculo do useMemo 'periodFilteredLeads' acima */}
           <Select value={ui.periodFilter} onValueChange={(value: any) => setPeriodFilter(value)}>
-            <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectTrigger className="w-full sm:w-[180px] bg-white/5 border-white/10 hover:bg-white/10 transition-colors text-white/80">
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <div className="flex-1 min-w-0">
                   <SelectValue className="truncate block" />
                 </div>
               </div>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="bg-[#121214] border-white/10 text-white">
               <SelectItem value="hoje">Hoje</SelectItem>
               <SelectItem value="7d">Últimos 7 dias</SelectItem>
               <SelectItem value="30d">Últimos 30 dias</SelectItem>
@@ -139,8 +137,8 @@ export default function Dashboard() {
       </div>
 
       {selectedInstance !== "todas" && (
-        <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg text-sm">
-          <span className="font-medium">Filtrando por instância:</span> {selectedInstance}
+        <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-sm text-white/70">
+          <span className="font-semibold text-white">Filtrando por instância:</span> {selectedInstance}
         </div>
       )}
 

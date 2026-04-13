@@ -13,23 +13,16 @@ interface KPICardProps {
   className?: string;
 }
 
-/** Remove <br/> e quebras explícitas dos nós de value */
 function removeBr(node: ReactNode): ReactNode {
   if (node == null) return node;
 
-  // CORREÇÃO 1: Se for array, usa React.Children.map para garantir keys
   if (Array.isArray(node)) {
     return React.Children.map(node, removeBr);
   }
 
-  // Elemento React
   if (isValidElement(node)) {
-    // Se for <br>, substitui por espaço
     if (node.type === "br") return " ";
-
     const props = (node as any).props || {};
-    
-    // CORREÇÃO 2: Processa children usando React.Children.map
     if (props.children) {
       const newChildren = React.Children.map(props.children, removeBr);
       return cloneElement(node, { ...props, children: newChildren } as any);
@@ -37,7 +30,6 @@ function removeBr(node: ReactNode): ReactNode {
     return node;
   }
 
-  // Texto simples — mantém
   return node;
 }
 
@@ -54,18 +46,17 @@ export function KPICard({
   const cleanValue = useMemo(() => removeBr(value), [value]);
 
   return (
-    <Card className={cn("p-4 sm:p-6 hover-lift", className)}>
+    <Card className={cn("p-4 sm:p-6 bg-[#0a0a0a] border border-[#1a1a1a] shadow-lg rounded-2xl hover:shadow-xl transition-shadow", className)}>
       <div className="flex items-start justify-between gap-3 min-w-0">
         <div className="flex-1 min-w-0">
-          <p className="text-sm text-muted-foreground font-medium">{title}</p>
+          <p className="text-sm text-white/50 font-medium tracking-wide uppercase">{title}</p>
 
-          {/* força linha única para R$ 4.800,00 */}
-          <p className="stat-value mt-2 whitespace-nowrap">
+          <p className="text-3xl font-bold text-white mt-3 mb-1 whitespace-nowrap" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
             {cleanValue}
           </p>
 
           {subtitle && (
-            <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+            <p className="text-xs sm:text-sm text-white/40 font-medium">
               {subtitle}
             </p>
           )}
@@ -74,13 +65,13 @@ export function KPICard({
             <div className="flex items-center gap-1 mt-2">
               <span
                 className={cn(
-                  "text-xs font-medium",
-                  trend === "up" ? "text-success" : "text-destructive"
+                  "text-xs font-semibold",
+                  trend === "up" ? "text-emerald-500" : "text-red-500"
                 )}
               >
                 {trend === "up" ? "↑" : "↓"} {trendValue}
               </span>
-              <span className="text-xs text-muted-foreground">
+              <span className="text-xs text-white/30">
                 vs período anterior
               </span>
             </div>
@@ -88,8 +79,8 @@ export function KPICard({
         </div>
 
         {Icon && (
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-            <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0 shadow-inner">
+            <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-white/80" />
           </div>
         )}
       </div>
