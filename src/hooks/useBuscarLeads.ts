@@ -47,32 +47,50 @@ export type BuscarLeadsStatusResponse = {
   };
 };
 
-async function getAuthHeaders() {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+type BuscarFunctionPayload =
+  | { action: "counter" }
+  | { action: "start"; payload: BuscarLeadsStartPayload }
+  | { action: "status"; runId: string; payload: BuscarLeadsStartPayload };
 
-  return {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
+async function callBuscarFunction<T>(payload: BuscarFunctionPayload): Promise<T> {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) {
+    throw new Error(sessionError.message || "Nao foi possivel validar a sessao");
+  }
 
-async function callBuscarFunction<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = await getAuthHeaders();
-  const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/buscar-leads${url}`, {
-    ...init,
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) {
+    throw new Error("Sessao expirada. Faca login novamente.");
+  }
+
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Configuracao do Supabase ausente no frontend");
+  }
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/buscar-leads`, {
+    method: "POST",
     headers: {
-      ...headers,
-      ...(init?.headers ?? {}),
+      apikey: supabaseAnonKey,
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
     },
+    body: JSON.stringify(payload),
   });
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(data?.error ?? "Erro ao executar busca");
+    const backendMessage =
+      typeof data?.error === "string"
+        ? data.error
+        : typeof data?.message === "string"
+          ? data.message
+          : null;
+    throw new Error(backendMessage ?? `Erro ao executar busca (${response.status})`);
   }
 
-  return data as T;
+  return (data ?? {}) as T;
 }
 
 export function useBuscarLeads() {
@@ -99,7 +117,7 @@ export function useBuscarLeads() {
   const fetchCounter = useCallback(async () => {
     try {
       setLoadingCounter(true);
-      const data = await callBuscarFunction<{ total: number }>("?action=counter", { method: "GET" });
+      const data = await callBuscarFunction<{ total: number }>({ action: "counter" });
       setMonthlyTotal(data.total ?? 0);
     } catch (error: any) {
       console.error("Erro ao carregar contador mensal:", error);
@@ -116,11 +134,11 @@ export function useBuscarLeads() {
     if (!runId || !payload) return;
 
     try {
-      const encodedPayload = encodeURIComponent(JSON.stringify(payload));
-      const data = await callBuscarFunction<BuscarLeadsStatusResponse>(
-        `?action=status&runId=${encodeURIComponent(runId)}&payload=${encodedPayload}`,
-        { method: "GET" }
-      );
+      const data = await callBuscarFunction<BuscarLeadsStatusResponse>({
+        action: "status",
+        runId,
+        payload,
+      });
 
       setStatus(data.status);
       setProgress(data.progress ?? 0);
@@ -172,13 +190,15 @@ export function useBuscarLeads() {
       setTotals(null);
       activePayloadRef.current = payload;
 
-      const data = await callBuscarFunction<{ runId: string; status: "queued" | "running"; progress?: number; center?: { lat: number; lng: number; label: string } }>(
-        "?action=start",
-        {
-          method: "POST",
-          body: JSON.stringify(payload),
-        }
-      );
+      const data = await callBuscarFunction<{
+        runId: string;
+        status: "queued" | "running";
+        progress?: number;
+        center?: { lat: number; lng: number; label: string };
+      }>({
+        action: "start",
+        payload,
+      });
 
       activeRunIdRef.current = data.runId;
       setStatus(data.status);

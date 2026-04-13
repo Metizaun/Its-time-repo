@@ -42,6 +42,6 @@ entrypoint = "./functions/send-user-invitation/index.ts"
 
 [functions.buscar-leads]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/buscar-leads/deno.json"
 entrypoint = "./functions/buscar-leads/index.ts"

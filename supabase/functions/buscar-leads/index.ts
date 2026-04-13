@@ -32,7 +32,12 @@ type PlaceResult = {
   isImported?: boolean;
 };
 
-const APIFY_ACTOR_ID = "compass/crawler-google-places";
+type BuscarLeadsInvokeBody =
+  | { action: "counter" }
+  | { action: "start"; payload: BuscarLeadsStartPayload }
+  | { action: "status"; runId: string; payload: BuscarLeadsStartPayload };
+
+const APIFY_ACTOR_ID = Deno.env.get("APIFY_ACTOR_ID") ?? "nwua9Gu5YrADL7ZDj";
 const APIFY_BASE_URL = "https://api.apify.com/v2";
 
 function buildCorsHeaders(origin: string | null) {
@@ -163,15 +168,17 @@ async function startRun(payload: BuscarLeadsStartPayload, origin: string | null)
     return jsonResponse({ error: "APIFY_API_TOKEN não configurado" }, { status: 500 }, origin);
   }
 
+  const normalizedSearches = payload.searchStrings
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .map((term) => `${term} ${payload.locationQuery}`.trim());
+
   const apifyInput = {
-    searchStringsArray: payload.searchStrings,
-    locationQuery: payload.locationQuery,
-    country: payload.country,
-    radiusKm: payload.radiusKm,
-    minimumStars: payload.minimumStars,
-    maxCrawledPlacesPerSearch: payload.maxResults,
-    language: payload.language,
-    includeWebResults: false,
+    searchStringsArray: normalizedSearches.length ? normalizedSearches : payload.searchStrings,
+    maxCrawledPlaces: payload.maxResults,
+    proxyConfig: {
+      useApifyProxy: true,
+    },
   };
 
   const url = `${APIFY_BASE_URL}/acts/${APIFY_ACTOR_ID}/runs?token=${token}`;
@@ -183,8 +190,12 @@ async function startRun(payload: BuscarLeadsStartPayload, origin: string | null)
 
   const raw = await response.json().catch(() => null);
   if (!response.ok) {
+    const upstreamMessage =
+      raw?.error?.message ??
+      raw?.message ??
+      `HTTP ${response.status}`;
     return jsonResponse(
-      { error: "Erro ao iniciar busca na Apify", details: raw },
+      { error: `Erro ao iniciar busca na Apify: ${upstreamMessage}`, details: raw },
       { status: 502 },
       origin
     );
@@ -332,15 +343,27 @@ Deno.serve(async (req) => {
 
   const { crmUser, adminClient } = context;
   const url = new URL(req.url);
-  const action = (url.searchParams.get("action") ?? "") as Action;
+  let action = (url.searchParams.get("action") ?? "") as Action;
+  let bodyPayload: BuscarLeadsInvokeBody | null = null;
+
+  if (req.method === "POST") {
+    bodyPayload = await req.json().catch(() => null);
+    if (bodyPayload?.action) {
+      action = bodyPayload.action;
+    }
+  }
 
   try {
-    if (req.method === "GET" && action === "counter") {
+    if ((req.method === "GET" || req.method === "POST") && action === "counter") {
       return await handleCounter(adminClient, crmUser.aces_id, origin);
     }
 
     if (req.method === "POST" && action === "start") {
-      const payload = (await req.json()) as BuscarLeadsStartPayload;
+      const payload = bodyPayload && "payload" in bodyPayload ? bodyPayload.payload : null;
+      if (!payload) {
+        return jsonResponse({ error: "Payload de busca ausente" }, { status: 400 }, origin);
+      }
+
       const normalizedPayload: BuscarLeadsStartPayload = {
         ...payload,
         searchStrings: normalizeSearchStrings(payload.searchStrings),
@@ -361,15 +384,20 @@ Deno.serve(async (req) => {
       return await startRun(normalizedPayload, origin);
     }
 
-    if (req.method === "GET" && action === "status") {
-      const runId = url.searchParams.get("runId");
-      const rawPayload = url.searchParams.get("payload");
+    if ((req.method === "GET" || req.method === "POST") && action === "status") {
+      const runId =
+        bodyPayload && "runId" in bodyPayload ? bodyPayload.runId : url.searchParams.get("runId");
+      const rawPayload =
+        bodyPayload && "payload" in bodyPayload ? null : url.searchParams.get("payload");
 
-      if (!runId || !rawPayload) {
+      if (!runId || (!rawPayload && !(bodyPayload && "payload" in bodyPayload))) {
         return jsonResponse({ error: "runId e payload são obrigatórios" }, { status: 400 }, origin);
       }
 
-      const payload = JSON.parse(rawPayload) as BuscarLeadsStartPayload;
+      const payload =
+        bodyPayload && "payload" in bodyPayload
+          ? bodyPayload.payload
+          : (JSON.parse(rawPayload as string) as BuscarLeadsStartPayload);
       const run = await fetchApifyRun(runId);
       const mappedStatus = mapApifyStatus(run?.status);
       const center = await geocodeLocation(payload.locationQuery, payload.country);
