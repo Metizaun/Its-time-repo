@@ -67,9 +67,32 @@ interface StepPayload {
   is_active: boolean;
 }
 
+function buildStepCollections(stepData: AutomationStep[]) {
+  const counts: Record<string, number> = {};
+  const grouped: Record<string, AutomationStep[]> = {};
+
+  stepData.forEach((step) => {
+    counts[step.funnel_id] = (counts[step.funnel_id] || 0) + 1;
+    grouped[step.funnel_id] = [...(grouped[step.funnel_id] || []), step];
+  });
+
+  Object.keys(grouped).forEach((funnelId) => {
+    grouped[funnelId] = grouped[funnelId].sort((left, right) => {
+      if (left.position !== right.position) {
+        return left.position - right.position;
+      }
+
+      return left.created_at.localeCompare(right.created_at);
+    });
+  });
+
+  return { counts, grouped };
+}
+
 export function useAutomation(enabled = true) {
   const [funnels, setFunnels] = useState<AutomationFunnel[]>([]);
   const [steps, setSteps] = useState<AutomationStep[]>([]);
+  const [stepsByFunnel, setStepsByFunnel] = useState<Record<string, AutomationStep[]>>({});
   const [executions, setExecutions] = useState<AutomationExecution[]>([]);
   const [stepCounts, setStepCounts] = useState<Record<string, number>>({});
   const [loadingFunnels, setLoadingFunnels] = useState(true);
@@ -80,6 +103,8 @@ export function useAutomation(enabled = true) {
     try {
       if (!enabled) {
         setFunnels([]);
+        setSteps([]);
+        setStepsByFunnel({});
         setStepCounts({});
         setLoadingFunnels(false);
         return;
@@ -89,26 +114,30 @@ export function useAutomation(enabled = true) {
 
       const [{ data: funnelData, error: funnelError }, { data: stepData, error: stepError }] = await Promise.all([
         supabase.from("automation_funnels").select("*").order("created_at", { ascending: true }),
-        supabase.from("automation_steps").select("id, funnel_id"),
+        supabase
+          .from("automation_steps")
+          .select("*")
+          .order("position", { ascending: true })
+          .order("created_at", { ascending: true }),
       ]);
 
       if (funnelError) throw funnelError;
       if (stepError) throw stepError;
 
-      const counts = (stepData || []).reduce<Record<string, number>>((acc, step) => {
-        acc[step.funnel_id] = (acc[step.funnel_id] || 0) + 1;
-        return acc;
-      }, {});
+      const nextFunnels = (funnelData as AutomationFunnel[]) || [];
+      const nextSteps = (stepData as AutomationStep[]) || [];
+      const { counts, grouped } = buildStepCollections(nextSteps);
 
-      setFunnels((funnelData as AutomationFunnel[]) || []);
+      setFunnels(nextFunnels);
       setStepCounts(counts);
+      setStepsByFunnel(grouped);
     } catch (error: any) {
       console.error("Erro ao carregar automações:", error);
       toast.error("Erro ao carregar automações", { description: error.message });
     } finally {
       setLoadingFunnels(false);
     }
-  }, []);
+  }, [enabled]);
 
   const fetchSteps = useCallback(async (funnelId: string | null) => {
     if (!enabled || !funnelId) {
@@ -126,14 +155,24 @@ export function useAutomation(enabled = true) {
         .order("created_at", { ascending: true });
 
       if (error) throw error;
-      setSteps((data as AutomationStep[]) || []);
+
+      const nextSteps = (data as AutomationStep[]) || [];
+      setSteps(nextSteps);
+      setStepsByFunnel((previous) => ({
+        ...previous,
+        [funnelId]: nextSteps,
+      }));
+      setStepCounts((previous) => ({
+        ...previous,
+        [funnelId]: nextSteps.length,
+      }));
     } catch (error: any) {
       console.error("Erro ao carregar disparos:", error);
       toast.error("Erro ao carregar disparos", { description: error.message });
     } finally {
       setLoadingSteps(false);
     }
-  }, []);
+  }, [enabled]);
 
   const fetchExecutions = useCallback(async (funnelId: string | null) => {
     if (!enabled || !funnelId) {
@@ -158,7 +197,7 @@ export function useAutomation(enabled = true) {
     } finally {
       setLoadingExecutions(false);
     }
-  }, []);
+  }, [enabled]);
 
   const syncFunnel = useCallback(async (funnelId: string) => {
     const { error } = await supabase.rpc("rpc_sync_automation_funnel", {
@@ -215,7 +254,8 @@ export function useAutomation(enabled = true) {
   }, [fetchFunnels]);
 
   const createStep = useCallback(async (funnelId: string, payload: StepPayload) => {
-    const nextPosition = steps.length > 0 ? Math.max(...steps.map((step) => step.position)) + 1 : 0;
+    const funnelSteps = stepsByFunnel[funnelId] || [];
+    const nextPosition = funnelSteps.length > 0 ? Math.max(...funnelSteps.map((step) => step.position)) + 1 : 0;
 
     const { data, error } = await supabase
       .from("automation_steps")
@@ -235,7 +275,7 @@ export function useAutomation(enabled = true) {
     await Promise.all([fetchSteps(funnelId), fetchExecutions(funnelId)]);
     toast.success("Disparo criado com sucesso");
     return data as AutomationStep;
-  }, [fetchExecutions, fetchFunnels, fetchSteps, steps, syncFunnel]);
+  }, [fetchExecutions, fetchFunnels, fetchSteps, stepsByFunnel, syncFunnel]);
 
   const updateStep = useCallback(async (stepId: string, funnelId: string, payload: StepPayload) => {
     const { data, error } = await supabase
@@ -248,10 +288,11 @@ export function useAutomation(enabled = true) {
     if (error) throw error;
 
     await syncFunnel(funnelId);
+    await fetchFunnels();
     await Promise.all([fetchSteps(funnelId), fetchExecutions(funnelId)]);
     toast.success("Disparo atualizado com sucesso");
     return data as AutomationStep;
-  }, [fetchExecutions, fetchSteps, syncFunnel]);
+  }, [fetchExecutions, fetchFunnels, fetchSteps, syncFunnel]);
 
   const deleteStep = useCallback(async (stepId: string, funnelId: string) => {
     const { error } = await supabase
@@ -295,11 +336,12 @@ export function useAutomation(enabled = true) {
 
   useEffect(() => {
     fetchFunnels();
-  }, [enabled, fetchFunnels]);
+  }, [fetchFunnels]);
 
   return {
     funnels,
     steps,
+    stepsByFunnel,
     executions,
     stepCounts,
     loadingFunnels,

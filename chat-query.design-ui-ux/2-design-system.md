@@ -1,7 +1,7 @@
 # Design System
 
 ## 📌 Contexto
-Este arquivo unifica as regras visuais brutas e tokens para os agentes reponsáveis por cor, tipografia, espaçamento e estilo. A estética se baseia em um *Dark Mode Premium* com elementos glassmórficos/neumórficos focados em contraste legível e imersão.
+Este arquivo unifica as regras visuais brutas e tokens para os agentes reponsáveis por cor, tipografia, espaçamento e estilo. A estética se baseia em um *Flat Dark*, focado em contraste legível e imersão em um ambiente escuro livre de sombras estruturais.
 
 ---
 
@@ -10,15 +10,15 @@ Este arquivo unifica as regras visuais brutas e tokens para os agentes reponsáv
 **Objetivo**: Garantir consistência, contraste e foco (CTA).
 
 ### Paleta Dark Mode Premium
-- **Background Principal (App):** `#0b0b0b` a `#121212` (Quase preto a cinza profundo).
-- **Background de Elementos (Cards, Funil):** `#1a1a1a` com reflexos leves. Para elevação/profundidade no Funil, use gradiantes ou luz direcional.
-- **Títulos e Valores Principais:** Branco puro `#ffffff` ou cinza-gelo `#f5f5f5` para contraste estrito e leitura veloz.
-- **Textos Secundários / Labels (Headers das colunas):** Cinza médio `#a3a3a3` ou `#888888`.
-- **Primary / Accent Color (Ação e Destaque):** Vermelho sangue intenso / Carmesim (`#ff3b3b` ou similar), usado para gráficos, botão de adicionar, checkbox marcado e destaque principal do Progresso.
-- **Success & Danger (Variações no Funil):**
-  - **Positivo Alta:** Verde limão escuro / Esmeralda (`#4caf50` ou similar).
-  - **Negativo / Queda:** Vermelho (`#f44336` ou similar).
-- **Cores Gráficas de Painéis Múltiplos:** Para não poluir, utilizar uma trilogia de tons elétricos contra o fundo escuro: Verde-água/Lima, Azul Cobalto e Amarelo Dourado (Observado nos gráficos do Rastreamento).
+- **Background Principal (App):** `var(--color-bg-primary)` (`#0d0d0d`).
+- **Background de Elementos (Cards, Funil):** `var(--color-bg-elevated)` (`#242424`) ou `var(--color-bg-surface)` (`#1a1a1a`) com reflexos leves. Para criar a profundidade no Neumorfismo Invertido, usa-se a dualidade entre inner-shadows (luz) brilhantes e drop-shadows densas (sombra).
+- **Títulos e Valores Principais:** Branco puro `#ffffff` (`var(--color-text-primary)`).
+- **Textos Secundários / Labels (Headers das colunas):** Cinza médio `#a0a0a0` (`var(--color-text-secondary)`).
+- **Primary / Accent Color (Ação e Destaque):** Vermelho Intenso (`var(--color-accent)` -> `#e5393a`), usado para gráficos lineares, botão de ação, e estados acionados.
+- **Success & Danger (Variações e Status):**
+  - **Positivo Alta / Confirmação:** Verde (`var(--color-success)` -> `#4caf82`). O verde está restrito APENAS a confirmações e status OK.
+  - **Negativo / Queda:** Vermelho (`var(--color-danger)` -> `#e5393a`).
+- **Cores Gráficas de Painéis Múltiplos:** Para não poluir, utilizar uma trilogia de tons elétricos (Amarelo, Azul, e Verde) em gráficos como Rastreamento, garantindo bom contraste sem roubar o vermelho primário do sistema.
 
 ---
 
@@ -50,11 +50,11 @@ Este arquivo unifica as regras visuais brutas e tokens para os agentes reponsáv
 **Objetivo**: Aplicar bordas, sombras e estilo (clean, moderno, etc).
 
 ### Glows e Soft Neumorphism Invertido
-A "Identidade Visual de Funil" das imagens demonstra relevos macios:
+A "Identidade Visual de Funil" das imagens demonstra relevos macios combinados a um glow primário no Dark Mode:
 - **Border Radius:** Abundante em botões, cartões, e barras e checkpoints (Ex: `border-radius: 8px` até `16px`).
-- **Inner Shadows e Drop Shadows:**
-  - O Funil utiliza um efeito de profundidade semelhante a botões saltados. O topo ilumina suavemente e a base escurece.
-  - Para criar este volume, combine:
-    1. Uma `box-shadow` suave interna direcional branca com muita transparência (Ex: `inset 0 1px 1px rgba(255,255,255,0.06)`).
-    2. Uma `box-shadow` escura grande (Ex: `0 8px 16px rgba(0,0,0,0.5)`).
-- **Linhas das KPIs Funil:** As linhas pontilhadas cinzas que apontam para as etapas são super dinâmicas e fracas (brancas com opacidade de 10-15%). Uso de border-dashed em um tom `#333`.
+- **Inner Shadows e Drop Shadows (Neumorfismo):**
+  - O Funil e componentes utilizam um efeito de profundidade semelhante a botões saltados. O topo de uma interface bloqueada ilumina suavemente (como se banhada de luz vinda de cima) e a base escurece forte.
+  - Para criar este volume, integram-se:
+    1. Uma luz reflexiva de topo (`inset 0 1px 1px rgba(255,255,255,0.06)`).
+    2. Uma base escurecida de projeção (Ex: `0 8px 16px rgba(0,0,0,0.5)`).
+- **Linhas das KPIs Funil:** As linhas conectoras das etapas são super dinâmicas e fracas (`rgba(255,255,255,0.1)`) para interagir com a ambientação tridimensional macia.

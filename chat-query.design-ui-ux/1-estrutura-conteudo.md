@@ -1,7 +1,7 @@
 # Estrutura & Conteúdo (Information Architecture e Layout)
 
 ## 📌 Contexto
-Este arquivo dita as regras para os *Agents* responsáveis pela fundação e arcabouço estrutural da aplicação em Dark Mode. Todas as interfaces devem priorizar hierarquia macro, o fluxo de leitura lógico e focar na escaneabilidade.
+Este arquivo dita as regras para os *Agents* responsáveis pela fundação e arcabouço estrutural da aplicação em Dark Mode. Todas as interfaces devem priorizar a estética de *Soft Neumorphism Invertido*, com relevos macios, glow de foco e contraste legível.
 
 ---
 

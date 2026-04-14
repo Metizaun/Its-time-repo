@@ -56,35 +56,50 @@
   }
 
   .dark {
-    /* Dark mode - Crm Its time palette */
-    --background: 0 0% 9%;        /* #161616 - já era próximo (mantive 9%) */
-    --foreground: 0 0% 96%;
+    /* Dark mode - Crm Its time palette baseada nos Agents */
+    --background: 0 0% 5%;        /* #0d0d0d */
+    --foreground: 0 0% 100%;      /* #ffffff */
 
-    --card: 0 0% 12%;
-    --card-foreground: 0 0% 96%;
-    --popover: 0 0% 12%;
-    --popover-foreground: 0 0% 96%;
+    --card: 0 0% 14%;             /* #242424 -> bg-elevated */
+    --card-foreground: 0 0% 100%;
 
-    /* Primary/Accent atualizados para o verde exato */
-    --primary: 168 97% 45%;
-    --primary-foreground: 0 0% 6%; /* texto sobre primary -> preto suave (como no seu print) */
+    --popover: 0 0% 14%;
+    --popover-foreground: 0 0% 100%;
+
+    /* O Vermelho Intenso (#e5393a) substitui o verde antigo */
+    --primary: 360 76% 56%;       /* #e5393a aproximado (hsl) */
+    --primary-foreground: 0 0% 100%; 
 
     --secondary: 190 95% 47%;
     --secondary-foreground: 0 0% 96%;
 
-    --muted: 0 0% 20%;
-    --muted-foreground: 0 0% 60%;   /* labels/grid do dark (mantive) */
+    --muted: 0 0% 10%;           /* #1a1a1a -> bg-surface */
+    --muted-foreground: 0 0% 63%; /* #a0a0a0 -> text-secondary */
 
-    --accent: 168 97% 45%;
-    --accent-foreground: 0 0% 96%;
+    --accent: 360 76% 56%;       /* Mesmo vermelho da primary */
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 62% 50%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 20%;
-    --input: 0 0% 20%;
-    --ring: 168 97% 45%;
+    --destructive: 360 76% 56%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 0 0% 12%;           /* Equivalente ao rgba 12% no fundo escuro */
+    --input: 0 0% 12%;            /* #1f1f1f approx */
+    --ring: 360 76% 56%;          /* Foco em vermelho */
 
-    /* Custom tokens */
+    /* Custom tokens (Tokens Extras Baseados no Documento) */
+    --color-bg-primary: #0d0d0d;
+    --color-bg-surface: #1a1a1a;
+    --color-bg-elevated: #242424;
+    --color-bg-input: #1f1f1f;
+    --color-accent: #e5393a;
+    --color-accent-soft: rgba(229, 57, 58, 0.15);
+    --color-success: #4caf82;
+    --color-danger: #e5393a;
+    --color-text-primary: #ffffff;
+    --color-text-secondary: #a0a0a0;
+    --color-border-subtle: rgba(255, 255, 255, 0.06);
+    --color-border-medium: rgba(255, 255, 255, 0.12);
+
     --success: 142 71% 45%;
     --success-foreground: 0 0% 98%;
     --warning: 38 92% 50%;

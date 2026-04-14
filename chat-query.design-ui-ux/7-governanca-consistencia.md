@@ -11,8 +11,8 @@ Para evitar o descarrilamento do projeto por diversos desenvolvedores simultâne
 
 ### O Que NÃO Fazer
 - **Nunca use Brancos Puros para Backgrounds:** Como a base é primariamente uma interface Dark Mode projetada, o uso súbito de brancos não só foge do projeto inicial, mas gera forte choque para a vista de um usuário no escuro.
-- **Evitar Flat Design Descontextualizado:** A UI foi concebida com "Depth", camadas, glow interno nas superfícies frontais. Não empilhe cards retangulares retos sem shadows puramente vazios se o container principal (como o de um Funil num dashboard) utiliza um design volumétrico de Neumorfismo.
-- **Limitar Paleta Multicor Pura no Background:** Cores fortes como `#ff3b3b` servem para dados pontuais muito específicos — traços nos gráficos, checagem em botões — não para colorir um bloco de UI ou header de tabela inteiro.
+- **Evite Flat Design Descontextualizado:** A UI foi concebida com "Neumorfismo Invertido". Caixas chatas coladas ao fundo preto geram um ambiente duro e cru. Devemos construir "Glows", inner shadows simulando ileração de luz superior e drop shadows pesados em contêineres e cards flutuantes.
+- **Limitar Paleta Multicor Pura no Background:** Cores fortes como `#e5393a` servem para dados pontuais muito específicos — traços nos gráficos, checagem em botões — não para colorir um bloco de UI ou header de tabela inteiro.
 
 ---
 

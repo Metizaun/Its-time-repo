@@ -54,13 +54,19 @@ export function KPICard({
   const cleanValue = useMemo(() => removeBr(value), [value]);
 
   return (
-    <Card className={cn("p-4 sm:p-6 hover-lift", className)}>
+    <Card 
+      className={cn(
+        "p-4 sm:p-6 transition-all duration-200 border border-[var(--color-border-subtle)] hover:border-[var(--color-border-medium)]", 
+        "bg-[var(--color-bg-elevated)] shadow-none",
+        className
+      )}
+    >
       <div className="flex items-start justify-between gap-3 min-w-0">
         <div className="flex-1 min-w-0">
-          <p className="text-sm text-muted-foreground font-medium">{title}</p>
+          <p className="text-[var(--font-size-label,0.75rem)] text-[var(--color-text-secondary)] font-medium uppercase tracking-wider">{title}</p>
 
           {/* força linha única para R$ 4.800,00 */}
-          <p className="stat-value mt-2 whitespace-nowrap">
+          <p className="stat-value mt-1 whitespace-nowrap text-[var(--color-text-primary)] font-bold">
             {cleanValue}
           </p>
 

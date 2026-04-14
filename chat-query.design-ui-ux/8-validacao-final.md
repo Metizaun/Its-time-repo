@@ -12,12 +12,12 @@ Este agente não constrói, funciona num modo de inspeção puramente dedutivo d
 ### Checklist Prático 
 
 1. **Testes de Contraste Luminoso e Opacidade:**
-   - [ ] As fontes cinzas sob a luz ambiente e no brilho baixo da tela monitor do tester ainda diferem razoavelmente do fundo preexistente escuro (`#121212`)? (Sem texto "invisível").
-   - [ ] As linhas finíssimas do Funil conectadas às caixas de KPI (Bordas divisórias `rgba` no limiar do `10%` ou borders pretas absolutas da box-shadow do inner gradient Neumórfico) estão sendo renderizadas na GPU / DOM ou foram ocultadas ou engolidas pelo preenchimento? 
+   - [ ] As fontes cinzas sob a luz ambiente e no brilho baixo da tela monitor do tester ainda diferem razoavelmente do fundo preexistente escuro (`var(--color-bg-surface)`)? (Sem texto "invisível").
+   - [ ] As linhas finíssimas conectadas e sub-pixels das inner-shadows e drop-shadows (tão cruciais para o Neumorfismo) estão aparecendo e separando as etapas corretamente?
 
 2. **Verificações Geométricas - O Funil Funciona Correctly Ocularly?**
-   - [ ] As bolinhas que acoplam a reta horizontal ligada à lateral das abas da pirâmide estão centralizadas verticalmente ao respectivo div central de estatística ou se deslocaram visualmente por margens erradas? 
-   - [ ] O padding geral das abas e Trapézios garante que nenhum texto grande que extrapole 4 dígitos bata nas bordas laterais do soft-glow numérico no interior?
+   - [ ] As caixas que limitam os steps do funil saltam para frente de forma tridimensional harmoniosa e garantem as sombras abaixo para transmitir a pirâmide?
+   - [ ] O padding geral das abas e relevos garante que nenhum texto grande que extrapole 4 dígitos bata nos picos de luz do soft-glow numérico no interior?
 
 3. **Verificação de Performance dos Gráficos Customizados:**
    - [ ] Se implementadas SVG/Canvas as linhas azuis verdes e amarelas no Tracker Multilinear fluem ou geram gargalos numa variação de re-renders de dados muito fortes?
