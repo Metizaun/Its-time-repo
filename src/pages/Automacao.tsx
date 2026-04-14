@@ -47,6 +47,10 @@ export default function Automacao() {
   const [agentModalOpen, setAgentModalOpen] = useState(false);
 
   const selectedInstanceName = instanceFilter === "all" ? null : instanceFilter;
+  const instanceNames = useMemo(
+    () => instances.map((instance) => instance.instancia),
+    [instances]
+  );
 
   const filteredFunnels = useMemo(() => {
     if (instanceFilter === "all") {
@@ -112,11 +116,7 @@ export default function Automacao() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setAgentModalOpen(true)}
-            disabled={!selectedInstanceName}
-          >
+          <Button variant="outline" onClick={() => setAgentModalOpen(true)}>
             <Bot className="w-4 h-4 mr-2" />
             Configurar IA
           </Button>
@@ -226,6 +226,7 @@ export default function Automacao() {
         open={agentModalOpen}
         onOpenChange={setAgentModalOpen}
         instanceName={selectedInstanceName}
+        instanceOptions={instanceNames}
       />
     </div>
   );

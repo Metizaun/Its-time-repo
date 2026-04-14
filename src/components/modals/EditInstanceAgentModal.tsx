@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, CheckCircle2, Loader2, Sparkles } from "lucide-react";
+import { Bot, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import {
+  PROMPT_GUIDANCE_INTRO,
   PROMPT_GUIDANCE_SECTIONS,
-  PROMPT_QUALITY_CHECKLIST,
   buildManagedAgentPrompt,
   parseManagedAgentPrompt,
 } from "@/lib/aiPrompt";
-import { listAgents, updateAgentPrompt, type AgentSummary } from "@/services/agentService";
+import { createAgent, listAgents, updateAgentPrompt, type AgentSummary } from "@/services/agentService";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,27 +38,63 @@ interface EditInstanceAgentModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   instanceName: string | null;
+  instanceOptions: string[];
 }
 
 export function EditInstanceAgentModal({
   open,
   onOpenChange,
   instanceName,
+  instanceOptions,
 }: EditInstanceAgentModalProps) {
   const { session } = useAuth();
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [creatingAgent, setCreatingAgent] = useState(false);
+  const [savingPrompt, setSavingPrompt] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentSummary | null>(null);
+  const [targetInstanceName, setTargetInstanceName] = useState<string | null>(instanceName);
+  const [agentName, setAgentName] = useState("");
   const [tone, setTone] = useState("");
   const [promptBody, setPromptBody] = useState("");
 
-  const canSave = useMemo(() => {
-    return Boolean(agent && promptBody.trim() && !saving);
-  }, [agent, promptBody, saving]);
+  useEffect(() => {
+    if (open) {
+      return;
+    }
+
+    setLoading(false);
+    setCreatingAgent(false);
+    setSavingPrompt(false);
+    setError(null);
+    setAgent(null);
+    setTargetInstanceName(instanceName);
+    setAgentName("");
+    setTone("");
+    setPromptBody("");
+  }, [instanceName, open]);
 
   useEffect(() => {
-    if (!open || !instanceName) {
+    if (!open) {
+      return;
+    }
+
+    if (instanceName && instanceOptions.includes(instanceName)) {
+      setTargetInstanceName(instanceName);
+      return;
+    }
+
+    setTargetInstanceName((current) => {
+      if (current && instanceOptions.includes(current)) {
+        return current;
+      }
+
+      return instanceOptions[0] ?? null;
+    });
+  }, [instanceName, instanceOptions, open]);
+
+  useEffect(() => {
+    if (!open || !targetInstanceName) {
       return;
     }
 
@@ -72,14 +116,18 @@ export function EditInstanceAgentModal({
 
         if (!active) return;
 
-        const matchedAgent = result.agents.find((item) => item.instanceName === instanceName) || null;
+        const matchedAgent =
+          result.agents.find((item) => item.instanceName === targetInstanceName) || null;
+
         setAgent(matchedAgent);
 
         if (matchedAgent) {
           const parsed = parseManagedAgentPrompt(matchedAgent.systemPrompt);
+          setAgentName(matchedAgent.name || `Agente ${targetInstanceName}`);
           setTone(parsed.tone);
           setPromptBody(parsed.promptBody);
         } else {
+          setAgentName(`Agente ${targetInstanceName}`);
           setTone("");
           setPromptBody("");
         }
@@ -100,15 +148,24 @@ export function EditInstanceAgentModal({
     return () => {
       active = false;
     };
-  }, [instanceName, open, session?.access_token]);
+  }, [open, session?.access_token, targetInstanceName]);
 
-  const handleSave = async () => {
-    if (!agent) {
+  const canCreateAgent = useMemo(() => {
+    return Boolean(targetInstanceName && agentName.trim() && !creatingAgent && !loading && !agent);
+  }, [agent, agentName, creatingAgent, loading, targetInstanceName]);
+
+  const canSavePrompt = useMemo(() => {
+    return Boolean(agent && promptBody.trim() && !savingPrompt);
+  }, [agent, promptBody, savingPrompt]);
+
+  const handleCreateAgent = async () => {
+    if (!targetInstanceName) {
+      toast.error("Selecione uma instância");
       return;
     }
 
-    if (!promptBody.trim()) {
-      toast.error("Escreva o prompt principal do agente");
+    if (!agentName.trim()) {
+      toast.error("Defina o nome do agente");
       return;
     }
 
@@ -117,7 +174,44 @@ export function EditInstanceAgentModal({
         throw new Error("Sessão expirada. Faça login novamente.");
       }
 
-      setSaving(true);
+      setCreatingAgent(true);
+      setError(null);
+
+      const result = await createAgent({
+        accessToken: session.access_token,
+        name: agentName.trim(),
+        instanceName: targetInstanceName,
+      });
+
+      setAgent(result.agent);
+      setAgentName(result.agent.name || agentName.trim());
+      setPromptBody("");
+      toast.success("Agente criado e vinculado à instância");
+    } catch (createError: any) {
+      toast.error("Erro ao criar agente", {
+        description: createError.message,
+      });
+    } finally {
+      setCreatingAgent(false);
+    }
+  };
+
+  const handleSavePrompt = async () => {
+    if (!agent) {
+      return;
+    }
+
+    if (!promptBody.trim()) {
+      toast.error("Preencha o prompt do agente");
+      return;
+    }
+
+    try {
+      if (!session?.access_token) {
+        throw new Error("Sessão expirada. Faça login novamente.");
+      }
+
+      setSavingPrompt(true);
 
       const systemPrompt = buildManagedAgentPrompt({
         tone,
@@ -138,7 +232,7 @@ export function EditInstanceAgentModal({
         description: saveError.message,
       });
     } finally {
-      setSaving(false);
+      setSavingPrompt(false);
     }
   };
 
@@ -151,22 +245,20 @@ export function EditInstanceAgentModal({
             Configurar IA da instância
           </DialogTitle>
           <DialogDescription>
-            {instanceName
-              ? `Ajuste o tom e o prompt operacional da instância ${instanceName}.`
-              : "Selecione uma instância para configurar a IA."}
+            Crie o agente vinculado à instância e, em seguida, configure o prompt operacional.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="px-6 pb-6">
             {loading ? (
               <div className="space-y-4 pt-2">
                 <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-28 w-full" />
-                <Skeleton className="h-72 w-full" />
+                <Skeleton className="h-32 w-full" />
+                <Skeleton className="h-80 w-full" />
               </div>
             ) : (
-              <div className="space-y-4 pt-2">
+              <div className="space-y-6 pt-2">
                 {error && (
                   <Alert variant="destructive">
                     <AlertTitle>Falha ao carregar o agente</AlertTitle>
@@ -174,52 +266,115 @@ export function EditInstanceAgentModal({
                   </Alert>
                 )}
 
-                {!error && !agent && (
-                  <Alert>
-                    <Sparkles className="h-4 w-4" />
-                    <AlertTitle>Nenhum agente vinculado a esta instância</AlertTitle>
-                    <AlertDescription>
-                      Nesta etapa o modal só edita agentes já existentes. Se ainda não houver agente para esta
-                      instância, primeiro faça o vínculo no backend de IA.
-                    </AlertDescription>
-                  </Alert>
-                )}
+                <div className="rounded-xl border p-4 space-y-4">
+                  <div className="space-y-1">
+                    <h3 className="font-semibold">1. Criar agente</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Todo agente nasce vinculado a uma instância. Sem esse vínculo, a configuração não é liberada.
+                    </p>
+                  </div>
 
-                {agent && (
-                  <>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={agent.isActive ? "default" : "outline"}>
-                        {agent.isActive ? "Agente ativo" : "Agente inativo"}
-                      </Badge>
-                      <Badge variant="outline">{agent.model || "Modelo não definido"}</Badge>
-                    </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-instance">Instância</Label>
+                    {instanceOptions.length > 0 ? (
+                      <Select
+                        value={targetInstanceName ?? undefined}
+                        onValueChange={(value) => setTargetInstanceName(value)}
+                      >
+                        <SelectTrigger id="agent-instance">
+                          <SelectValue placeholder="Selecione uma instância" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {instanceOptions.map((option) => (
+                            <SelectItem key={option} value={option}>
+                              {option}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Alert>
+                        <Sparkles className="h-4 w-4" />
+                        <AlertTitle>Nenhuma instância disponível</AlertTitle>
+                        <AlertDescription>
+                          Cadastre uma instância antes de configurar o agente de IA.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="agent-tone">Tom da marca</Label>
-                      <Textarea
-                        id="agent-tone"
-                        rows={4}
-                        value={tone}
-                        onChange={(event) => setTone(event.target.value)}
-                        placeholder="Ex: confiante, acolhedor, direto e consultivo."
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        O tom é gerenciado pela plataforma e será anexado ao `system_prompt` salvo no agente.
-                      </p>
-                    </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-name">Nome do agente</Label>
+                    <Input
+                      id="agent-name"
+                      value={agentName}
+                      onChange={(event) => setAgentName(event.target.value)}
+                      placeholder="Ex: Clara, Bento, Consultor Prime"
+                      disabled={Boolean(agent)}
+                    />
+                  </div>
 
+                  <div className="flex flex-wrap items-center gap-2">
+                    {agent ? (
+                      <>
+                        <Badge variant={agent.isActive ? "default" : "outline"}>
+                          {agent.isActive ? "Agente ativo" : "Agente inativo"}
+                        </Badge>
+                        <Badge variant="outline">{agent.name || "Agente criado"}</Badge>
+                        <Badge variant="outline">{agent.instanceName}</Badge>
+                      </>
+                    ) : targetInstanceName ? (
+                      <Badge variant="secondary">Instância pronta para vincular</Badge>
+                    ) : null}
+                  </div>
+
+                  {!error && !agent && targetInstanceName && (
+                    <Alert>
+                      <Sparkles className="h-4 w-4" />
+                      <AlertTitle>Nenhum agente vinculado a esta instância</AlertTitle>
+                      <AlertDescription>
+                        Crie o agente primeiro. Assim que ele for criado, a configuração do prompt será liberada abaixo.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <Button onClick={handleCreateAgent} disabled={!canCreateAgent}>
+                    {creatingAgent ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    {agent ? "Agente já criado" : "Criar agente"}
+                  </Button>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <h3 className="font-semibold">2. Configurar prompt</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Use a estrutura do `Prompt.md` para montar o comportamento completo do agente.
+                    </p>
+                  </div>
+
+                  {!agent ? (
+                    <Alert>
+                      <Sparkles className="h-4 w-4" />
+                      <AlertTitle>Criação obrigatória antes da configuração</AlertTitle>
+                      <AlertDescription>
+                        Depois de criar o agente e vincular a instância, o campo de prompt fica disponível nesta área.
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
                     <div className="space-y-2">
                       <Label htmlFor="agent-prompt">Prompt operacional</Label>
                       <Textarea
                         id="agent-prompt"
-                        rows={18}
+                        rows={22}
                         value={promptBody}
                         onChange={(event) => setPromptBody(event.target.value)}
-                        placeholder="Descreva regras, fluxos, objeções, contexto do negócio e comportamento esperado da IA."
+                        placeholder="Estruture aqui o prompt completo do agente com base no template de Project/IA/Prompt.md."
                       />
                     </div>
-                  </>
-                )}
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -227,33 +382,22 @@ export function EditInstanceAgentModal({
           <div className="border-t px-6 pb-6 pt-6 lg:border-l lg:border-t-0 bg-muted/20">
             <div className="space-y-4">
               <div>
-                <h3 className="font-semibold">Guia de qualidade</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Referência derivada de `Project/IA/Prompt.md` para manter consistência de prompt.
+                <h3 className="font-semibold">Etapas do prompt</h3>
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                  {PROMPT_GUIDANCE_INTRO}
                 </p>
               </div>
 
-              <Alert>
-                <CheckCircle2 className="h-4 w-4" />
-                <AlertTitle>Checklist antes de salvar</AlertTitle>
-                <AlertDescription>
-                  <ul className="space-y-2">
-                    {PROMPT_QUALITY_CHECKLIST.map((item) => (
-                      <li key={item} className="leading-relaxed">
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </AlertDescription>
-              </Alert>
-
-              <Separator />
-
               <div className="space-y-3">
                 {PROMPT_GUIDANCE_SECTIONS.map((section) => (
-                  <div key={section.title} className="rounded-lg border bg-background/70 p-4">
-                    <p className="font-medium text-sm">{section.title}</p>
-                    <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                  <div key={section.title} className="rounded-lg border bg-background/70 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-medium text-sm">{section.title}</p>
+                      <Badge variant={section.required ? "default" : "outline"}>
+                        {section.required ? "Obrigatório" : "Opcional"}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
                       {section.description}
                     </p>
                   </div>
@@ -267,9 +411,9 @@ export function EditInstanceAgentModal({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Fechar
           </Button>
-          <Button onClick={handleSave} disabled={!canSave}>
-            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-            Salvar IA
+          <Button onClick={handleSavePrompt} disabled={!canSavePrompt}>
+            {savingPrompt ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            Salvar configuração
           </Button>
         </DialogFooter>
       </DialogContent>

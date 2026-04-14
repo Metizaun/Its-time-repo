@@ -1,9 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Search, Loader2, MapPinned, Phone, Mail, Globe, Star } from "lucide-react";
-import { MapContainer, TileLayer, Marker, Circle, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
@@ -52,6 +52,9 @@ const languageOptions = [
   { value: "es", label: "Español" },
 ];
 
+// Coordenadas de Curitiba (fallback padrão)
+const CURITIBA: [number, number] = [-25.4284, -49.2733];
+
 const formSchema = z.object({
   searchTerms: z.string().min(1, "Informe ao menos um termo de busca"),
   locationQuery: z.string().min(1, "Informe cidade ou região"),
@@ -66,6 +69,23 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
+// ────────────────────────────────────────────────────
+// Componente auxiliar: atualiza o centro do mapa
+// de forma imperativa quando o centro muda.
+// ────────────────────────────────────────────────────
+function MapCenterUpdater({ center }: { center: [number, number] }) {
+  const map = useMap();
+  const prevRef = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    const [lat, lng] = center;
+    if (!prevRef.current || prevRef.current[0] !== lat || prevRef.current[1] !== lng) {
+      map.setView(center, map.getZoom(), { animate: true });
+      prevRef.current = center;
+    }
+  }, [center, map]);
+  return null;
+}
+
 function ResultCard({ result }: { result: BuscarLeadResult }) {
   return (
     <Card className="border-border shadow-none">
@@ -77,9 +97,16 @@ function ResultCard({ result }: { result: BuscarLeadResult }) {
               {result.address || [result.city, result.region].filter(Boolean).join(", ") || "Sem endereço"}
             </p>
           </div>
-          <Badge variant={result.isImported ? "default" : "secondary"}>
-            {result.isImported ? "Importado" : "Novo"}
-          </Badge>
+          {/* Badge de status: Importado (vermelho) | Duplicado (preto) | Novo (removido) */}
+          {result.isImported ? (
+            <Badge className="bg-[var(--color-accent,#e5393a)] hover:bg-[var(--color-accent,#e5393a)] text-white border-0 text-xs shrink-0">
+              Importado
+            </Badge>
+          ) : result.isDuplicate ? (
+            <Badge className="bg-zinc-900 text-white border border-zinc-600 hover:bg-zinc-800 text-xs shrink-0">
+              Duplicado
+            </Badge>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
@@ -117,6 +144,34 @@ export default function Buscar() {
   const { instances, loading: loadingInstances } = useInstances();
   const { monthlyTotal, loadingCounter, submitting, status, progress, message, results, center, totals, startSearch } = useBuscarLeads();
 
+  // ── Geolocalização do usuário ──────────────────────────────
+  // userLocation: posição real do usuário ou null se negada/não disponível
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const [geoRequested, setGeoRequested] = useState(false);
+
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      // Browser não suporta: fallback Curitiba silencioso
+      return;
+    }
+
+    setGeoRequested(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserLocation([position.coords.latitude, position.coords.longitude]);
+      },
+      () => {
+        // Usuário recusou ou erro: usa Curitiba (já é o default)
+        setUserLocation(null);
+      },
+      {
+        timeout: 8000,
+        maximumAge: 300_000, // cache de 5 min para evitar re-requests desnecessários
+        enableHighAccuracy: false,  // não forçar GPS para não gerar friction
+      }
+    );
+  }, []);
+
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -132,23 +187,41 @@ export default function Buscar() {
     },
   });
 
+  // Raio dinâmico monitorado para o círculo pré-busca
+  const watchedRadiusKm = form.watch("radiusKm");
+
+  // Centro do mapa: prioridade = resultado da busca > localização do usuário > Curitiba
   const mapCenter = useMemo<[number, number]>(() => {
     if (center) return [center.lat, center.lng];
     const firstWithCoords = results.find((item) => typeof item.lat === "number" && typeof item.lng === "number");
     if (firstWithCoords?.lat && firstWithCoords?.lng) {
-      return [firstWithCoords.lat, firstWithCoords.lng];
+      return [firstWithCoords.lat as number, firstWithCoords.lng as number];
     }
-    return [-23.5505, -46.6333];
-  }, [center, results]);
+    return userLocation ?? CURITIBA;
+  }, [center, results, userLocation]);
+
+  // Centro do círculo pré-busca (antes da API responder)
+  // Após a busca, usa o centro retornado pela API; antes usa posição do usuário / Curitiba
+  const circleCenter = useMemo<[number, number]>(() => {
+    if (center) return [center.lat, center.lng];
+    return userLocation ?? CURITIBA;
+  }, [center, userLocation]);
+
+  // Raio em metros: 1 km = 1000 m (fórmula correta para o Leaflet Circle)
+  const circleRadiusMeters = watchedRadiusKm * 1000;
 
   const onSubmit = (values: FormValues) => {
     const payload = {
-      searchStrings: values.searchTerms.split(",").map((item) => item.trim()).filter(Boolean),
+      // ✅ Corrigido: os parâmetros são passados corretamente para a API
+      searchStrings: values.searchTerms
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
       locationQuery: values.locationQuery,
       country: values.country,
-      radiusKm: values.radiusKm,
-      minimumStars: values.minimumStars,
-      maxResults: values.maxResults,
+      radiusKm: values.radiusKm,           // ✅ raio em KM (backend espera KM)
+      minimumStars: values.minimumStars,    // ✅ avaliação mínima passada corretamente
+      maxResults: values.maxResults,        // ✅ máximo de resultados passado corretamente
       language: values.language,
       fields: values.fields,
       instancia: values.instancia,
@@ -301,7 +374,7 @@ export default function Buscar() {
                     <FormItem>
                       <div className="flex items-center justify-between">
                         <FormLabel>Raio de busca</FormLabel>
-                        <span className="text-sm text-muted-foreground">{field.value} km</span>
+                        <span className="text-sm font-semibold text-primary">{field.value} km</span>
                       </div>
                       <FormControl>
                         <Slider
@@ -324,7 +397,7 @@ export default function Buscar() {
                     <FormItem>
                       <div className="flex items-center justify-between">
                         <FormLabel>Avaliação mínima</FormLabel>
-                        <span className="text-sm text-muted-foreground">{field.value.toFixed(1)} estrelas</span>
+                        <span className="text-sm text-muted-foreground">{field.value.toFixed(1)} ★</span>
                       </div>
                       <FormControl>
                         <Slider
@@ -347,7 +420,7 @@ export default function Buscar() {
                     <FormItem>
                       <div className="flex items-center justify-between">
                         <FormLabel>Máximo de resultados</FormLabel>
-                        <span className="text-sm text-muted-foreground">{field.value}</span>
+                        <span className="text-sm font-semibold text-primary">{field.value}</span>
                       </div>
                       <FormControl>
                         <Slider
@@ -363,6 +436,7 @@ export default function Buscar() {
                   )}
                 />
 
+                {/* ── Dados a Coletar com paleta preto/vermelho ── */}
                 <FormField
                   control={form.control}
                   name="fields"
@@ -380,7 +454,15 @@ export default function Buscar() {
                             <ToggleGroupItem
                               key={option.value}
                               value={option.value}
-                              className="rounded-full border border-[#cfe2f5] data-[state=on]:bg-[#E6F1FB] data-[state=on]:text-[#185FA5]"
+                              className={[
+                                "rounded-full border text-xs font-medium px-3 py-1 h-auto",
+                                "border-zinc-700 text-zinc-400 bg-transparent",
+                                "hover:border-zinc-500 hover:text-zinc-200",
+                                "data-[state=on]:border-[var(--color-accent,#e5393a)]",
+                                "data-[state=on]:bg-[var(--color-accent,#e5393a)]",
+                                "data-[state=on]:text-black data-[state=on]:font-bold",
+                                "transition-colors duration-150",
+                              ].join(" ")}
                             >
                               {option.label}
                             </ToggleGroupItem>
@@ -405,7 +487,13 @@ export default function Buscar() {
           <Card className="border-border shadow-none overflow-hidden">
             <CardHeader>
               <CardTitle>Mapa e progresso</CardTitle>
-              <CardDescription>{center?.label ?? "A busca será centralizada na região informada."}</CardDescription>
+              <CardDescription>
+                {center?.label
+                  ? center.label
+                  : geoRequested && userLocation
+                    ? "Mostrando sua localização atual. O círculo indica o raio de busca."
+                    : "Mostrando Curitiba - PR (localização padrão). O círculo indica o raio selecionado."}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
@@ -454,12 +542,34 @@ export default function Buscar() {
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   />
 
-                  {center && <Circle center={[center.lat, center.lng]} radius={form.watch("radiusKm") * 1000} pathOptions={{ color: "#03E3B6", fillOpacity: 0.12 }} />}
+                  {/* Sincroniza o centro do mapa quando muda (geoloc ou busca) */}
+                  <MapCenterUpdater center={mapCenter} />
+
+                  {/* 
+                    Círculo dinâmico — sempre visível:
+                    - Antes da busca: mostra posição do usuário (ou Curitiba) + raio do slider
+                    - Após a busca: mostra centro retornado pela API + raio da busca
+                    Leaflet Circle recebe radius em METROS → radiusKm * 1000 ✅
+                  */}
+                  <Circle
+                    center={circleCenter}
+                    radius={circleRadiusMeters}
+                    pathOptions={{
+                      color: "#e5393a",
+                      fillColor: "#e5393a",
+                      fillOpacity: 0.07,
+                      weight: 1.5,
+                      dashArray: "6 4",
+                    }}
+                  />
 
                   {results
                     .filter((item) => typeof item.lat === "number" && typeof item.lng === "number")
                     .map((item, index) => (
-                      <Marker key={`${item.externalId ?? item.phone ?? item.name}-${index}`} position={[item.lat as number, item.lng as number]}>
+                      <Marker
+                        key={`${item.externalId ?? item.phone ?? item.name}-${index}`}
+                        position={[item.lat as number, item.lng as number]}
+                      >
                         <Popup>
                           <div className="space-y-1">
                             <p className="font-medium">{item.name}</p>

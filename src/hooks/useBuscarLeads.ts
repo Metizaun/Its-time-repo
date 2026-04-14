@@ -18,6 +18,7 @@ export type BuscarLeadResult = {
   lat?: number | null;
   lng?: number | null;
   isImported?: boolean;
+  isDuplicate?: boolean;
 };
 
 export type BuscarLeadsStartPayload = {

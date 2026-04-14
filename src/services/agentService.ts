@@ -85,3 +85,31 @@ export async function updateAgentPrompt({
     agent: mapAgent(payload.agent),
   };
 }
+
+export async function createAgent({
+  accessToken,
+  name,
+  instanceName,
+  systemPrompt,
+}: AuthHeadersInput & {
+  name: string;
+  instanceName: string;
+  systemPrompt?: string;
+}) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/agents`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({
+      name,
+      instanceName,
+      systemPrompt,
+    }),
+  });
+
+  const payload = await parseResponse<{ success: boolean; agent: any }>(response);
+
+  return {
+    success: payload.success,
+    agent: mapAgent(payload.agent),
+  };
+}

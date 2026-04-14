@@ -162,15 +162,21 @@ Esse modal é simples e focado.
 
 ### 7.1 Estrutura
 
-- título com nome da instância
-- subtítulo explicando que a configuração vale para o agente ligado àquela instância
-- uma única área principal com `Textarea` grande
-- rodapé com `Cancelar` e `Salvar`
+- título do modal de configuração da IA
+- subtítulo explicando o fluxo: criar agente e depois configurar o prompt
+- bloco inicial para `Criar agente`
+- seletor de instância
+- campo para nome do agente
+- área principal com `Textarea` grande para o `Prompt`, liberada somente após a criação
+- lateral com etapas do template-base do prompt
+- rodapé com `Fechar` e `Salvar configuração`
 
-### 7.2 Campo exibido
+### 7.2 Campos exibidos
 
 Nesta primeira entrega, o modal mostra apenas:
 
+- instância que será vinculada ao agente
+- nome do agente
 - prompt atual do agente
 
 Nenhum outro ajuste de modelo, provider ou regras deve entrar aqui.
@@ -180,6 +186,10 @@ Nenhum outro ajuste de modelo, provider ou regras deve entrar aqui.
 - abre como modal centralizado no desktop
 - ocupa largura confortável para leitura de prompt
 - no mobile pode assumir comportamento de tela cheia
+- a primeira ação do modal é sempre `Criar agente`
+- o agente só pode ser criado se estiver vinculado a uma instância
+- a configuração do prompt só é liberada depois da criação do agente
+- a lateral não usa checklist genérico; ela replica as etapas reais do template em `Project/IA/Prompt.md`
 
 ---
 

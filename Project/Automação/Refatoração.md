@@ -94,6 +94,7 @@ Esse serviço deve:
 
 - listar agentes via `GET /api/agents`
 - localizar o agente da instância pelo `instanceName`
+- criar agente via `POST /api/agents` (somente quando o usuário solicitar)
 - salvar o prompt via `PATCH /api/agents/:id`
 
 ### 4.3 Componente sugerido
@@ -105,15 +106,20 @@ Criar:
 Responsabilidades:
 
 - receber `instanceName`
+- permitir selecionar a instância quando o filtro da página estiver em `Todas`
 - carregar o agente vinculado
-- exibir somente o campo de prompt
+- criar agente via ação explícita do usuário
+- liberar a edição do prompt somente após a criação do agente
 - salvar somente `systemPrompt`
 
 ### 4.4 Comportamento esperado
 
-- se existir agente para a instância, abre o prompt atual
-- se não existir agente, mostrar estado vazio explicando que não há agente vinculado
-- não criar agente automaticamente nesta entrega
+- a primeira etapa do modal é `Criar agente`
+- o agente deve ser criado já vinculado à instância escolhida
+- se existir agente para a instância, o modal entra direto na etapa de configuração
+- se não existir agente, mostrar a criação e liberar o prompt somente após o vínculo
+- não criar agente automaticamente nesta entrega (somente via ação do usuário)
+- substituir checklist genérico por etapas reais do template de `Project/IA/Prompt.md`, marcando o que é obrigatório e opcional
 
 Isso mantém o comportamento previsível e não adiciona efeitos colaterais.
 

@@ -9,41 +9,72 @@ export interface ParsedAgentPrompt {
 export interface PromptGuidanceSection {
   title: string;
   description: string;
+  required: boolean;
 }
 
-export const PROMPT_QUALITY_CHECKLIST = [
-  "Defina a identidade do agente, empresa, nicho e proposta de valor antes de personalizar o restante.",
-  "Mantenha regras operacionais claras, especialmente formato de mensagem, limites de atuação e objeções.",
-  "Descreva o tom de voz de forma prática, explicando como a IA deve soar no WhatsApp.",
-  "Inclua objetivos, CTAs, fluxos especiais e critérios para acionar humano ou ferramentas.",
-  "Revise todos os blocos com [CONFIGURAR] para evitar sobras de outro nicho ou instruções incompletas.",
-];
+export const PROMPT_GUIDANCE_INTRO =
+  "Monte o prompt seguindo a ordem do template-base. Secoes opcionais devem entrar apenas quando fizerem sentido para a operacao da instancia.";
 
 export const PROMPT_GUIDANCE_SECTIONS: PromptGuidanceSection[] = [
   {
     title: "Identidade do Agente",
     description:
-      "Defina nome, empresa, nicho e promessa principal da marca para dar contexto estável ao agente.",
-  },
-  {
-    title: "Tom e Personalidade",
-    description:
-      "Explique como a IA deve soar no WhatsApp: postura, ritmo, nível de informalidade e sensação transmitida.",
+      "Defina nome do agente, empresa, nicho e tom da marca antes de personalizar o restante.",
+    required: true,
   },
   {
     title: "Regras Invioláveis",
     description:
-      "Liste formatos obrigatórios, limites de mensagem, restrições operacionais e o que a IA nunca deve fazer.",
+      "Configure formato de mensagem, regras de preco, restricoes operacionais, LGPD e uso obrigatorio de tools.",
+    required: true,
   },
   {
-    title: "Fluxo Comercial",
+    title: "Diretriz Principal",
     description:
-      "Descreva abertura, qualificação, recomendação, objeções, CTAs e critérios de conversão presencial ou humana.",
+      "Descreva identidade, personalidade, tom de voz e objetivo principal do consultor virtual.",
+    required: true,
   },
   {
-    title: "Conhecimento do Negócio",
+    title: "Abertura e Coleta Inicial",
     description:
-      "Inclua produtos, promoções, meios de pagamento, horários, canais oficiais e outros detalhes que afetam resposta.",
+      "Defina como o agente abre a conversa no primeiro contato e como reage a saudacoes genericas ou pedidos diretos.",
+    required: true,
+  },
+  {
+    title: "Framework CARE",
+    description:
+      "Preencha tom, qualificacao, recomendacao, urgencia e protocolo de conversao presencial.",
+    required: true,
+  },
+  {
+    title: "Fluxos Especiais",
+    description:
+      "Use apenas se a operacao tiver parceiros, consultoria gratuita ou outros desvios reais de fluxo.",
+    required: false,
+  },
+  {
+    title: "Decision Matrix e Tools",
+    description:
+      "Mapeie intencoes do lead para tools da plataforma e valide os gatilhos de uso de cada uma.",
+    required: true,
+  },
+  {
+    title: "Objecoes",
+    description:
+      "Prepare respostas para preco, duvidas comuns e objecoes comerciais sem perder o tom da marca.",
+    required: true,
+  },
+  {
+    title: "Base de Conhecimento",
+    description:
+      "Preencha empresa, proposta de valor, produtos, diferenciais, promocoes, pagamentos, horarios e canais oficiais.",
+    required: true,
+  },
+  {
+    title: "Finalizacao e Memoria",
+    description:
+      "Defina encerramento, voucher e regras de uso das ferramentas cognitivas como Think e ChatMemory.",
+    required: true,
   },
 ];
 

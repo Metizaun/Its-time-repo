@@ -168,6 +168,17 @@
   }
 }
 
+/* ── Slider: track preenchido usa a cor primária do sistema ── */
+/* Em dark mode isso já será vermelho (#e5393a) via --primary.  */
+/* Remove o azul padrão do Radix/Shadcn em qualquer modo.      */
+[data-slot="slider-track"] > span,
+[role="slider"] ~ span,
+.slider-range,
+[data-radix-slider-track] > [data-radix-slider-range] {
+  background-color: hsl(var(--primary)) !important;
+}
+
+
 .btn {
   width: 70px;
   height: 36px;
