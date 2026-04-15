@@ -56,17 +56,17 @@ export function KPICard({
   return (
     <Card 
       className={cn(
-        "p-4 sm:p-6 transition-all duration-200 border border-[var(--color-border-subtle)] hover:border-[var(--color-border-medium)]", 
-        "bg-[var(--color-bg-elevated)] shadow-none",
+        "p-4 sm:p-6 transition-all duration-200", 
+        "bg-transparent rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]",
         className
       )}
     >
       <div className="flex items-start justify-between gap-3 min-w-0">
         <div className="flex-1 min-w-0">
-          <p className="text-[var(--font-size-label,0.75rem)] text-[var(--color-text-secondary)] font-medium uppercase tracking-wider">{title}</p>
+          <p className="text-[10px] text-[var(--color-text-secondary)] font-semibold uppercase tracking-widest">{title}</p>
 
           {/* força linha única para R$ 4.800,00 */}
-          <p className="stat-value mt-1 whitespace-nowrap text-[var(--color-text-primary)] font-bold">
+          <p className="stat-value mt-1 whitespace-nowrap text-white font-bold text-3xl">
             {cleanValue}
           </p>
 

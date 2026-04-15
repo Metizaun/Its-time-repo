@@ -11,16 +11,21 @@ Todos os valores de cor e espaço vêm exclusivamente de 01-token-agent.md.
 Exibe um número grande com label e variação percentual.
 
 ```css
-.kpi-card {
-  background:    var(--color-bg-elevated);
-  border-radius: var(--radius-md);
-  border:        1px solid var(--color-border-subtle);
+.kpi-card, .dashboard-card {
+  background:    transparent; /* Hollow Card (Cyberpunk Minimalista) */
+  border-radius: 24px; 
+  border:        1px solid rgba(255, 255, 255, 0.03); /* Borda fantasma tipo vidro */
+  border-top:    2px solid var(--color-accent); /* Red Neon Top Glow */
   padding:       var(--spacing-md) var(--spacing-lg);
+  box-shadow:    0 8px 32px rgba(229, 57, 58, 0.04), inset 0 30px 40px -20px rgba(255, 255, 255, 0.01); /* Levíssimo glow no topo acompanhando a cor */
 }
 .kpi-card__label {
   font-size: var(--font-size-label);
   color:     var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
   margin-bottom: var(--spacing-xs);
+  font-weight: 600;
 }
 .kpi-card__value {
   font-size:   var(--font-size-hero);
@@ -31,6 +36,7 @@ Exibe um número grande com label e variação percentual.
 .kpi-card__delta {
   font-size: var(--font-size-label);
   margin-top: var(--spacing-xs);
+  font-weight: bold;
 }
 .kpi-card__delta--positive { color: var(--color-success); }
 .kpi-card__delta--negative { color: var(--color-danger); }
@@ -87,8 +93,10 @@ Indica estado de um lead ou automação.
 ```
 
 ## Regras
-- **Soft Neumorphism Invertido:** Utilizar drop-shadows macias para destacar componentes de UI principais do fundo (Ex: `0 8px 16px rgba(0,0,0,0.5)`).
-- **Glow Controlado e Luz Interna:** Criar profundidade utilizando uma leve linha clara interna no topo dos blocks (`inset 0 1px 1px rgba(255,255,255,0.06)`).
-- Hover: aplicar glow sutil ou refletir aumento de iluminação global do bloco com base na Accent Color se interativo.
-- Focus: outline 2px var(--color-accent) com offset 2px
-- Nunca usar cor clara como fundo, mesmo em hover
+- **Dark Hollow Glow (Obrigatório em todos os Cards):** A interface abandona as caixas cinzas pesadas em favor do `bg-transparent` ou `bg-[#0a0a0a]`. As caixas "absorvem" o fundo e flutuam delicadamente através de sombreamentos e transparências. Use `box-shadow: 0 8px 32px rgba(229, 57, 58, 0.04)`.
+- **Destaque Neon Top-bar:** Todo card de métrica e gráfico possui um discreto risco `border-t-2 border-[var(--color-accent)]` cintilante.
+- **Moldura Vitral (Ghost Borders):** Ao invés de bordas sólidas pesadas, as marcações laterais e inferiores existem como um reflexo macio: `border border-[rgba(255,255,255,0.03)]`.
+- **Backgrounds Puros:** O container principal usa fundo Absoluto Base `#0d0d0d` (`var(--color-bg-primary)`).
+- **Tipografia nos KPIs:** Labels de blocos usam upper-case forte, tracking-widest e tamanho `10px` a `12px` cinza. Os Valores em si são gigantes, `font-bold` e brancos.
+- Hover: aplicar sutil aumento de claridade na base da moldura vitral ou um glow na borda primária, ativando resposta à `Accent Color`.
+- Focus: outline 2px var(--color-accent) com offset 2px.

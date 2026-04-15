@@ -95,14 +95,15 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
                   <TooltipTrigger asChild>
                     <div 
                       className="funnel-stage relative z-10 flex flex-col justify-center items-center transition-transform hover:scale-[1.01]"
-                      style={{
-                        width: `clamp(220px, ${stage.width}, 100%)`, 
-                        background: 'var(--color-bg-elevated)',
-                        borderRadius: '24px',
-                        padding: '16px 24px',
-                        boxShadow: '0 16px 32px rgba(0, 0, 0, 0.7), inset 0 2px 2px rgba(255, 255, 255, 0.04)',
-                        border: 'none'
-                      }}
+                        style={{
+                          width: `clamp(220px, ${stage.width}, 100%)`, 
+                          background: 'transparent',
+                          borderRadius: '24px',
+                          padding: '16px 24px',
+                          boxShadow: '0 8px 32px rgba(229, 57, 58, 0.04)',
+                          border: '1px solid rgba(255, 255, 255, 0.03)',
+                          borderTop: '2px solid var(--color-accent)'
+                        }}
                     >
                       <span className="text-[10px] sm:text-xs text-[var(--color-text-secondary)] uppercase font-semibold tracking-widest">{stage.name}</span>
                       <strong className="text-3xl sm:text-[2.6rem] text-white font-bold leading-none my-1 tracking-tight">{stage.value}</strong>
