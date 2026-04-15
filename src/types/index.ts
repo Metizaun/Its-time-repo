@@ -6,7 +6,7 @@ export interface Lead {
   id: string;
   nome: string;
   cidade: string;
-  email: string | null; // Permitindo null
+  email: string | null;
   telefone: string;
   origem: string;
   conexao: "Baixa" | "Média" | "Alta";
@@ -18,6 +18,24 @@ export interface Lead {
   observacoes?: string;
   instance_name?: string | null;
   last_tag_name?: string | null;
+}
+
+export interface AIAgent {
+  id: string;
+  aces_id: number;
+  instance_name: string;
+  name: string;
+  system_prompt: string;
+  provider: "gemini";
+  model: string;
+  is_active: boolean;
+  temperature: number;
+  buffer_wait_ms: number;
+  human_pause_minutes: number;
+  auto_apply_threshold: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface User {

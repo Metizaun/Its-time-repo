@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Kanban, Users, MessageSquare, Settings, Search, Workflow } from "lucide-react";
+import { LayoutDashboard, Kanban, Users, MessageSquare, Settings, Search, Workflow, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -131,6 +131,32 @@ export function Sidebar() {
                     )}
                   >
                     Automação
+                  </span>
+                </NavLink>
+              </li>
+            )}
+
+            {isAdmin && (
+              <li>
+                <NavLink
+                  to="/agentes"
+                  title={collapsed ? "Agentes" : ""}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-200 focus-ring",
+                      isActive ? "bg-primary text-primary-foreground font-medium" : "text-foreground hover:bg-muted",
+                      collapsed ? "justify-center" : "justify-start"
+                    )
+                  }
+                >
+                  <Bot className={cn("w-5 h-5 transition-transform duration-200", collapsed ? "mx-0" : "mr-2")} />
+                  <span
+                    className={cn(
+                      "transition-opacity duration-200",
+                      collapsed ? "opacity-0 pointer-events-none absolute" : "opacity-100 relative"
+                    )}
+                  >
+                    Agentes
                   </span>
                 </NavLink>
               </li>

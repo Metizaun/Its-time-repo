@@ -16,6 +16,7 @@ import Buscar from "./pages/Buscar";
 import Automacao from "./pages/Automacao";
 import Admin from "./pages/Admin";
 import Chat from "./pages/Chat";
+import Agentes from "./pages/Agentes";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 
@@ -39,6 +40,7 @@ const App = () => (
               <Route path="/leads" element={<ProtectedRoute><MainLayout><Leads /></MainLayout></ProtectedRoute>} />
               <Route path="/buscar" element={<ProtectedRoute><MainLayout><Buscar /></MainLayout></ProtectedRoute>} />
               <Route path="/automacao" element={<ProtectedRoute><MainLayout><Automacao /></MainLayout></ProtectedRoute>} />
+              <Route path="/agentes" element={<ProtectedRoute><MainLayout><Agentes /></MainLayout></ProtectedRoute>} />
               <Route path="/admin" element={<ProtectedRoute><MainLayout><Admin /></MainLayout></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
