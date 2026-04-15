@@ -1,12 +1,12 @@
-import "./load-env";
+import "./load-env.js";
 import express, { type NextFunction, type Request, type Response } from "express";
 import {
   AgentManager,
   DEFAULT_SYSTEM_MESSAGE,
   HttpError,
   type WebhookPayload,
-} from "./sdr-agent-gemini";
-import { startAutomationWorker } from "./automation-worker";
+} from "./sdr-agent-gemini.js";
+import { startAutomationWorker } from "./automation-worker.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -37,6 +37,10 @@ const manager = new AgentManager({
   evolutionApiUrl: requireEnv("EVOLUTION_API_URL"),
   evolutionApiKey: requireEnv("EVOLUTION_API_KEY"),
   evolutionWebhookSecret: process.env.EVOLUTION_WEBHOOK_SECRET,
+  webhookPublicBaseUrl:
+    process.env.CRM_BACKEND_PUBLIC_URL ??
+    process.env.BACKEND_PUBLIC_URL ??
+    process.env.WEBHOOK_PUBLIC_BASE_URL,
 });
 
 const app = express();

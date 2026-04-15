@@ -1,4 +1,4 @@
-import "./load-env";
+import "./load-env.js";
 import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";

@@ -1,17 +1,14 @@
 import { useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Bot, Filter, Plus, Workflow } from "lucide-react";
+import { Filter, Plus, Workflow } from "lucide-react";
 
 import { AutomationBoard } from "@/components/automation/AutomationBoard";
-import { EditInstanceAgentModal } from "@/components/modals/EditInstanceAgentModal";
 import { AutomationMessageModal } from "@/components/modals/AutomationMessageModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAutomation } from "@/hooks/useAutomation";
 import { useInstances } from "@/hooks/useInstances";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -44,13 +41,8 @@ export default function Automacao() {
   const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>(null);
   const [pendingStageId, setPendingStageId] = useState<string | null>(null);
   const [automationModalOpen, setAutomationModalOpen] = useState(false);
-  const [agentModalOpen, setAgentModalOpen] = useState(false);
 
   const selectedInstanceName = instanceFilter === "all" ? null : instanceFilter;
-  const instanceNames = useMemo(
-    () => instances.map((instance) => instance.instancia),
-    [instances]
-  );
 
   const filteredFunnels = useMemo(() => {
     if (instanceFilter === "all") {
@@ -105,45 +97,40 @@ export default function Automacao() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-3 text-white">
             <Workflow className="w-8 h-8" />
             Automação
           </h1>
-          <p className="text-muted-foreground mt-1 max-w-3xl">
-            Visualize e edite automações por etapa do pipeline em formato Kanban. Cada cartão representa
-            uma automação e pode conter várias mensagens automáticas.
-          </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setAgentModalOpen(true)}>
-            <Bot className="w-4 h-4 mr-2" />
-            Configurar IA
-          </Button>
-          <Button onClick={() => handleCreateAutomation(null)}>
-            <Plus className="w-4 h-4 mr-2" />
+          <button
+            onClick={() => handleCreateAutomation(null)}
+            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-accent)] hover:brightness-110 text-white text-sm font-semibold rounded-xl transition-all duration-200 shadow-[0_4px_16px_rgba(229,57,58,0.25)]"
+          >
+            <Plus className="w-4 h-4" />
             Nova automação
-          </Button>
+          </button>
         </div>
       </div>
 
-      <Card className="rounded-[28px] border p-5 shadow-sm">
+      <Card className="p-5 sm:p-6 bg-transparent rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm text-muted-foreground">
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-sm text-[var(--color-text-secondary)]">
               <Filter className="w-4 h-4" />
               Filtro de instância
             </div>
 
             <div className="w-full sm:w-[260px]">
               <Select value={instanceFilter} onValueChange={setInstanceFilter}>
-                <SelectTrigger>
+                <SelectTrigger className="bg-[#0d0d0d] border-white/10 text-white rounded-xl">
                   <SelectValue placeholder="Filtrar por instância" />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas as instâncias</SelectItem>
+                <SelectContent className="bg-[#0d0d0d] border-white/10 rounded-xl">
+                  <SelectItem value="all" className="text-white focus:bg-white/5 focus:text-white">Todas as instâncias</SelectItem>
                   {instances.map((instance) => (
-                    <SelectItem key={instance.instancia} value={instance.instancia}>
+                    <SelectItem key={instance.instancia} value={instance.instancia} className="text-white focus:bg-white/5 focus:text-white">
                       {instance.instancia}
                     </SelectItem>
                   ))}
@@ -153,30 +140,10 @@ export default function Automacao() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Badge variant="outline">{filteredFunnels.length} automações</Badge>
-            <Badge variant="outline">{activeFunnelsCount} ativas</Badge>
-            <Badge variant="outline">{totalMessagesCount} mensagens</Badge>
+            <Badge variant="outline" className="border-white/10 text-white bg-white/5 rounded-full px-3">{filteredFunnels.length} automações</Badge>
+            <Badge variant="outline" className="border-white/10 text-white bg-[var(--color-success)]/10 text-[var(--color-success)] rounded-full px-3">{activeFunnelsCount} ativas</Badge>
+            <Badge variant="outline" className="border-white/10 text-white bg-[var(--color-accent)]/10 text-[var(--color-accent)] rounded-full px-3">{totalMessagesCount} mensagens</Badge>
           </div>
-        </div>
-
-        <div className="mt-4">
-          {selectedInstanceName ? (
-            <Alert>
-              <AlertTitle>Instância selecionada: {selectedInstanceName}</AlertTitle>
-              <AlertDescription>
-                O board mostra apenas automações desta instância e o botão `Configurar IA` edita esse
-                mesmo agente.
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <Alert>
-              <AlertTitle>Visualização consolidada</AlertTitle>
-              <AlertDescription>
-                O board mostra automações de todas as instâncias da conta. Selecione uma instância específica
-                para editar a IA vinculada.
-              </AlertDescription>
-            </Alert>
-          )}
         </div>
       </Card>
 
@@ -190,9 +157,8 @@ export default function Automacao() {
           </div>
         </div>
       ) : stages.length === 0 ? (
-        <Card className="rounded-[28px] border border-dashed p-8 text-sm text-muted-foreground">
-          Nenhuma etapa do pipeline foi cadastrada ainda. Crie as etapas no CRM antes de montar o Kanban de
-          automação.
+        <Card className="p-8 sm:p-10 bg-transparent rounded-[24px] border border-white/5 border-dashed border-t-[var(--color-accent)] border-t-2 text-sm text-[var(--color-text-secondary)] text-center shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
+          Nenhuma etapa do pipeline foi cadastrada ainda. Crie as etapas no CRM antes de montar o Kanban de automação.
         </Card>
       ) : (
         <AutomationBoard
@@ -220,13 +186,6 @@ export default function Automacao() {
         createStep={createStep}
         updateStep={updateStep}
         deleteStep={deleteStep}
-      />
-
-      <EditInstanceAgentModal
-        open={agentModalOpen}
-        onOpenChange={setAgentModalOpen}
-        instanceName={selectedInstanceName}
-        instanceOptions={instanceNames}
       />
     </div>
   );

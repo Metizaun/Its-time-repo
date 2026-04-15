@@ -25,18 +25,20 @@ export default function Pipeline() {
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <h1 className="text-3xl font-bold">Pipeline</h1>
-        <p className="text-muted-foreground">Carregando...</p>
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[var(--color-accent)]" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Pipeline</h1>
-        <p className="text-muted-foreground mt-1">Gerencie seus leads atraves do funil de vendas</p>
+        <h1 className="text-2xl sm:text-3xl font-bold text-white">Pipeline</h1>
+        <p className="text-[var(--color-text-secondary)] mt-1 text-sm">
+          Gerencie seus leads através do funil de vendas.
+        </p>
       </div>
 
       <PipelineToolbar

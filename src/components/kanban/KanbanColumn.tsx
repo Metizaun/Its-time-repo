@@ -88,10 +88,13 @@ export function KanbanColumn({
   return (
     <div
       className={cn(
-        "flex-1 min-w-[280px] w-[280px] bg-card rounded-lg border border-border transition-all relative flex flex-col shrink-0",
-        isLeadDragOver && "column-drag-active",
+        "flex-1 min-w-[280px] w-[280px] bg-[#161616] rounded-xl transition-all relative flex flex-col shrink-0 overflow-hidden border border-white/5 border-t-2",
+        isLeadDragOver && "bg-[#1C1C1C]",
         isDraggingColumn && "opacity-50"
       )}
+      style={{ 
+        borderTopColor: column.color,
+      }}
       onDragOver={handleLeadDragOver}
       onDragLeave={handleLeadDragLeave}
       onDrop={handleLeadDrop}
@@ -99,19 +102,11 @@ export function KanbanColumn({
       aria-label={`Coluna ${column.name}`}
     >
       <div
-        className={cn("kanban-light-bar", isLeadDragOver && "kanban-light-bar-active")}
-        style={{
-          "--kanban-color": column.color,
-        } as any}
-      />
-
-      <div
         className={cn(
-          "p-4 border-b border-border flex items-center justify-between",
+          "px-4 py-3 flex items-center justify-between transition-colors",
           isAdmin && "cursor-grab active:cursor-grabbing",
-          isColumnDragOver && "bg-accent"
+          isColumnDragOver && "bg-white/5"
         )}
-        style={{ backgroundColor: column.color + "15" }}
         draggable={isAdmin}
         onDragStart={(e) => {
           if (!isAdmin) return;
@@ -129,9 +124,9 @@ export function KanbanColumn({
         onDrop={handleColumnDrop}
       >
         <div className="flex items-center gap-2">
-          {isAdmin && <GripVertical className="w-4 h-4 text-muted-foreground" />}
-          <h3 className="font-semibold text-sm">{column.name}</h3>
-          <span className="text-xs text-muted-foreground">({leads.length})</span>
+          {isAdmin && <GripVertical className="w-4 h-4 text-white/20" />}
+          <h3 className="font-bold text-sm text-white">{column.name}</h3>
+          <span className="text-[10px] uppercase font-semibold tracking-wider text-white/40">({leads.length})</span>
         </div>
 
         {isAdmin && (
@@ -141,14 +136,14 @@ export function KanbanColumn({
                 <MoreVertical className="w-3.5 h-3.5" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => openModal("STAGE_FORM", { stage: column })}>
-                <Edit2 className="w-4 h-4 mr-2" />
+            <DropdownMenuContent align="end" className="bg-[#1A1A1A] border-none text-white rounded-xl">
+              <DropdownMenuItem onClick={() => openModal("STAGE_FORM", { stage: column })} className="focus:bg-[#242424] focus:text-white cursor-pointer rounded-lg">
+                <Edit2 className="w-4 h-4 mr-2 opacity-70" />
                 Editar Etapa
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => openModal("DELETE_STAGE", { stage: column })}
-                className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                className="text-[var(--color-destructive)] focus:bg-[var(--color-destructive)]/10 focus:text-[var(--color-destructive)] cursor-pointer rounded-lg"
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Excluir Etapa
@@ -158,9 +153,9 @@ export function KanbanColumn({
         )}
       </div>
 
-      <div className={cn("p-3 space-y-2", isLeadDragOver && "drag-placeholder")}>
+      <div className={cn("p-2 space-y-2 flex-1 overflow-y-auto min-h-[100px]", isLeadDragOver && "opacity-70")}>
         {leads.length === 0 ? (
-          <div className="text-center py-12 text-muted-foreground text-sm">Nenhum lead nesta etapa</div>
+          <div className="text-center py-12 text-white/20 text-xs tracking-wider uppercase font-medium">Nenhum lead nesta etapa</div>
         ) : (
           leads.map((lead) => (
             <LeadCard

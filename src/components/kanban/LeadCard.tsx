@@ -38,8 +38,8 @@ export function LeadCard({ lead, onDragStart, onDragEnd }: LeadCardProps) {
       onMouseLeave={() => setIsHolding(false)}
       onClick={() => openDrawer(lead.id)}
       className={cn(
-        "p-3 transition-all focus-ring",
-        isHolding ? "cursor-grabbing shadow-md -translate-y-0.5" : "cursor-pointer"
+        "p-3.5 bg-[#202020] rounded-xl transition-all outline-none",
+        isHolding ? "cursor-grabbing opacity-80 scale-[0.98]" : "cursor-pointer hover:bg-[#262626]"
       )}
       role="listitem"
       tabIndex={0}
@@ -54,40 +54,42 @@ export function LeadCard({ lead, onDragStart, onDragEnd }: LeadCardProps) {
         }
       }}
     >
-      <div className="space-y-2">
+      <div className="space-y-3">
         <div>
-          <h4 className="font-semibold text-sm leading-tight">{lead.lead_name}</h4>
+          <h4 className="font-bold text-sm leading-tight text-white">{lead.lead_name}</h4>
           {lead.last_city && (
-            <div className="flex items-center gap-1 mt-1 text-[11px] text-muted-foreground">
-              <Building2 className="w-3 h-3" />
+            <div className="flex items-center gap-1.5 mt-1 text-[11px] text-[var(--color-text-secondary)]">
+              <Building2 className="w-3 h-3 text-white/40" />
               <span>{lead.last_city}</span>
             </div>
           )}
         </div>
 
-        {lead.owner_name && (
-          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-            <User className="w-3 h-3" />
-            <span>{lead.owner_name}</span>
-          </div>
-        )}
+        <div className="flex flex-col gap-1.5">
+          {lead.owner_name && (
+            <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
+              <User className="w-3 h-3 text-[var(--color-accent)]/80" />
+              <span>{lead.owner_name}</span>
+            </div>
+          )}
 
-        {lead.source && (
-          <div className="text-[11px] text-muted-foreground">
-            <span className="font-medium">{lead.source}</span>
-          </div>
-        )}
+          {lead.source && (
+            <div className="text-[11px] text-[var(--color-text-secondary)]">
+              <span className="font-medium bg-white/5 px-2 py-0.5 rounded-full border border-white/5">{lead.source}</span>
+            </div>
+          )}
+        </div>
 
-        <div className="flex items-center gap-2 mt-1">
+        <div className="flex items-center gap-3 mt-1 pt-3 border-t border-white/[0.03]">
           {lead.value !== null && lead.value !== undefined && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <DollarSign className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-1 text-xs text-white/80 font-medium">
+              <DollarSign className="w-3 h-3 text-[var(--color-success)]" />
               <span>R$ {lead.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
             </div>
           )}
 
           {lead.connection_level && (
-            <Badge variant="outline" className="text-xs h-5">
+            <Badge variant="outline" className="text-[10px] h-5 bg-white/5 border-white/10 text-white font-semibold tracking-wider uppercase ml-auto">
               {lead.connection_level}
             </Badge>
           )}

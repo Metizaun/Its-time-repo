@@ -207,6 +207,7 @@ type ServiceConfig = {
   evolutionApiUrl: string;
   evolutionApiKey: string;
   evolutionWebhookSecret?: string;
+  webhookPublicBaseUrl?: string;
 };
 
 export class HttpError extends Error {
@@ -390,6 +391,43 @@ export class AgentManager {
 
   private evolutionHeaders() {
     return { apikey: this.config.evolutionApiKey };
+  }
+
+  private resolveInstanceWebhookUrl() {
+    const base = this.config.webhookPublicBaseUrl?.trim().replace(/\/$/, "");
+    if (!base) {
+      return null;
+    }
+
+    return `${base}/api/webhook/evolution`;
+  }
+
+  private async ensureEvolutionWebhook(instanceName: string) {
+    const webhookUrl = this.resolveInstanceWebhookUrl();
+    if (!webhookUrl) {
+      return { configured: false, reason: "WEBHOOK_PUBLIC_BASE_URL nao configurada" as const };
+    }
+
+    try {
+      await axios.post(
+        `${this.config.evolutionApiUrl}/webhook/set/${encodeURIComponent(instanceName)}`,
+        {
+          url: webhookUrl,
+          events: ["MESSAGES_UPSERT"],
+          webhook_by_events: true,
+          webhook_base64: true,
+        },
+        { headers: this.evolutionHeaders() }
+      );
+
+      return { configured: true as const };
+    } catch (error: any) {
+      throw new HttpError(
+        502,
+        `Nao foi possivel configurar webhook da instancia ${instanceName} na Evolution`,
+        error?.response?.data ?? error?.message ?? error
+      );
+    }
   }
 
   private normalizeInstanceStatus(raw: string | null | undefined): "connected" | "disconnected" | "connecting" | "error" {
@@ -1139,6 +1177,11 @@ export class AgentManager {
       });
     }
 
+    const webhookSync = await this.ensureEvolutionWebhook(instanceName);
+    if (!webhookSync.configured) {
+      console.warn(`[crm-ai] Webhook da Evolution nao configurado automaticamente para ${instanceName}: ${webhookSync.reason}`);
+    }
+
     return {
       success: true,
       instanceName,
@@ -1196,6 +1239,11 @@ export class AgentManager {
 
       await this.logInstanceEvent(context.acesId, instanceName, "reconnect");
       await this.logInstanceEvent(context.acesId, instanceName, "qr_generated");
+
+      const webhookSync = await this.ensureEvolutionWebhook(instanceName);
+      if (!webhookSync.configured) {
+        console.warn(`[crm-ai] Webhook da Evolution nao configurado automaticamente para ${instanceName}: ${webhookSync.reason}`);
+      }
 
       return {
         success: true,
@@ -1259,6 +1307,11 @@ export class AgentManager {
         setup_expires_at: status === "connected" ? null : instance.setup_expires_at ?? this.computeSetupExpirationIso(),
         last_error: null,
       });
+
+      const webhookSync = await this.ensureEvolutionWebhook(instanceName);
+      if (!webhookSync.configured) {
+        console.warn(`[crm-ai] Webhook da Evolution nao configurado automaticamente para ${instanceName}: ${webhookSync.reason}`);
+      }
 
       if (status === "connected") {
         await this.logInstanceEvent(context.acesId, instanceName, "connected");
@@ -2014,6 +2067,11 @@ export class AgentManager {
   }
 
   async processEvolutionWebhook(payload: WebhookPayload) {
+    const event = asString(asRecord(payload).event)?.toLowerCase();
+    if (event && event !== "messages.upsert") {
+      return { ignored: true, reason: `Evento ${event} ignorado` };
+    }
+
     const message = this.parseWebhookPayload(payload);
     const agent = await this.getActiveAgentByInstance(message.instanceName);
 

@@ -7,6 +7,7 @@ export interface Instance {
   color: string | null;
   aces_id: number;
   status?: string | null;
+  setup_status?: "pending_qr" | "connected" | "expired" | "cancelled" | null;
 }
 
 export function useInstances() {
@@ -49,8 +50,9 @@ export function useInstances() {
 
       const { data: instanceData, error: instanceError } = await supabase
         .from('instance')
-        .select('instancia, color, aces_id, status')
+        .select('instancia, color, aces_id, status, setup_status')
         .eq('aces_id', userData.aces_id)
+        .or('setup_status.is.null,setup_status.neq.cancelled')
         .order('instancia');
 
       if (instanceError) {
@@ -58,7 +60,7 @@ export function useInstances() {
         throw instanceError;
       }
 
-      setInstances(instanceData || []);
+      setInstances((instanceData || []).filter((instance) => instance.setup_status !== "cancelled"));
     } catch (error: any) {
       console.error("Erro ao carregar instâncias:", error);
       setError(error.message);
