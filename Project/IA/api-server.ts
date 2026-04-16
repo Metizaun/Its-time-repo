@@ -40,7 +40,9 @@ const manager = new AgentManager({
   webhookPublicBaseUrl:
     process.env.CRM_BACKEND_PUBLIC_URL ??
     process.env.BACKEND_PUBLIC_URL ??
-    process.env.WEBHOOK_PUBLIC_BASE_URL,
+    process.env.WEBHOOK_PUBLIC_BASE_URL ??
+    process.env.VITE_CRM_BACKEND_URL ??
+    process.env.CRM_BACKEND_URL,
 });
 
 const app = express();
