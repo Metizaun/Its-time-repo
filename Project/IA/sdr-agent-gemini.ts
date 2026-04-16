@@ -412,10 +412,11 @@ export class AgentManager {
       await axios.post(
         `${this.config.evolutionApiUrl}/webhook/set/${encodeURIComponent(instanceName)}`,
         {
-          url: webhookUrl,
-          events: ["MESSAGES_UPSERT"],
-          webhook_by_events: true,
-          webhook_base64: true,
+          webhook: {
+            enabled: true,
+            url: webhookUrl,
+            events: ["MESSAGES_UPSERT"],
+          },
         },
         { headers: this.evolutionHeaders() }
       );
