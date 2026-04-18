@@ -15,9 +15,9 @@ interface LeadSidebarProps {
 export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: LeadSidebarProps) {
   if (loading && leads.length === 0) {
     return (
-      <div className="h-full border-r border-white/5 bg-transparent p-4 space-y-3">
+      <div className="h-full border-r border-[var(--color-border-subtle)] bg-transparent p-4 space-y-3">
         {[1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="h-16 w-full rounded-xl bg-white/5 animate-pulse" />
+          <div key={i} className="h-16 w-full rounded-xl bg-[var(--color-border-subtle)] animate-pulse" />
         ))}
       </div>
     );
@@ -25,16 +25,16 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
 
   if (leads.length === 0) {
     return (
-      <div className="h-full border-r border-white/5 bg-transparent p-4">
+      <div className="h-full border-r border-[var(--color-border-subtle)] bg-transparent p-4">
         <p className="text-[var(--color-text-secondary)] text-center text-sm">Nenhum lead encontrado</p>
       </div>
     );
   }
 
   return (
-    <div className="h-full border-r border-white/5 bg-transparent flex flex-col">
-      <div className="p-4 border-b border-white/5 flex-shrink-0">
-        <h2 className="font-bold text-white text-lg">Conversas</h2>
+    <div className="h-full border-r border-[var(--color-border-subtle)] bg-transparent flex flex-col">
+      <div className="p-4 border-b border-[var(--color-border-subtle)] flex-shrink-0">
+        <h2 className="font-bold text-foreground text-lg">Conversas</h2>
         <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
           {leads.length} lead{leads.length !== 1 ? 's' : ''}
         </p>
@@ -60,8 +60,8 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                 className={cn(
                   "w-full p-3 rounded-xl flex items-center gap-3 transition-all duration-200",
                   isSelected
-                    ? "bg-white/5 border border-white/10 border-t-2 border-t-[var(--color-accent)] shadow-[0_4px_16px_rgba(229,57,58,0.06)]"
-                    : "border border-transparent hover:bg-white/5"
+                    ? "bg-[var(--color-border-subtle)] border border-[var(--color-border-medium)] border-t-2 border-t-[var(--color-accent)] shadow-[0_4px_16px_rgba(229,57,58,0.06)]"
+                    : "border border-transparent hover:bg-[var(--color-border-subtle)]"
                 )}
               >
                 {/* Avatar */}
@@ -69,7 +69,7 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                   "w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold transition-all duration-200",
                   isSelected
                     ? "bg-[var(--color-accent)]/15 text-[var(--color-accent)] border border-[var(--color-accent)]/25"
-                    : "bg-white/5 text-[var(--color-text-secondary)] border border-white/5"
+                    : "bg-[var(--color-border-subtle)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]"
                 )}>
                   {initial}
                 </div>
@@ -79,7 +79,7 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <p className={cn(
                       "font-medium truncate max-w-[180px] text-sm",
-                      isSelected ? "text-white" : "text-[var(--color-text-primary)]"
+                      isSelected ? "text-foreground" : "text-[var(--color-text-primary)]"
                     )}>
                       {lead.lead_name}
                     </p>

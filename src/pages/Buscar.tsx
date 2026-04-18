@@ -103,7 +103,7 @@ function ResultCard({ result }: { result: BuscarLeadResult }) {
               Importado
             </Badge>
           ) : result.isDuplicate ? (
-            <Badge className="bg-zinc-900 text-white border border-zinc-600 hover:bg-zinc-800 text-xs shrink-0">
+            <Badge className="bg-[var(--color-bg-surface)] text-foreground border border-[var(--color-border-medium)] hover:bg-[var(--color-bg-surface)] text-xs shrink-0">
               Duplicado
             </Badge>
           ) : null}
@@ -456,8 +456,8 @@ export default function Buscar() {
                               value={option.value}
                               className={[
                                 "rounded-full border text-xs font-medium px-3 py-1 h-auto",
-                                "border-zinc-700 text-zinc-400 bg-transparent",
-                                "hover:border-zinc-500 hover:text-zinc-200",
+                                "border-[var(--color-border-medium)] text-[var(--color-text-secondary)] bg-transparent",
+                                "hover:border-[var(--color-text-secondary)] hover:text-foreground",
                                 "data-[state=on]:border-[var(--color-accent,#e5393a)]",
                                 "data-[state=on]:bg-[var(--color-accent,#e5393a)]",
                                 "data-[state=on]:text-black data-[state=on]:font-bold",

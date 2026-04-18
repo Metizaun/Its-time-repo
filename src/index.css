@@ -45,6 +45,25 @@
     --success-foreground: 0 0% 98%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 9%;
+
+    /* Tokens Light Mode — espelho semântico do .dark */
+    --color-bg-primary:      #F8FAFC;
+    --color-bg-surface:      #F1F5F9;
+    --color-bg-elevated:     #FFFFFF;
+    --color-bg-input:        #F1F5F9;
+
+    --color-accent:          #e5393a;
+    --color-accent-soft:     rgba(229, 57, 58, 0.10);
+
+    --color-success:         #4caf82;
+    --color-danger:          #e5393a;
+
+    --color-text-primary:    #0f172a;
+    --color-text-secondary:  #64748b;
+    --color-text-muted:      #94a3b8;
+
+    --color-border-subtle:   rgba(0, 0, 0, 0.05);
+    --color-border-medium:   rgba(0, 0, 0, 0.10);
     
     /* Kanban columns (mantive as cores que já estavam) */
     --kanban-novo: 199 89% 48%;
@@ -97,6 +116,7 @@
     --color-danger: #e5393a;
     --color-text-primary: #ffffff;
     --color-text-secondary: #a0a0a0;
+    --color-text-muted:    #555555;
     --color-border-subtle: rgba(255, 255, 255, 0.06);
     --color-border-medium: rgba(255, 255, 255, 0.12);
 

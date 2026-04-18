@@ -31,7 +31,7 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
   if (!validSteps.length) {
     return (
       <div className="p-4 sm:p-6 flex flex-col justify-center items-center rounded-[var(--radius-lg)] bg-[var(--color-bg-primary)] h-[320px]">
-        <h3 className="text-base sm:text-lg font-semibold mb-4 w-full text-left text-white">{title}</h3>
+        <h3 className="text-base sm:text-lg font-semibold mb-4 w-full text-left text-foreground">{title}</h3>
         <div className="flex-1 flex items-center justify-center text-[var(--color-text-secondary)] text-sm">
           Sem dados para exibir
         </div>
@@ -70,7 +70,7 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
   return (
     <div className="p-0 sm:p-6 max-w-full overflow-x-hidden flex flex-col">
       {/* Title area */}
-      <h3 className="text-[var(--font-size-title,1rem)] text-white font-semibold mb-8 text-center sm:text-left">{title}</h3>
+      <h3 className="text-[var(--font-size-title,1rem)] text-foreground font-semibold mb-8 text-center sm:text-left">{title}</h3>
 
       {/* Funnel Area */}
       <div className="flex flex-col items-center w-full bg-[var(--color-bg-primary)] px-2 sm:px-6 py-4 rounded-xl relative">
@@ -84,7 +84,7 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
                 {/* Left Metric (Custo) - Bare Text, NO borders as per Image 1 */}
                 <div className="hidden sm:flex flex-col items-center sm:items-end flex-none w-[120px] text-right z-10 transition-opacity opacity-70 group-hover:opacity-100">
                   <p className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-semibold mb-1">C/{stage.name}</p>
-                  <p className="text-white text-lg sm:text-xl font-medium tracking-wide">{stage.formattedCost}</p>
+                  <p className="text-foreground text-lg sm:text-xl font-medium tracking-wide">{stage.formattedCost}</p>
                   <p className={cn("text-xs font-bold mt-0.5", stage.delta >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-danger)]")}>
                     {stage.delta >= 0 ? '↑' : '↓'} {Math.abs(stage.delta).toFixed(1)}%
                   </p>
@@ -101,12 +101,12 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
                           borderRadius: '24px',
                           padding: '16px 24px',
                           boxShadow: '0 8px 32px rgba(229, 57, 58, 0.04)',
-                          border: '1px solid rgba(255, 255, 255, 0.03)',
+                          border: '1px solid var(--color-border-subtle)',
                           borderTop: '2px solid var(--color-accent)'
                         }}
                     >
                       <span className="text-[10px] sm:text-xs text-[var(--color-text-secondary)] uppercase font-semibold tracking-widest">{stage.name}</span>
-                      <strong className="text-3xl sm:text-[2.6rem] text-white font-bold leading-none my-1 tracking-tight">{stage.value}</strong>
+                      <strong className="text-3xl sm:text-[2.6rem] text-foreground font-bold leading-none my-1 tracking-tight">{stage.value}</strong>
                       <span 
                         className={cn(
                           "text-xs font-bold",
@@ -117,7 +117,7 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
                       </span>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="right" className="bg-[var(--color-bg-surface)] text-white border-[var(--color-border-medium)]">
+                  <TooltipContent side="right" className="bg-[var(--color-bg-surface)] text-foreground border-[var(--color-border-medium)]">
                     <p className="font-bold">{stage.name}</p>
                     <p className="text-xs text-muted-foreground">{stage.percentOfTotal}% de retenção do funil total</p>
                   </TooltipContent>
@@ -126,7 +126,7 @@ export function FunnelChart({ data, title }: FunnelChartProps) {
                 {/* Right Metric (Taxa) - Bare Text, NO borders */}
                 <div className="hidden sm:flex flex-col items-center sm:items-start flex-none w-[120px] text-left z-10 transition-opacity opacity-70 group-hover:opacity-100">
                   <p className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-semibold mb-1">Taxa {stage.name}</p>
-                  <p className="text-white text-lg sm:text-xl font-medium tracking-wide">{stage.convRate}</p>
+                  <p className="text-foreground text-lg sm:text-xl font-medium tracking-wide">{stage.convRate}</p>
                   <p className={cn("text-xs font-bold mt-0.5 text-[var(--color-danger)]")}>
                      {index > 0 ? "↓ " + (100 - parseFloat(stage.convRate)).toFixed(1) + "%" : "0.0%"}
                   </p>

@@ -57,7 +57,7 @@ export function KPICard({
     <Card 
       className={cn(
         "p-4 sm:p-6 transition-all duration-200", 
-        "bg-transparent rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]",
+        "bg-transparent rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]",
         className
       )}
     >
@@ -66,7 +66,7 @@ export function KPICard({
           <p className="text-[10px] text-[var(--color-text-secondary)] font-semibold uppercase tracking-widest">{title}</p>
 
           {/* força linha única para R$ 4.800,00 */}
-          <p className="stat-value mt-1 whitespace-nowrap text-white font-bold text-3xl">
+          <p className="stat-value mt-1 whitespace-nowrap text-foreground font-bold text-3xl">
             {cleanValue}
           </p>
 

@@ -29,10 +29,10 @@ export function MessageList({ messages, loading }: MessageListProps) {
     return (
       <div className="flex-1 p-6 space-y-4">
         {/* Skeleton ghost cards */}
-        <div className="h-14 w-2/3 rounded-[18px] bg-white/5 animate-pulse" />
-        <div className="h-14 w-1/2 rounded-[18px] bg-white/5 animate-pulse ml-auto" />
-        <div className="h-14 w-3/5 rounded-[18px] bg-white/5 animate-pulse" />
-        <div className="h-10 w-2/5 rounded-[18px] bg-white/5 animate-pulse ml-auto" />
+        <div className="h-14 w-2/3 rounded-[18px] bg-[var(--color-border-subtle)] animate-pulse" />
+        <div className="h-14 w-1/2 rounded-[18px] bg-[var(--color-border-subtle)] animate-pulse ml-auto" />
+        <div className="h-14 w-3/5 rounded-[18px] bg-[var(--color-border-subtle)] animate-pulse" />
+        <div className="h-10 w-2/5 rounded-[18px] bg-[var(--color-border-subtle)] animate-pulse ml-auto" />
       </div>
     );
   }

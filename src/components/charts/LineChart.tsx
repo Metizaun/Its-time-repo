@@ -18,7 +18,7 @@ interface LineChartProps {
 
 export function LineChart({ data, title }: LineChartProps) {
   return (
-    <Card className="p-4 sm:p-6 bg-transparent rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
+    <Card className="p-4 sm:p-6 bg-transparent rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
       <h3 className="text-base sm:text-lg font-semibold mb-4">{title}</h3>
       <div className="w-full overflow-x-auto">
         <ResponsiveContainer width="100%" height={300} minHeight={300}>

@@ -46,8 +46,8 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const canSend = message.trim() && !isLoading && !disabled;
 
   return (
-    <div className="w-full px-5 py-4 border-t border-white/5 bg-[var(--color-bg-primary)]">
-      <div className="relative flex items-end gap-2 bg-white/5 border border-white/5 rounded-[20px] px-4 py-2 transition-all duration-200 focus-within:border-white/10">
+    <div className="w-full px-5 py-4 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)]">
+      <div className="relative flex items-end gap-2 bg-[var(--color-border-subtle)] border border-[var(--color-border-subtle)] rounded-[20px] px-4 py-2 transition-all duration-200 focus-within:border-[var(--color-border-medium)]">
         <textarea
           ref={textareaRef}
           value={message}
@@ -56,7 +56,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           placeholder="Digite sua mensagem..."
           disabled={disabled || isLoading}
           rows={1}
-          className="min-h-[24px] max-h-[150px] w-full resize-none border-0 shadow-none bg-transparent py-3 px-1 text-sm text-white placeholder:text-[var(--color-text-secondary)]/60 focus:outline-none focus:ring-0"
+          className="min-h-[24px] max-h-[150px] w-full resize-none border-0 shadow-none bg-transparent py-3 px-1 text-sm text-foreground placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-0"
           style={{ outline: "none" }}
         />
         <button
@@ -65,7 +65,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           className={`rounded-full w-9 h-9 shrink-0 mb-1 flex items-center justify-center transition-all duration-200 ${
             canSend 
               ? "bg-[var(--color-accent)] hover:brightness-110 text-white shadow-[0_2px_8px_rgba(229,57,58,0.25)] scale-100 opacity-100" 
-              : "bg-white/5 text-[var(--color-text-secondary)] scale-90 opacity-50"
+              : "bg-[var(--color-border-subtle)] text-[var(--color-text-secondary)] scale-90 opacity-50"
           }`}
         >
           <SendHorizontal className="h-4 w-4 ml-0.5" />

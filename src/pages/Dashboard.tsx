@@ -140,7 +140,7 @@ export default function Dashboard() {
 
       {selectedInstance !== "todas" && (
         <div className="p-3 bg-[var(--color-bg-elevated)] border-none rounded-[16px] text-sm text-[var(--color-text-secondary)] shadow-[0_4px_12px_rgba(0,0,0,0.4)]">
-          <span className="font-medium text-white">Filtrando por instância:</span> {selectedInstance}
+          <span className="font-medium text-foreground">Filtrando por instância:</span> {selectedInstance}
         </div>
       )}
 

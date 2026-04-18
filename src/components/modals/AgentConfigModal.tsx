@@ -168,8 +168,8 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
       {/* Modal */}
       <div
         className={cn(
-          "relative bg-[#0d0d0d] border border-white/5 border-t-2 border-t-[var(--color-accent)]",
-          "shadow-[0_24px_64px_rgba(0,0,0,0.8)] rounded-[24px] flex flex-col transition-all duration-300",
+          "relative bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)]",
+          "shadow-[0_24px_64px_rgba(0,0,0,0.3)] rounded-[24px] flex flex-col transition-all duration-300",
           studioExpanded
             ? "w-[95vw] h-[90vh] max-w-none"
             : "w-full max-w-xl max-h-[90vh]"
@@ -177,9 +177,9 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border-subtle)] flex-shrink-0">
           <div>
-            <h2 className="text-base font-bold text-white">
+            <h2 className="text-base font-bold text-foreground">
               {agent ? "Editar Agente" : "Novo Agente"}
             </h2>
             <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
@@ -188,7 +188,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center hover:bg-white/5 transition-colors"
+            className="w-8 h-8 rounded-full border border-[var(--color-border-medium)] flex items-center justify-center hover:bg-[var(--color-border-subtle)] transition-colors"
           >
             <X className="w-4 h-4 text-[var(--color-text-secondary)]" />
           </button>
@@ -199,7 +199,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
           <div className="flex flex-1 overflow-hidden">
 
             {/* Main Form Area */}
-            <div className={cn("flex flex-col overflow-y-auto p-6 gap-5", studioExpanded ? "w-3/4 border-r border-white/5" : "w-full")}>
+            <div className={cn("flex flex-col overflow-y-auto p-6 gap-5", studioExpanded ? "w-3/4 border-r border-[var(--color-border-subtle)]" : "w-full")}>
 
               {/* Nome */}
               <div className="flex flex-col gap-1.5">
@@ -212,7 +212,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Ex: Agente Vendas WhatsApp"
                   required
-                  className="w-full bg-transparent border border-white/8 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
+                  className="w-full bg-transparent border border-[var(--color-border-medium)] rounded-xl px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
                 />
               </div>
 
@@ -225,7 +225,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   value={instanceName}
                   onChange={(e) => setInstanceName(e.target.value)}
                   required
-                  className="w-full bg-[#0d0d0d] border border-white/8 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
+                  className="w-full bg-[var(--color-bg-surface)] border border-[var(--color-border-medium)] rounded-xl px-4 py-2.5 text-sm text-foreground focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
                 >
                   <option value="" disabled>Selecione uma instância</option>
                   {instances.map((inst) => (
@@ -258,7 +258,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                         "text-[10px] font-semibold transition-colors duration-150",
                         personalityLevel === i
                           ? "text-[var(--color-accent)]"
-                          : "text-white/20 hover:text-white/50"
+                          : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                       )}
                     >
                       {lvl.label}
@@ -275,15 +275,15 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                     step={1}
                     value={personalityLevel}
                     onChange={(e) => setPersonalityLevel(Number(e.target.value))}
-                    className="w-full accent-[var(--color-accent)] h-1 bg-white/10 rounded-full cursor-pointer"
+                    className="w-full accent-[var(--color-accent)] h-1 bg-[var(--color-border-medium)] rounded-full cursor-pointer"
                   />
                 </div>
 
                 {/* Active description */}
-                <div className="rounded-xl border border-white/5 border-t-[var(--color-accent)] border-t-2 bg-transparent px-4 py-3 shadow-[0_4px_16px_rgba(229,57,58,0.04)]">
-                  <p className="text-xs font-semibold text-white">{currentPersonality.label}</p>
+                <div className="rounded-xl border border-[var(--color-border-subtle)] border-t-[var(--color-accent)] border-t-2 bg-transparent px-4 py-3 shadow-[0_4px_16px_rgba(229,57,58,0.04)]">
+                  <p className="text-xs font-semibold text-foreground">{currentPersonality.label}</p>
                   <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">{currentPersonality.description}</p>
-                  <p className="text-[10px] text-white/20 mt-1.5">
+                  <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
                     Temperatura: {currentPersonality.temperature}
                   </p>
                 </div>
@@ -298,7 +298,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   <button
                     type="button"
                     onClick={() => setStudioExpanded(!studioExpanded)}
-                    className="flex items-center gap-1 text-[10px] text-[var(--color-text-secondary)] hover:text-white transition-colors"
+                    className="flex items-center gap-1 text-[10px] text-[var(--color-text-secondary)] hover:text-foreground transition-colors"
                   >
                     {studioExpanded ? (
                       <><Minimize2 className="w-3 h-3" /> Recolher</>
@@ -316,7 +316,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   placeholder="Descreva como o agente deve se comportar, quais são suas regras, script de abertura, etc."
                   required
                   className={cn(
-                    "w-full bg-transparent border border-white/8 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20",
+                    "w-full bg-transparent border border-[var(--color-border-medium)] rounded-xl px-4 py-3 text-sm text-foreground placeholder-[var(--color-text-muted)]",
                     "focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors resize-none leading-relaxed",
                     studioExpanded ? "flex-1 h-full" : "h-48"
                   )}
@@ -326,12 +326,12 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
 
             {/* Prompt Studio Sidebar */}
             {studioExpanded && (
-              <div className="w-1/4 flex flex-col overflow-hidden bg-[#080808]">
-                <div className="px-4 py-3 border-b border-white/5 flex-shrink-0">
+              <div className="w-1/4 flex flex-col overflow-hidden bg-[var(--color-bg-surface)]">
+                <div className="px-4 py-3 border-b border-[var(--color-border-subtle)] flex-shrink-0">
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                     Blocos de Instrução
                   </p>
-                  <p className="text-[10px] text-white/20 mt-0.5">
+                  <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
                     Arraste para o editor
                   </p>
                 </div>
@@ -347,17 +347,17 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                       }
                       className={cn(
                         "flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-grab active:cursor-grabbing",
-                        "bg-transparent border border-white/5 border-t-2",
+                        "bg-transparent border border-[var(--color-border-subtle)] border-t-2",
                         section.required
                           ? "border-t-[var(--color-accent)]/60"
-                          : "border-t-white/10",
-                        "hover:border-[var(--color-accent)]/40 hover:bg-white/[0.02] transition-all duration-150",
+                          : "border-t-[var(--color-border-medium)]",
+                        "hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-border-subtle)] transition-all duration-150",
                         "shadow-[0_4px_12px_rgba(229,57,58,0.03)]"
                       )}
                     >
                       {/* Grip icon — visual affordance only */}
-                      <GripVertical className="w-4 h-4 text-white/20 flex-shrink-0" />
-                      <span className="text-xs font-medium text-white/70 select-none leading-tight">
+                      <GripVertical className="w-4 h-4 text-[var(--color-text-muted)] flex-shrink-0" />
+                      <span className="text-xs font-medium text-[var(--color-text-secondary)] select-none leading-tight">
                         {section.title}
                       </span>
                       {section.required && (
@@ -371,11 +371,11 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/5 flex-shrink-0">
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--color-border-subtle)] flex-shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-white rounded-xl hover:bg-white/5 transition-colors"
+              className="px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-foreground rounded-xl hover:bg-[var(--color-border-subtle)] transition-colors"
             >
               Cancelar
             </button>

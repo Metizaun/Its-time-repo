@@ -35,7 +35,7 @@ export default function Pipeline() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-white">Pipeline</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Pipeline</h1>
         <p className="text-[var(--color-text-secondary)] mt-1 text-sm">
           Gerencie seus leads através do funil de vendas.
         </p>

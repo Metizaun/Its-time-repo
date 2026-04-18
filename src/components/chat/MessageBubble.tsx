@@ -21,7 +21,7 @@ export function MessageBubble({ content, sentAt, isOutbound, senderName }: Messa
         "max-w-[70%] px-4 py-2.5",
         isOutbound 
           ? "bg-[var(--color-accent)] text-white rounded-[18px] rounded-br-[4px] shadow-[0_2px_8px_rgba(229,57,58,0.2)]" 
-          : "bg-white/5 border border-white/5 text-[var(--color-text-primary)] rounded-[18px] rounded-bl-[4px]"
+          : "bg-[var(--color-border-subtle)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-[18px] rounded-bl-[4px]"
       )}>
         {!isOutbound && senderName && (
           <p className="text-[10px] uppercase tracking-wider text-[var(--color-accent)] font-semibold mb-1">

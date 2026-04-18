@@ -110,7 +110,7 @@ export default function Automacao() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="flex items-center gap-3 text-2xl font-bold text-white sm:text-3xl">
+          <h1 className="flex items-center gap-3 text-2xl font-bold text-foreground sm:text-3xl">
             <Workflow className="h-8 w-8" />
             Automacao
           </h1>
@@ -127,28 +127,28 @@ export default function Automacao() {
         </div>
       </div>
 
-      <Card className="rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] bg-transparent p-5 shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-6">
+      <Card className="rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-transparent p-5 shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-6">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-sm text-[var(--color-text-secondary)]">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border-medium)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
               <Filter className="h-4 w-4" />
               Filtro de instancia
             </div>
 
             <div className="w-full sm:w-[260px]">
               <Select value={instanceFilter} onValueChange={setInstanceFilter}>
-                <SelectTrigger className="rounded-xl border-white/10 bg-[#0d0d0d] text-white">
+                <SelectTrigger className="rounded-xl border-[var(--color-border-medium)] bg-[var(--color-bg-surface)] text-foreground">
                   <SelectValue placeholder="Filtrar por instancia" />
                 </SelectTrigger>
-                <SelectContent className="rounded-xl border-white/10 bg-[#0d0d0d]">
-                  <SelectItem value="all" className="text-white focus:bg-white/5 focus:text-white">
+                <SelectContent className="rounded-xl border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
+                  <SelectItem value="all" className="text-foreground focus:bg-[var(--color-border-subtle)] focus:text-foreground">
                     Todas as instancias
                   </SelectItem>
                   {instances.map((instance) => (
                     <SelectItem
                       key={instance.instancia}
                       value={instance.instancia}
-                      className="text-white focus:bg-white/5 focus:text-white"
+                      className="text-foreground focus:bg-[var(--color-border-subtle)] focus:text-foreground"
                     >
                       {instance.instancia}
                     </SelectItem>
@@ -159,18 +159,18 @@ export default function Automacao() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Badge variant="outline" className="rounded-full border-white/10 bg-white/5 px-3 text-white">
+            <Badge variant="outline" className="rounded-full border-[var(--color-border-medium)] bg-[var(--color-border-subtle)] px-3 text-foreground">
               {filteredJourneys.length} automacoes
             </Badge>
             <Badge
               variant="outline"
-              className="rounded-full border-white/10 bg-[var(--color-success)]/10 px-3 text-[var(--color-success)]"
+              className="rounded-full border-[var(--color-border-medium)] bg-[var(--color-success)]/10 px-3 text-[var(--color-success)]"
             >
               {activeJourneysCount} ativas
             </Badge>
             <Badge
               variant="outline"
-              className="rounded-full border-white/10 bg-[var(--color-accent)]/10 px-3 text-[var(--color-accent)]"
+              className="rounded-full border-[var(--color-border-medium)] bg-[var(--color-accent)]/10 px-3 text-[var(--color-accent)]"
             >
               {totalMessagesCount} mensagens
             </Badge>
@@ -188,7 +188,7 @@ export default function Automacao() {
           </div>
         </div>
       ) : stages.length === 0 ? (
-        <Card className="rounded-[24px] border border-dashed border-white/5 border-t-2 border-t-[var(--color-accent)] bg-transparent p-8 text-center text-sm text-[var(--color-text-secondary)] shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-10">
+        <Card className="rounded-[24px] border border-dashed border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-transparent p-8 text-center text-sm text-[var(--color-text-secondary)] shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-10">
           Nenhuma etapa do pipeline foi cadastrada ainda. Crie as etapas no CRM antes de montar o Kanban de automacao.
         </Card>
       ) : (
