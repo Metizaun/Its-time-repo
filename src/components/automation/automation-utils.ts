@@ -1,4 +1,4 @@
-import { type AutomationStep } from "@/hooks/useAutomation";
+import { type AutomationStep } from "@/lib/automation";
 
 export function sortStepsForDisplay(steps: AutomationStep[]) {
   return [...steps].sort((left, right) => {
@@ -16,7 +16,7 @@ export function sortStepsForDisplay(steps: AutomationStep[]) {
 
 export function formatDelayLabel(delayMinutes: number) {
   if (delayMinutes === 0) {
-    return "Na entrada do funil";
+    return "Na ancora da jornada";
   }
 
   if (delayMinutes % 1440 === 0) {

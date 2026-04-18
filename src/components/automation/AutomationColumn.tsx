@@ -1,23 +1,25 @@
 import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { type AutomationFunnel, type AutomationStep } from "@/hooks/useAutomation";
+import { type AutomationJourney, type AutomationStep } from "@/lib/automation";
 import { type PipelineStage } from "@/types";
 
 import { AutomationCard } from "./AutomationCard";
 
 interface AutomationColumnProps {
   stage: PipelineStage;
-  funnels: AutomationFunnel[];
-  stepsByFunnel: Record<string, AutomationStep[]>;
+  stages: PipelineStage[];
+  journeys: AutomationJourney[];
+  stepsByJourney: Record<string, AutomationStep[]>;
   onCreate: (stageId: string) => void;
-  onEdit: (funnelId: string) => void;
+  onEdit: (journeyId: string) => void;
 }
 
 export function AutomationColumn({
   stage,
-  funnels,
-  stepsByFunnel,
+  stages,
+  journeys,
+  stepsByJourney,
   onCreate,
   onEdit,
 }: AutomationColumnProps) {
@@ -33,7 +35,7 @@ export function AutomationColumn({
             <h2 className="truncate font-semibold">{stage.name}</h2>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {funnels.length} {funnels.length === 1 ? "automação" : "automações"}
+            {journeys.length} {journeys.length === 1 ? "automacao" : "automacoes"}
           </p>
         </div>
 
@@ -43,16 +45,17 @@ export function AutomationColumn({
       </div>
 
       <div className="mt-4 space-y-3">
-        {funnels.length === 0 ? (
+        {journeys.length === 0 ? (
           <div className="rounded-2xl border border-dashed px-4 py-6 text-sm text-muted-foreground">
-            Nenhuma automação nesta etapa ainda.
+            Nenhuma automacao nesta etapa ainda.
           </div>
         ) : (
-          funnels.map((funnel) => (
+          journeys.map((journey) => (
             <AutomationCard
-              key={funnel.id}
-              funnel={funnel}
-              steps={stepsByFunnel[funnel.id] || []}
+              key={journey.id}
+              journey={journey}
+              stages={stages}
+              steps={stepsByJourney[journey.id] || []}
               onEdit={onEdit}
             />
           ))
@@ -64,8 +67,8 @@ export function AutomationColumn({
         onClick={() => onCreate(stage.id)}
         className="mt-4 w-full justify-start rounded-2xl border border-dashed"
       >
-        <Plus className="h-4 w-4 mr-2" />
-        Adicionar automação
+        <Plus className="mr-2 h-4 w-4" />
+        Adicionar automacao
       </Button>
     </div>
   );

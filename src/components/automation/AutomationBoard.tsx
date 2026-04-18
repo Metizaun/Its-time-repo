@@ -1,19 +1,19 @@
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
-import { type AutomationFunnel, type AutomationStep } from "@/hooks/useAutomation";
+import { type AutomationJourney, type AutomationStep } from "@/lib/automation";
 import { type PipelineStage } from "@/types";
 
 import { AutomationColumn } from "./AutomationColumn";
 
 interface AutomationBoardProps {
   stages: PipelineStage[];
-  funnels: AutomationFunnel[];
-  stepsByFunnel: Record<string, AutomationStep[]>;
+  journeys: AutomationJourney[];
+  stepsByJourney: Record<string, AutomationStep[]>;
   onCreate: (stageId: string) => void;
-  onEdit: (funnelId: string) => void;
+  onEdit: (journeyId: string) => void;
 }
 
-function sortFunnelsForBoard(funnels: AutomationFunnel[]) {
-  return [...funnels].sort((left, right) => {
+function sortJourneysForBoard(journeys: AutomationJourney[]) {
+  return [...journeys].sort((left, right) => {
     if (left.is_active !== right.is_active) {
       return left.is_active ? -1 : 1;
     }
@@ -24,14 +24,14 @@ function sortFunnelsForBoard(funnels: AutomationFunnel[]) {
 
 export function AutomationBoard({
   stages,
-  funnels,
-  stepsByFunnel,
+  journeys,
+  stepsByJourney,
   onCreate,
   onEdit,
 }: AutomationBoardProps) {
-  const funnelsByStage = stages.reduce<Record<string, AutomationFunnel[]>>((accumulator, stage) => {
-    accumulator[stage.id] = sortFunnelsForBoard(
-      funnels.filter((funnel) => funnel.trigger_stage_id === stage.id)
+  const journeysByStage = stages.reduce<Record<string, AutomationJourney[]>>((accumulator, stage) => {
+    accumulator[stage.id] = sortJourneysForBoard(
+      journeys.filter((journey) => journey.trigger_stage_id === stage.id)
     );
     return accumulator;
   }, {});
@@ -44,8 +44,9 @@ export function AutomationBoard({
             <AutomationColumn
               key={stage.id}
               stage={stage}
-              funnels={funnelsByStage[stage.id] || []}
-              stepsByFunnel={stepsByFunnel}
+              journeys={journeysByStage[stage.id] || []}
+              stepsByJourney={stepsByJourney}
+              stages={stages}
               onCreate={onCreate}
               onEdit={onEdit}
             />
