@@ -1,13 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Filter, Plus, Workflow } from "lucide-react";
 
 import { AutomationBoard } from "@/components/automation/AutomationBoard";
 import { AutomationMessageModal } from "@/components/modals/AutomationMessageModal";
-import { useAuth } from "@/contexts/AuthContext";
-import { useAutomation } from "@/hooks/useAutomation";
-import { useInstances } from "@/hooks/useInstances";
-import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import {
@@ -18,119 +14,142 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAutomationCatalog } from "@/hooks/useAutomationCatalog";
+import { useAutomationExecutions } from "@/hooks/useAutomationExecutions";
+import { useAutomationJourneys } from "@/hooks/useAutomationJourneys";
+import { useAutomationPreview } from "@/hooks/useAutomationPreview";
+import { useInstances } from "@/hooks/useInstances";
+import { useLeads } from "@/hooks/useLeads";
+import { usePipelineStages } from "@/hooks/usePipelineStages";
 
 export default function Automacao() {
   const { userRole } = useAuth();
   const automationEnabled = userRole === "ADMIN";
   const { stages, loading: loadingStages } = usePipelineStages();
   const { instances, loading: loadingInstances } = useInstances();
+  const { owners, tags, loading: loadingCatalog } = useAutomationCatalog(automationEnabled);
   const {
-    funnels,
-    stepsByFunnel,
+    journeys,
+    stepsByJourney,
     stepCounts,
-    loadingFunnels,
-    createFunnel,
-    updateFunnel,
-    deleteFunnel,
+    loadingJourneys,
+    createJourney,
+    updateJourney,
+    deleteJourney,
     createStep,
     updateStep,
     deleteStep,
-  } = useAutomation(automationEnabled);
+  } = useAutomationJourneys(automationEnabled);
 
   const [instanceFilter, setInstanceFilter] = useState<string>("all");
-  const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>(null);
+  const [selectedJourneyId, setSelectedJourneyId] = useState<string | null>(null);
   const [pendingStageId, setPendingStageId] = useState<string | null>(null);
   const [automationModalOpen, setAutomationModalOpen] = useState(false);
 
   const selectedInstanceName = instanceFilter === "all" ? null : instanceFilter;
 
-  const filteredFunnels = useMemo(() => {
+  const filteredJourneys = useMemo(() => {
     if (instanceFilter === "all") {
-      return funnels;
+      return journeys;
     }
 
-    return funnels.filter((funnel) => funnel.instance_name === instanceFilter);
-  }, [funnels, instanceFilter]);
+    return journeys.filter((journey) => journey.instance_name === instanceFilter);
+  }, [instanceFilter, journeys]);
 
-  const selectedFunnel = useMemo(
-    () => funnels.find((funnel) => funnel.id === selectedFunnelId) || null,
-    [funnels, selectedFunnelId]
+  const selectedJourney = useMemo(
+    () => journeys.find((journey) => journey.id === selectedJourneyId) || null,
+    [journeys, selectedJourneyId],
   );
 
   const selectedSteps = useMemo(() => {
-    if (!selectedFunnelId) {
+    if (!selectedJourneyId) {
       return [];
     }
 
-    return stepsByFunnel[selectedFunnelId] || [];
-  }, [selectedFunnelId, stepsByFunnel]);
+    return stepsByJourney[selectedJourneyId] || [];
+  }, [selectedJourneyId, stepsByJourney]);
 
-  const activeFunnelsCount = useMemo(
-    () => filteredFunnels.filter((funnel) => funnel.is_active).length,
-    [filteredFunnels]
+  const activeJourneysCount = useMemo(
+    () => filteredJourneys.filter((journey) => journey.is_active).length,
+    [filteredJourneys],
   );
 
   const totalMessagesCount = useMemo(
-    () => filteredFunnels.reduce((total, funnel) => total + (stepCounts[funnel.id] || 0), 0),
-    [filteredFunnels, stepCounts]
+    () => filteredJourneys.reduce((total, journey) => total + (stepCounts[journey.id] || 0), 0),
+    [filteredJourneys, stepCounts],
   );
+
+  const { executions, loading: executionsLoading } = useAutomationExecutions(selectedJourneyId, automationModalOpen);
+  const { leads: previewLeads } = useLeads({ enabled: automationModalOpen });
+  const { preview, previewResult, loading: previewLoading, reset: resetPreview } = useAutomationPreview();
+
+  useEffect(() => {
+    resetPreview();
+  }, [resetPreview, selectedJourneyId]);
 
   if (userRole !== "ADMIN") {
     return <Navigate to="/" replace />;
   }
 
   const handleCreateAutomation = (stageId: string | null) => {
-    setSelectedFunnelId(null);
+    setSelectedJourneyId(null);
     setPendingStageId(stageId);
     setAutomationModalOpen(true);
   };
 
-  const handleEditAutomation = (funnelId: string) => {
-    setSelectedFunnelId(funnelId);
+  const handleEditAutomation = (journeyId: string) => {
+    setSelectedJourneyId(journeyId);
     setPendingStageId(null);
     setAutomationModalOpen(true);
   };
 
-  const isLoading = loadingStages || loadingFunnels || loadingInstances;
+  const isLoading = loadingStages || loadingInstances || loadingJourneys || loadingCatalog;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-3 text-white">
-            <Workflow className="w-8 h-8" />
-            Automação
+          <h1 className="flex items-center gap-3 text-2xl font-bold text-white sm:text-3xl">
+            <Workflow className="h-8 w-8" />
+            Automacao
           </h1>
         </div>
 
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => handleCreateAutomation(null)}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-accent)] hover:brightness-110 text-white text-sm font-semibold rounded-xl transition-all duration-200 shadow-[0_4px_16px_rgba(229,57,58,0.25)]"
+            className="flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(229,57,58,0.25)] transition-all duration-200 hover:brightness-110"
           >
-            <Plus className="w-4 h-4" />
-            Nova automação
+            <Plus className="h-4 w-4" />
+            Nova automacao
           </button>
         </div>
       </div>
 
-      <Card className="p-5 sm:p-6 bg-transparent rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
+      <Card className="rounded-[24px] border border-white/5 border-t-2 border-t-[var(--color-accent)] bg-transparent p-5 shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-6">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-sm text-[var(--color-text-secondary)]">
-              <Filter className="w-4 h-4" />
-              Filtro de instância
+              <Filter className="h-4 w-4" />
+              Filtro de instancia
             </div>
 
             <div className="w-full sm:w-[260px]">
               <Select value={instanceFilter} onValueChange={setInstanceFilter}>
-                <SelectTrigger className="bg-[#0d0d0d] border-white/10 text-white rounded-xl">
-                  <SelectValue placeholder="Filtrar por instância" />
+                <SelectTrigger className="rounded-xl border-white/10 bg-[#0d0d0d] text-white">
+                  <SelectValue placeholder="Filtrar por instancia" />
                 </SelectTrigger>
-                <SelectContent className="bg-[#0d0d0d] border-white/10 rounded-xl">
-                  <SelectItem value="all" className="text-white focus:bg-white/5 focus:text-white">Todas as instâncias</SelectItem>
+                <SelectContent className="rounded-xl border-white/10 bg-[#0d0d0d]">
+                  <SelectItem value="all" className="text-white focus:bg-white/5 focus:text-white">
+                    Todas as instancias
+                  </SelectItem>
                   {instances.map((instance) => (
-                    <SelectItem key={instance.instancia} value={instance.instancia} className="text-white focus:bg-white/5 focus:text-white">
+                    <SelectItem
+                      key={instance.instancia}
+                      value={instance.instancia}
+                      className="text-white focus:bg-white/5 focus:text-white"
+                    >
                       {instance.instancia}
                     </SelectItem>
                   ))}
@@ -140,9 +159,21 @@ export default function Automacao() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Badge variant="outline" className="border-white/10 text-white bg-white/5 rounded-full px-3">{filteredFunnels.length} automações</Badge>
-            <Badge variant="outline" className="border-white/10 text-white bg-[var(--color-success)]/10 text-[var(--color-success)] rounded-full px-3">{activeFunnelsCount} ativas</Badge>
-            <Badge variant="outline" className="border-white/10 text-white bg-[var(--color-accent)]/10 text-[var(--color-accent)] rounded-full px-3">{totalMessagesCount} mensagens</Badge>
+            <Badge variant="outline" className="rounded-full border-white/10 bg-white/5 px-3 text-white">
+              {filteredJourneys.length} automacoes
+            </Badge>
+            <Badge
+              variant="outline"
+              className="rounded-full border-white/10 bg-[var(--color-success)]/10 px-3 text-[var(--color-success)]"
+            >
+              {activeJourneysCount} ativas
+            </Badge>
+            <Badge
+              variant="outline"
+              className="rounded-full border-white/10 bg-[var(--color-accent)]/10 px-3 text-[var(--color-accent)]"
+            >
+              {totalMessagesCount} mensagens
+            </Badge>
           </div>
         </div>
       </Card>
@@ -157,14 +188,14 @@ export default function Automacao() {
           </div>
         </div>
       ) : stages.length === 0 ? (
-        <Card className="p-8 sm:p-10 bg-transparent rounded-[24px] border border-white/5 border-dashed border-t-[var(--color-accent)] border-t-2 text-sm text-[var(--color-text-secondary)] text-center shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
-          Nenhuma etapa do pipeline foi cadastrada ainda. Crie as etapas no CRM antes de montar o Kanban de automação.
+        <Card className="rounded-[24px] border border-dashed border-white/5 border-t-2 border-t-[var(--color-accent)] bg-transparent p-8 text-center text-sm text-[var(--color-text-secondary)] shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-10">
+          Nenhuma etapa do pipeline foi cadastrada ainda. Crie as etapas no CRM antes de montar o Kanban de automacao.
         </Card>
       ) : (
         <AutomationBoard
           stages={stages}
-          funnels={filteredFunnels}
-          stepsByFunnel={stepsByFunnel}
+          journeys={filteredJourneys}
+          stepsByJourney={stepsByJourney}
           onCreate={handleCreateAutomation}
           onEdit={handleEditAutomation}
         />
@@ -173,16 +204,24 @@ export default function Automacao() {
       <AutomationMessageModal
         open={automationModalOpen}
         onOpenChange={setAutomationModalOpen}
-        funnel={selectedFunnel}
+        journey={selectedJourney}
         steps={selectedSteps}
         stages={stages}
         instances={instances}
+        owners={owners}
+        tags={tags}
+        previewLeads={previewLeads}
+        executions={executions}
+        executionsLoading={executionsLoading}
+        previewResult={previewResult}
+        previewLoading={previewLoading}
+        onRunPreview={(leadId) => preview({ funnelId: selectedJourneyId as string, leadId })}
         preselectedStageId={pendingStageId}
         preselectedInstanceName={selectedInstanceName}
-        onSelectFunnel={setSelectedFunnelId}
-        createFunnel={createFunnel}
-        updateFunnel={updateFunnel}
-        deleteFunnel={deleteFunnel}
+        onSelectJourney={setSelectedJourneyId}
+        createJourney={createJourney}
+        updateJourney={updateJourney}
+        deleteJourney={deleteJourney}
         createStep={createStep}
         updateStep={updateStep}
         deleteStep={deleteStep}
