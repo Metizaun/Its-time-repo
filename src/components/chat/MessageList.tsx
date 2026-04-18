@@ -2,7 +2,6 @@ import { Fragment, useEffect, useRef } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { DateSeparator } from "./DateSeparator";
 import { ChatMessage } from "@/hooks/useChat";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatChatDateLabel, getDayKey } from "@/lib/utils/chatDate";
 
@@ -28,25 +27,27 @@ export function MessageList({ messages, loading }: MessageListProps) {
 
   if (loading) {
     return (
-      <div className="flex-1 p-4 space-y-4">
-        <Skeleton className="h-16 w-2/3" />
-        <Skeleton className="h-16 w-2/3 ml-auto" />
-        <Skeleton className="h-16 w-2/3" />
+      <div className="flex-1 p-6 space-y-4">
+        {/* Skeleton ghost cards */}
+        <div className="h-14 w-2/3 rounded-[18px] bg-white/5 animate-pulse" />
+        <div className="h-14 w-1/2 rounded-[18px] bg-white/5 animate-pulse ml-auto" />
+        <div className="h-14 w-3/5 rounded-[18px] bg-white/5 animate-pulse" />
+        <div className="h-10 w-2/5 rounded-[18px] bg-white/5 animate-pulse ml-auto" />
       </div>
     );
   }
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground">
-        <p>Nenhuma mensagem ainda</p>
+      <div className="flex-1 flex items-center justify-center">
+        <p className="text-sm text-[var(--color-text-secondary)]">Nenhuma mensagem ainda</p>
       </div>
     );
   }
 
   return (
     <ScrollArea className="flex-1 h-full">
-      <div className="space-y-4 py-4 pl-4 pr-7">
+      <div className="space-y-3 py-4 pl-5 pr-7">
         {messages.map((message, index) => {
           const currentMessageDate = new Date(message.sent_at);
           const previousMessage = index > 0 ? messages[index - 1] : null;

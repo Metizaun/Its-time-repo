@@ -1,10 +1,8 @@
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Lead } from "@/hooks/useLeads";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
-import { Skeleton } from "@/components/ui/skeleton";
 import { getUrgencyStyle, getInstanceTextColor } from "@/lib/colors";
 
 interface LeadSidebarProps {
@@ -17,9 +15,9 @@ interface LeadSidebarProps {
 export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: LeadSidebarProps) {
   if (loading && leads.length === 0) {
     return (
-      <div className="h-full border-r border-border bg-card p-4 space-y-3">
+      <div className="h-full border-r border-white/5 bg-transparent p-4 space-y-3">
         {[1, 2, 3, 4, 5].map((i) => (
-          <Skeleton key={i} className="h-20 w-full" />
+          <div key={i} className="h-16 w-full rounded-xl bg-white/5 animate-pulse" />
         ))}
       </div>
     );
@@ -27,23 +25,23 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
 
   if (leads.length === 0) {
     return (
-      <div className="h-full border-r border-border bg-card p-4">
-        <p className="text-muted-foreground text-center">Nenhum lead encontrado</p>
+      <div className="h-full border-r border-white/5 bg-transparent p-4">
+        <p className="text-[var(--color-text-secondary)] text-center text-sm">Nenhum lead encontrado</p>
       </div>
     );
   }
 
   return (
-    <div className="h-full border-r border-border bg-card flex flex-col">
-      <div className="p-4 border-b border-border flex-shrink-0">
-        <h2 className="font-semibold text-lg">Conversas</h2>
-        <p className="text-sm text-muted-foreground">
+    <div className="h-full border-r border-white/5 bg-transparent flex flex-col">
+      <div className="p-4 border-b border-white/5 flex-shrink-0">
+        <h2 className="font-bold text-white text-lg">Conversas</h2>
+        <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
           {leads.length} lead{leads.length !== 1 ? 's' : ''}
         </p>
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-2">
+        <div className="p-2 space-y-1">
           {leads.map((lead) => {
             const initial = lead.lead_name.charAt(0).toUpperCase();
             const isSelected = lead.id === selectedLeadId;
@@ -60,23 +58,32 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                 key={lead.id}
                 onClick={() => onSelectLead(lead.id)}
                 className={cn(
-                  "w-full p-3 rounded-lg flex items-center gap-3 transition-colors hover:bg-muted/50",
-                  isSelected && "bg-muted"
+                  "w-full p-3 rounded-xl flex items-center gap-3 transition-all duration-200",
+                  isSelected
+                    ? "bg-white/5 border border-white/10 border-t-2 border-t-[var(--color-accent)] shadow-[0_4px_16px_rgba(229,57,58,0.06)]"
+                    : "border border-transparent hover:bg-white/5"
                 )}
               >
-                <Avatar className="shrink-0">
-                  <AvatarFallback className="bg-primary/10 text-primary font-semibold">
-                    {initial}
-                  </AvatarFallback>
-                </Avatar>
+                {/* Avatar */}
+                <div className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold transition-all duration-200",
+                  isSelected
+                    ? "bg-[var(--color-accent)]/15 text-[var(--color-accent)] border border-[var(--color-accent)]/25"
+                    : "bg-white/5 text-[var(--color-text-secondary)] border border-white/5"
+                )}>
+                  {initial}
+                </div>
 
                 <div className="flex-1 text-left overflow-hidden min-w-0">
                   {/* Linha 1: Nome + Data */}
                   <div className="flex items-center justify-between gap-2 mb-1">
-                    <p className="font-medium truncate max-w-[180px]">
+                    <p className={cn(
+                      "font-medium truncate max-w-[180px] text-sm",
+                      isSelected ? "text-white" : "text-[var(--color-text-primary)]"
+                    )}>
                       {lead.lead_name}
                     </p>
-                    <span className="text-xs text-muted-foreground shrink-0">
+                    <span className="text-[10px] text-[var(--color-text-secondary)] shrink-0">
                       {lastMessageDate}
                     </span>
                   </div>
@@ -89,16 +96,16 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                           <span className={cn("font-medium", instanceColor)}>
                             {lead.instance_name}
                           </span>
-                          <span className="text-muted-foreground"> • {lead.source}</span>
+                          <span className="text-[var(--color-text-secondary)]"> • {lead.source}</span>
                         </>
                       ) : lead.instance_name ? (
                         <span className={cn("font-medium", instanceColor)}>
                           {lead.instance_name}
                         </span>
                       ) : lead.source ? (
-                        <span className="text-muted-foreground">{lead.source}</span>
+                        <span className="text-[var(--color-text-secondary)]">{lead.source}</span>
                       ) : (
-                        <span className="text-muted-foreground opacity-50">Sem origem</span>
+                        <span className="text-[var(--color-text-secondary)] opacity-50">Sem origem</span>
                       )}
                     </div>
 
