@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { notifyLeadsUpdated } from "./useLeads";
 
 const PIPELINE_STAGES_UPDATED_EVENT = "pipeline-stages-updated";
+const MAX_FUNNEL_STAGES = 5;
 
 export function usePipelineStages() {
   const [stages, setStages] = useState<PipelineStage[]>([]);
@@ -117,6 +118,7 @@ export function usePipelineStages() {
           category: stageData.category,
           position: maxPosition + 1,
           aces_id: userData.aces_id,
+          is_funnel_stage: false,
         })
         .select()
         .single();
@@ -228,6 +230,64 @@ export function usePipelineStages() {
     }
   };
 
+  const toggleFunnelStage = async (stageId: string, isEnabled: boolean) => {
+    const stage = stages.find((currentStage) => currentStage.id === stageId);
+
+    if (!stage) {
+      const error = new Error("Etapa do pipeline nao encontrada.");
+      toast.error(error.message);
+      return { data: null, error, limitReached: false };
+    }
+
+    if (stage.is_funnel_stage === isEnabled) {
+      return { data: stage, error: null, limitReached: false };
+    }
+
+    if (isEnabled) {
+      const selectedCount = stages.filter((currentStage) => currentStage.is_funnel_stage).length;
+
+      if (selectedCount >= MAX_FUNNEL_STAGES) {
+        const error = new Error("Voce pode selecionar no maximo 5 etapas no funil.");
+        toast.error(error.message);
+        return { data: null, error, limitReached: true };
+      }
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("pipeline_stages")
+        .update({ is_funnel_stage: isEnabled })
+        .eq("id", stageId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setStages((previousStages) =>
+          previousStages
+            .map((currentStage) => (currentStage.id === stageId ? data : currentStage))
+            .sort((left, right) => left.position - right.position)
+        );
+      }
+
+      notifyStagesUpdated();
+      return { data, error: null, limitReached: false };
+    } catch (error: any) {
+      const message =
+        typeof error?.message === "string" ? error.message : "Erro ao atualizar selecao do funil.";
+      const limitReached = message.toLowerCase().includes("maximum of 5 funnel stages");
+
+      if (limitReached) {
+        toast.error("Voce pode selecionar no maximo 5 etapas no funil.");
+      } else {
+        toast.error("Erro ao atualizar selecao do funil", { description: message });
+      }
+
+      return { data: null, error, limitReached };
+    }
+  };
+
   return {
     stages,
     loading,
@@ -236,5 +296,6 @@ export function usePipelineStages() {
     updateStage,
     deleteStage,
     reorderStages,
+    toggleFunnelStage,
   };
 }

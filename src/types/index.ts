@@ -52,6 +52,7 @@ export interface PipelineStage {
   position: number;
   category: LeadStatus;
   aces_id: number;
+  is_funnel_stage: boolean;
 }
 
 export interface KanbanColumn {

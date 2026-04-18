@@ -26,6 +26,7 @@ import { usePipelineStages } from "@/hooks/usePipelineStages";
 export default function Automacao() {
   const { userRole } = useAuth();
   const automationEnabled = userRole === "ADMIN";
+  const showAutomationDebug = import.meta.env.DEV || import.meta.env.VITE_SHOW_AUTOMATION_DEBUG === "true";
   const { stages, loading: loadingStages } = usePipelineStages();
   const { instances, loading: loadingInstances } = useInstances();
   const { owners, tags, loading: loadingCatalog } = useAutomationCatalog(automationEnabled);
@@ -80,8 +81,11 @@ export default function Automacao() {
     [filteredJourneys, stepCounts],
   );
 
-  const { executions, loading: executionsLoading } = useAutomationExecutions(selectedJourneyId, automationModalOpen);
-  const { leads: previewLeads } = useLeads({ enabled: automationModalOpen });
+  const { executions, loading: executionsLoading } = useAutomationExecutions(
+    selectedJourneyId,
+    automationModalOpen && showAutomationDebug,
+  );
+  const { leads: previewLeads } = useLeads({ enabled: automationModalOpen && showAutomationDebug });
   const { preview, previewResult, loading: previewLoading, reset: resetPreview } = useAutomationPreview();
 
   useEffect(() => {
@@ -225,6 +229,7 @@ export default function Automacao() {
         createStep={createStep}
         updateStep={updateStep}
         deleteStep={deleteStep}
+        showDebugTools={showAutomationDebug}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { type AutomationStep } from "@/lib/automation";
+import { formatTimingSummary, type AutomationAnchorEvent, type AutomationStep } from "@/lib/automation";
 
 export function sortStepsForDisplay(steps: AutomationStep[]) {
   return [...steps].sort((left, right) => {
@@ -14,22 +14,8 @@ export function sortStepsForDisplay(steps: AutomationStep[]) {
   });
 }
 
-export function formatDelayLabel(delayMinutes: number) {
-  if (delayMinutes === 0) {
-    return "Na ancora da jornada";
-  }
-
-  if (delayMinutes % 1440 === 0) {
-    const days = delayMinutes / 1440;
-    return `Após ${days} ${days === 1 ? "dia" : "dias"}`;
-  }
-
-  if (delayMinutes % 60 === 0) {
-    const hours = delayMinutes / 60;
-    return `Após ${hours} ${hours === 1 ? "hora" : "horas"}`;
-  }
-
-  return `Após ${delayMinutes} min`;
+export function formatDelayLabel(delayMinutes: number, anchorEvent: AutomationAnchorEvent = "stage_entered_at") {
+  return formatTimingSummary(delayMinutes, anchorEvent);
 }
 
 export function getMessagePreview(text: string, maxLength = 110) {
@@ -39,5 +25,5 @@ export function getMessagePreview(text: string, maxLength = 110) {
     return normalized;
   }
 
-  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
 }

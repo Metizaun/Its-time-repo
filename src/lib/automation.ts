@@ -5,6 +5,13 @@ export type AutomationRuleGroupOperator = "all" | "any";
 export type AutomationAnchorEvent = "stage_entered_at" | "last_outbound" | "last_inbound";
 export type AutomationReentryMode = "restart_on_match" | "ignore_if_active" | "allow_parallel";
 export type AutomationMessageDirection = "inbound" | "outbound";
+export type AutomationConditionVisibility = "user" | "internal";
+export type AutomationTimeUnit = "minute" | "hour" | "day";
+export type AutomationRecipeId =
+  | "follow_up_last_message"
+  | "message_after_stage_time"
+  | "nutrition_after_reply";
+export type AutomationPredicateCategory = "stage" | "message" | "time" | "lead";
 export type AutomationPredicateName =
   | "stage_is"
   | "stage_in"
@@ -164,10 +171,20 @@ export interface AutomationLookupMaps {
   instances?: Record<string, string>;
 }
 
+export interface AutomationConditionCopy {
+  shortLabel: string;
+  sentenceLabel: string;
+  description: string;
+}
+
 export interface AutomationPredicateCatalogItem {
   predicate: AutomationPredicateName;
   label: string;
+  shortLabel: string;
+  sentenceLabel: string;
   description: string;
+  category: AutomationPredicateCategory;
+  visibility: AutomationConditionVisibility;
   input:
     | "none"
     | "text"
@@ -181,102 +198,233 @@ export interface AutomationPredicateCatalogItem {
     | "instance";
 }
 
+export interface AutomationRecipe {
+  id: AutomationRecipeId;
+  title: string;
+  description: string;
+  anchor_event: AutomationAnchorEvent;
+  reentry_mode: AutomationReentryMode;
+  suggested_step: {
+    label: string;
+    delay_minutes: number;
+    message_template: string;
+  };
+}
+
+export interface AutomationComposerAnalysis {
+  supported: boolean;
+  reason: string | null;
+  operator: AutomationRuleGroupOperator;
+  visibleConditions: AutomationRulePredicate[];
+  preservedConditions: AutomationRulePredicate[];
+}
+
+const USER_VISIBLE_PREDICATES: AutomationPredicateName[] = [
+  "stage_is",
+  "stage_in",
+  "days_in_stage_gte",
+  "hours_since_last_outbound_gte",
+  "hours_since_last_inbound_gte",
+  "no_inbound_since_anchor",
+  "lead_replied",
+  "tag_has",
+];
+
+const SIMPLE_HIDDEN_PREDICATES: AutomationPredicateName[] = ["lead_visible_is_true"];
+
 export const AUTOMATION_PREDICATE_CATALOG: AutomationPredicateCatalogItem[] = [
   {
     predicate: "stage_is",
-    label: "Etapa e exatamente",
-    description: "Verifica se o lead esta na etapa selecionada.",
+    label: "Lead esta na etapa",
+    shortLabel: "Lead na etapa",
+    sentenceLabel: "Lead esta na etapa",
+    description: "Use para escolher a etapa atual do lead.",
+    category: "stage",
+    visibility: "user",
     input: "stage",
   },
   {
     predicate: "stage_in",
-    label: "Etapa esta na lista",
-    description: "Permite validar mais de uma etapa ao mesmo tempo.",
+    label: "Lead esta em uma destas etapas",
+    shortLabel: "Lead em etapas",
+    sentenceLabel: "Lead esta em uma destas etapas",
+    description: "Use quando a jornada vale para mais de uma etapa.",
+    category: "stage",
+    visibility: "user",
     input: "stage-multi",
   },
   {
     predicate: "days_in_stage_gte",
-    label: "Dias na etapa maior ou igual",
-    description: "Calcula quanto tempo o lead esta parado na etapa atual.",
+    label: "Lead esta nessa etapa ha pelo menos",
+    shortLabel: "Tempo na etapa",
+    sentenceLabel: "Lead esta nessa etapa ha pelo menos",
+    description: "Bom para rotinas de retomada por tempo parado na etapa.",
+    category: "time",
+    visibility: "user",
     input: "number",
   },
   {
     predicate: "last_message_direction_is",
-    label: "Ultima mensagem foi",
-    description: "Olha apenas para inbound ou outbound.",
+    label: "Ultima direcao da conversa",
+    shortLabel: "Direcao da conversa",
+    sentenceLabel: "Ultima direcao da conversa",
+    description: "Predicado tecnico usado pelo motor.",
+    category: "message",
+    visibility: "internal",
     input: "direction",
   },
   {
     predicate: "hours_since_last_outbound_gte",
-    label: "Horas desde ultimo outbound",
-    description: "Ideal para follow-up ancorado na ultima mensagem enviada.",
+    label: "Minha ultima mensagem foi ha pelo menos",
+    shortLabel: "Minha ultima mensagem",
+    sentenceLabel: "Minha ultima mensagem foi ha pelo menos",
+    description: "Use para follow-up apos a ultima mensagem enviada.",
+    category: "time",
+    visibility: "user",
     input: "number",
   },
   {
     predicate: "hours_since_last_inbound_gte",
-    label: "Horas desde ultimo inbound",
-    description: "Ideal para nutricao ancorada na ultima resposta do lead.",
+    label: "Ultima resposta do lead foi ha pelo menos",
+    shortLabel: "Ultima resposta do lead",
+    sentenceLabel: "Ultima resposta do lead foi ha pelo menos",
+    description: "Use para nutricao apos a ultima resposta do lead.",
+    category: "time",
+    visibility: "user",
     input: "number",
   },
   {
     predicate: "no_inbound_since_anchor",
-    label: "Nao houve inbound desde a ancora",
-    description: "Confirma que o lead ainda nao respondeu desde o evento ancora.",
+    label: "O lead ainda nao respondeu",
+    shortLabel: "Sem resposta do lead",
+    sentenceLabel: "O lead ainda nao respondeu",
+    description: "Confirma que ainda nao houve resposta do lead.",
+    category: "message",
+    visibility: "user",
     input: "none",
   },
   {
     predicate: "lead_replied",
-    label: "Lead respondeu",
-    description: "Detecta resposta inbound apos a ancora da jornada.",
+    label: "O lead respondeu",
+    shortLabel: "Lead respondeu",
+    sentenceLabel: "O lead respondeu",
+    description: "Usado para encerrar ou desviar a automacao.",
+    category: "message",
+    visibility: "user",
     input: "none",
   },
   {
     predicate: "tag_has",
-    label: "Lead possui tag",
-    description: "Valida a ultima tag conhecida do lead.",
+    label: "Lead possui a tag",
+    shortLabel: "Tag do lead",
+    sentenceLabel: "Lead possui a tag",
+    description: "Filtra a jornada por tag.",
+    category: "lead",
+    visibility: "user",
     input: "tag",
   },
   {
     predicate: "owner_is",
-    label: "Responsavel e",
-    description: "Filtra por usuario responsavel pelo lead.",
+    label: "Responsavel do lead",
+    shortLabel: "Responsavel",
+    sentenceLabel: "Responsavel do lead",
+    description: "Predicado tecnico usado pelo motor.",
+    category: "lead",
+    visibility: "internal",
     input: "owner",
   },
   {
     predicate: "instance_is",
-    label: "Instancia e",
-    description: "Garante que a jornada use a instancia esperada.",
+    label: "Instancia da conversa",
+    shortLabel: "Instancia",
+    sentenceLabel: "Instancia da conversa",
+    description: "Predicado tecnico usado pelo motor.",
+    category: "lead",
+    visibility: "internal",
     input: "instance",
   },
   {
     predicate: "status_is",
-    label: "Status textual e",
-    description: "Usa o campo status atual do lead.",
+    label: "Status do lead",
+    shortLabel: "Status do lead",
+    sentenceLabel: "Status do lead",
+    description: "Predicado tecnico usado pelo motor.",
+    category: "lead",
+    visibility: "internal",
     input: "text",
   },
   {
     predicate: "lead_visible_is_true",
-    label: "Lead visivel",
-    description: "Ignora leads ocultos no CRM.",
+    label: "Lead visivel no CRM",
+    shortLabel: "Lead visivel",
+    sentenceLabel: "Lead visivel no CRM",
+    description: "Protecao tecnica usada pelo motor.",
+    category: "lead",
+    visibility: "internal",
     input: "none",
   },
 ];
 
 export const AUTOMATION_ANCHOR_EVENT_OPTIONS: Array<{ value: AutomationAnchorEvent; label: string }> = [
-  { value: "stage_entered_at", label: "Entrada na etapa" },
-  { value: "last_outbound", label: "Ultimo outbound" },
-  { value: "last_inbound", label: "Ultimo inbound" },
+  { value: "stage_entered_at", label: "Entrar na etapa" },
+  { value: "last_outbound", label: "Minha ultima mensagem" },
+  { value: "last_inbound", label: "Ultima resposta do lead" },
 ];
 
 export const AUTOMATION_REENTRY_MODE_OPTIONS: Array<{ value: AutomationReentryMode; label: string }> = [
-  { value: "restart_on_match", label: "Reiniciar relogio" },
-  { value: "ignore_if_active", label: "Ignorar se ja estiver ativa" },
-  { value: "allow_parallel", label: "Permitir paralelas" },
+  { value: "restart_on_match", label: "Reiniciar o prazo" },
+  { value: "ignore_if_active", label: "Manter a automacao atual" },
+  { value: "allow_parallel", label: "Criar outra automacao" },
 ];
 
 export const AUTOMATION_DIRECTION_OPTIONS: Array<{ value: AutomationMessageDirection; label: string }> = [
-  { value: "outbound", label: "Outbound" },
-  { value: "inbound", label: "Inbound" },
+  { value: "outbound", label: "Minha mensagem" },
+  { value: "inbound", label: "Resposta do lead" },
+];
+
+export const AUTOMATION_TIME_UNIT_OPTIONS: Array<{ value: AutomationTimeUnit; label: string }> = [
+  { value: "minute", label: "min" },
+  { value: "hour", label: "hora" },
+  { value: "day", label: "dia" },
+];
+
+export const AUTOMATION_RECIPES: AutomationRecipe[] = [
+  {
+    id: "follow_up_last_message",
+    title: "Follow-up da minha ultima mensagem",
+    description: "Ideal para retomar um contato algumas horas depois da sua ultima mensagem.",
+    anchor_event: "last_outbound",
+    reentry_mode: "restart_on_match",
+    suggested_step: {
+      label: "Follow-up",
+      delay_minutes: 240,
+      message_template: "Oi {nome}, sigo por aqui caso queira continuar o atendimento.",
+    },
+  },
+  {
+    id: "message_after_stage_time",
+    title: "Mensagem apos tempo na etapa",
+    description: "Boa para acionar o lead depois de alguns dias parado na etapa atual.",
+    anchor_event: "stage_entered_at",
+    reentry_mode: "ignore_if_active",
+    suggested_step: {
+      label: "Retomada da etapa",
+      delay_minutes: 43200,
+      message_template: "Oi {nome}, vi que seu atendimento ficou parado por aqui. Quer que eu te ajude a seguir?",
+    },
+  },
+  {
+    id: "nutrition_after_reply",
+    title: "Nutricao apos resposta do lead",
+    description: "Perfeita para continuar a conversa depois da ultima resposta do lead.",
+    anchor_event: "last_inbound",
+    reentry_mode: "restart_on_match",
+    suggested_step: {
+      label: "Mensagem de nutricao",
+      delay_minutes: 1440,
+      message_template: "Oi {nome}, trouxe mais um conteudo que pode te ajudar no proximo passo.",
+    },
+  },
 ];
 
 function makeNodeId() {
@@ -301,6 +449,18 @@ function ensureNodeArray(value: unknown) {
 
 function isKnownPredicate(value: unknown): value is AutomationPredicateName {
   return AUTOMATION_PREDICATE_CATALOG.some((item) => item.predicate === value);
+}
+
+function findPredicateCatalogItem(predicate: AutomationPredicateName) {
+  return AUTOMATION_PREDICATE_CATALOG.find((item) => item.predicate === predicate);
+}
+
+function isUserVisiblePredicate(predicate: AutomationPredicateName) {
+  return USER_VISIBLE_PREDICATES.includes(predicate);
+}
+
+function isSimpleHiddenPredicate(predicate: AutomationPredicateName) {
+  return SIMPLE_HIDDEN_PREDICATES.includes(predicate);
 }
 
 export function createRuleGroup(
@@ -336,7 +496,11 @@ export function createPredicate(
     };
   }
 
-  if (predicate === "days_in_stage_gte" || predicate === "hours_since_last_outbound_gte" || predicate === "hours_since_last_inbound_gte") {
+  if (
+    predicate === "days_in_stage_gte" ||
+    predicate === "hours_since_last_outbound_gte" ||
+    predicate === "hours_since_last_inbound_gte"
+  ) {
     return {
       id: makeNodeId(),
       type: "predicate",
@@ -439,6 +603,40 @@ export function updateDefaultEntryRuleStage(rule: AutomationRuleNode, triggerSta
   };
 }
 
+export function createJourneyEntryRuleFromRecipe(recipeId: AutomationRecipeId, stageId?: string | null) {
+  if (recipeId === "message_after_stage_time") {
+    return createRuleGroup("all", [
+      {
+        ...createPredicate("stage_is"),
+        value: stageId || "",
+      },
+      createPredicate("lead_visible_is_true"),
+    ]);
+  }
+
+  if (recipeId === "nutrition_after_reply") {
+    return createRuleGroup("all", [
+      {
+        ...createPredicate("stage_is"),
+        value: stageId || "",
+      },
+      createPredicate("lead_visible_is_true"),
+    ]);
+  }
+
+  return createRuleGroup("all", [
+    {
+      ...createPredicate("stage_is"),
+      value: stageId || "",
+    },
+    createPredicate("lead_visible_is_true"),
+  ]);
+}
+
+export function getAutomationRecipeById(recipeId: AutomationRecipeId) {
+  return AUTOMATION_RECIPES.find((recipe) => recipe.id === recipeId) ?? AUTOMATION_RECIPES[0];
+}
+
 export function isRuleEmpty(rule: AutomationRuleNode | null | undefined): boolean {
   if (!rule) {
     return true;
@@ -454,6 +652,144 @@ export function isRuleEmpty(rule: AutomationRuleNode | null | undefined): boolea
   }
 
   return normalized.children.length === 0 || normalized.children.every((child) => isRuleEmpty(child));
+}
+
+export function minutesToTimeUnit(minutes: number): { value: number; unit: AutomationTimeUnit } {
+  if (minutes !== 0 && minutes % 1440 === 0) {
+    return {
+      value: minutes / 1440,
+      unit: "day",
+    };
+  }
+
+  if (minutes !== 0 && minutes % 60 === 0) {
+    return {
+      value: minutes / 60,
+      unit: "hour",
+    };
+  }
+
+  return {
+    value: minutes,
+    unit: "minute",
+  };
+}
+
+export function timeUnitToMinutes(value: number, unit: AutomationTimeUnit) {
+  if (unit === "day") {
+    return value * 1440;
+  }
+
+  if (unit === "hour") {
+    return value * 60;
+  }
+
+  return value;
+}
+
+export function formatTimeValue(value: number, unit: AutomationTimeUnit) {
+  if (unit === "day") {
+    return `${value} ${value === 1 ? "dia" : "dias"}`;
+  }
+
+  if (unit === "hour") {
+    return `${value} ${value === 1 ? "hora" : "horas"}`;
+  }
+
+  return `${value} ${value === 1 ? "min" : "min"}`;
+}
+
+export function formatTimingSummary(delayMinutes: number, anchorEvent: AutomationAnchorEvent) {
+  if (delayMinutes === 0) {
+    if (anchorEvent === "last_outbound") {
+      return "Enviar na hora da minha ultima mensagem";
+    }
+
+    if (anchorEvent === "last_inbound") {
+      return "Enviar na hora da ultima resposta do lead";
+    }
+
+    return "Enviar ao entrar na etapa";
+  }
+
+  const timeValue = minutesToTimeUnit(delayMinutes);
+  const timeLabel = formatTimeValue(timeValue.value, timeValue.unit);
+
+  if (anchorEvent === "last_outbound") {
+    return `Enviar ${timeLabel} depois da minha ultima mensagem`;
+  }
+
+  if (anchorEvent === "last_inbound") {
+    return `Enviar ${timeLabel} depois da ultima resposta do lead`;
+  }
+
+  return `Enviar ${timeLabel} depois de entrar na etapa`;
+}
+
+export function analyzeRuleForComposer(rule: AutomationRuleNode | null | undefined): AutomationComposerAnalysis {
+  const normalized = normalizeRuleNode(rule, createRuleGroup("all", []));
+
+  if (normalized.type !== "group") {
+    return {
+      supported: false,
+      reason: "Esta automacao usa regras avancadas.",
+      operator: "all",
+      visibleConditions: [],
+      preservedConditions: [],
+    };
+  }
+
+  const visibleConditions: AutomationRulePredicate[] = [];
+  const preservedConditions: AutomationRulePredicate[] = [];
+
+  for (const child of normalized.children) {
+    if (child.type !== "predicate") {
+      return {
+        supported: false,
+        reason: "Esta automacao usa regras avancadas.",
+        operator: normalized.operator,
+        visibleConditions: [],
+        preservedConditions: [],
+      };
+    }
+
+    if (isUserVisiblePredicate(child.predicate)) {
+      visibleConditions.push(child);
+      continue;
+    }
+
+    if (isSimpleHiddenPredicate(child.predicate)) {
+      preservedConditions.push(child);
+      continue;
+    }
+
+    return {
+      supported: false,
+      reason: "Esta automacao usa regras avancadas.",
+      operator: normalized.operator,
+      visibleConditions: [],
+      preservedConditions: [],
+    };
+  }
+
+  return {
+    supported: true,
+    reason: null,
+    operator: normalized.operator,
+    visibleConditions,
+    preservedConditions,
+  };
+}
+
+export function buildComposerRule(params: {
+  operator: AutomationRuleGroupOperator;
+  visibleConditions: AutomationRulePredicate[];
+  preservedConditions?: AutomationRulePredicate[];
+}) {
+  return createRuleGroup(params.operator, [
+    ...(params.visibleConditions || []).map((condition) => normalizeRuleNode(condition) as AutomationRulePredicate),
+    ...((params.preservedConditions || []).map((condition) => normalizeRuleNode(condition) as AutomationRulePredicate)),
+  ]);
 }
 
 function formatPredicateValue(
@@ -493,6 +829,17 @@ function formatPredicateValue(
   }
 
   if (typeof rawValue === "number") {
+    if (predicate.predicate === "days_in_stage_gte") {
+      return formatTimeValue(rawValue, "day");
+    }
+
+    if (
+      predicate.predicate === "hours_since_last_outbound_gte" ||
+      predicate.predicate === "hours_since_last_inbound_gte"
+    ) {
+      return formatTimeValue(rawValue, "hour");
+    }
+
     return String(rawValue);
   }
 
@@ -504,36 +851,20 @@ function formatPredicateValue(
 }
 
 function summarizePredicate(predicate: AutomationRulePredicate, lookups: AutomationLookupMaps = {}) {
-  switch (predicate.predicate) {
-    case "stage_is":
-      return `etapa = ${formatPredicateValue(predicate, lookups)}`;
-    case "stage_in":
-      return `etapa em ${formatPredicateValue(predicate, lookups)}`;
-    case "days_in_stage_gte":
-      return `dias na etapa >= ${formatPredicateValue(predicate, lookups)}`;
-    case "last_message_direction_is":
-      return `ultima direcao = ${formatPredicateValue(predicate, lookups)}`;
-    case "hours_since_last_outbound_gte":
-      return `horas desde outbound >= ${formatPredicateValue(predicate, lookups)}`;
-    case "hours_since_last_inbound_gte":
-      return `horas desde inbound >= ${formatPredicateValue(predicate, lookups)}`;
-    case "no_inbound_since_anchor":
-      return "sem inbound desde a ancora";
-    case "lead_replied":
-      return "lead respondeu";
-    case "tag_has":
-      return `tag = ${formatPredicateValue(predicate, lookups)}`;
-    case "owner_is":
-      return `responsavel = ${formatPredicateValue(predicate, lookups)}`;
-    case "instance_is":
-      return `instancia = ${formatPredicateValue(predicate, lookups)}`;
-    case "status_is":
-      return `status = ${formatPredicateValue(predicate, lookups)}`;
-    case "lead_visible_is_true":
-      return "lead visivel";
-    default:
-      return predicate.predicate;
+  if (predicate.predicate === "lead_visible_is_true") {
+    return "";
   }
+
+  const catalogItem = findPredicateCatalogItem(predicate.predicate);
+  if (!catalogItem) {
+    return predicate.predicate;
+  }
+
+  if (catalogItem.input === "none") {
+    return catalogItem.shortLabel;
+  }
+
+  return `${catalogItem.sentenceLabel} ${formatPredicateValue(predicate, lookups)}`;
 }
 
 export function summarizeRuleNode(
@@ -546,7 +877,7 @@ export function summarizeRuleNode(
 
   const normalized = normalizeRuleNode(rule);
   if (normalized.type === "predicate") {
-    return summarizePredicate(normalized, lookups);
+    return summarizePredicate(normalized, lookups) || "Sem condicoes extras";
   }
 
   const children = normalized.children
@@ -557,7 +888,7 @@ export function summarizeRuleNode(
     return "Sem condicoes extras";
   }
 
-  return children.join(normalized.operator === "all" ? " E " : " OU ");
+  return children.join(normalized.operator === "all" ? " e " : " ou ");
 }
 
 export function formatAnchorEventLabel(value: AutomationAnchorEvent) {
@@ -566,6 +897,10 @@ export function formatAnchorEventLabel(value: AutomationAnchorEvent) {
 
 export function formatReentryModeLabel(value: AutomationReentryMode) {
   return AUTOMATION_REENTRY_MODE_OPTIONS.find((item) => item.value === value)?.label ?? value;
+}
+
+export function getUserVisiblePredicateCatalog() {
+  return AUTOMATION_PREDICATE_CATALOG.filter((item) => item.visibility === "user");
 }
 
 export function buildAutomationLookupMaps(params: {
@@ -578,7 +913,9 @@ export function buildAutomationLookupMaps(params: {
     stages: Object.fromEntries((params.stages || []).map((stage) => [stage.id, stage.name])),
     owners: Object.fromEntries((params.owners || []).map((owner) => [owner.id, owner.name])),
     tags: Object.fromEntries((params.tags || []).map((tag) => [tag.id, tag.name])),
-    instances: Object.fromEntries((params.instances || []).map((instance) => [instance.instancia, instance.instancia])),
+    instances: Object.fromEntries(
+      (params.instances || []).map((instance) => [instance.instancia, instance.instancia]),
+    ),
   };
 }
 

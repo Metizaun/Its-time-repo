@@ -1,7 +1,8 @@
-import { Card } from "@/components/ui/card";
-import { FunnelStep } from "@/lib/utils/metrics";
 import { useMemo } from "react";
+import type { ReactNode } from "react";
+
 import { cn } from "@/lib/utils";
+import { FunnelStep } from "@/lib/utils/metrics";
 import {
   Tooltip,
   TooltipContent,
@@ -12,131 +13,128 @@ import {
 interface FunnelChartProps {
   data: FunnelStep[];
   title: string;
+  headerAction?: ReactNode;
+  totalLeads?: number;
 }
 
-// Fixed percentages logic based on instructions
 const STAGE_WIDTHS = ["100%", "80%", "65%", "55%", "45%"];
 
-export function FunnelChart({ data, title }: FunnelChartProps) {
-  // 1) total real
-  const totalLeads = useMemo(() => data.reduce((s, it) => s + (it?.value || 0), 0) || 1, [data]);
+export function FunnelChart({ data, title, headerAction, totalLeads = 0 }: FunnelChartProps) {
+  const funnelStagesInput = useMemo(() => data.slice(0, STAGE_WIDTHS.length), [data]);
+  const totalFunnelLeads = useMemo(
+    () => funnelStagesInput.reduce((sum, item) => sum + (item?.value || 0), 0),
+    [funnelStagesInput]
+  );
+  const effectiveTotalLeads = totalLeads > 0 ? totalLeads : totalFunnelLeads;
 
-  // 2) Filtrar etapas (Mantendo a logica backend mas permitindo stages com volume 0)
-  const HIDE_STEPS = ["Perdido", "Remarketing"];
-  const validSteps = useMemo(
-    () => data.filter((s) => !HIDE_STEPS.includes(s.name)),
-    [data]
+  const funnelStages = useMemo(
+    () =>
+      funnelStagesInput.map((step, index) => {
+        const previousValue = index > 0 ? funnelStagesInput[index - 1].value : null;
+        const shareOfLeads = effectiveTotalLeads > 0 ? (step.value / effectiveTotalLeads) * 100 : 0;
+        const conversionRate =
+          previousValue && previousValue > 0 ? (step.value / previousValue) * 100 : index === 0 ? 100 : 0;
+        const dropFromPrevious =
+          previousValue && previousValue > 0 ? ((previousValue - step.value) / previousValue) * 100 : 0;
+
+        return {
+          name: step.name,
+          value: step.value,
+          width: STAGE_WIDTHS[index] || "45%",
+          shareOfLeads,
+          shareLabel: `${shareOfLeads.toFixed(1)}% dos leads`,
+          conversionRate,
+          conversionLabel: `${conversionRate.toFixed(2)}%`,
+          conversionSupport:
+            index === 0
+              ? `${step.value} lead${step.value === 1 ? "" : "s"} na base do funil`
+              : `${step.value} de ${previousValue ?? 0} leads vieram da etapa anterior`,
+          dropFromPrevious,
+        };
+      }),
+    [effectiveTotalLeads, funnelStagesInput]
   );
 
-  if (!validSteps.length) {
+  const renderHeader = () => (
+    <div className="mb-8 flex items-center justify-between gap-3">
+      <h3 className="text-left text-[var(--font-size-title,1rem)] font-semibold text-foreground">{title}</h3>
+      {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
+    </div>
+  );
+
+  if (!funnelStages.length) {
     return (
-      <div className="p-4 sm:p-6 flex flex-col justify-center items-center rounded-[var(--radius-lg)] bg-[var(--color-bg-primary)] h-[320px]">
-        <h3 className="text-base sm:text-lg font-semibold mb-4 w-full text-left text-foreground">{title}</h3>
-        <div className="flex-1 flex items-center justify-center text-[var(--color-text-secondary)] text-sm">
+      <div className="flex h-[320px] flex-col items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-bg-primary)] p-4 sm:p-6">
+        <div className="w-full">{renderHeader()}</div>
+        <div className="flex flex-1 items-center justify-center text-sm text-[var(--color-text-secondary)]">
           Sem dados para exibir
         </div>
       </div>
     );
   }
 
-  // Pre-calcular funil stats para cada stage (Taxas e Custos)
-  const funnelStages = validSteps.map((step, index) => {
-    // Current step percentage over total
-    const percentOfTotal = ((step.value / totalLeads) * 100);
-    
-    // Delta and logic previous step to current conversion
-    const prevValue = index > 0 ? validSteps[index - 1].value : step.value;
-    const conversionFromPrev = prevValue > 0 ? (step.value / prevValue) * 100 : 0;
-    
-    // Simulate drop from previous
-    const delta = typeof prevValue === 'number' && prevValue > 0 
-      ? ((step.value - prevValue) / prevValue) * 100
-      : 0;
-      
-    // Mock Costs (Backend already handles the 'value' but if no cost provided we mock for UI parity with reference image)
-    const costValue = step.value > 0 ? (280 / step.value).toFixed(2) : "0,00"; // Fake logic just for visual testing based on reference
-
-    return {
-      name: step.name,
-      value: step.value,
-      width: STAGE_WIDTHS[index] || "45%", // Fallback to smallest if overflow
-      delta: delta,
-      percentOfTotal: percentOfTotal.toFixed(1),
-      convRate: index === 0 ? "100.00%" : `${conversionFromPrev.toFixed(2)}%`,
-      formattedCost: `R$ ${costValue.replace(".", ",")}`
-    };
-  });
-
   return (
-    <div className="p-0 sm:p-6 max-w-full overflow-x-hidden flex flex-col">
-      {/* Title area */}
-      <h3 className="text-[var(--font-size-title,1rem)] text-foreground font-semibold mb-8 text-center sm:text-left">{title}</h3>
+    <div className="flex max-w-full flex-col overflow-x-hidden p-0 sm:p-6">
+      {renderHeader()}
 
-      {/* Funnel Area */}
-      <div className="flex flex-col items-center w-full bg-[var(--color-bg-primary)] px-2 sm:px-6 py-4 rounded-xl relative">
+      <div className="relative flex w-full flex-col items-center rounded-xl bg-[var(--color-bg-primary)] px-2 py-4 sm:px-6">
         <TooltipProvider>
           {funnelStages.map((stage, index) => (
-            <div key={stage.name} className="flex flex-col items-center w-full group relative">
-              
-              {/* Row Container */}
-              <div className="flex flex-col sm:flex-row items-center justify-center w-full gap-4 sm:gap-8 relative min-h-[140px]">
-                
-                {/* Left Metric (Custo) - Bare Text, NO borders as per Image 1 */}
-                <div className="hidden sm:flex flex-col items-center sm:items-end flex-none w-[120px] text-right z-10 transition-opacity opacity-70 group-hover:opacity-100">
-                  <p className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-semibold mb-1">C/{stage.name}</p>
-                  <p className="text-foreground text-lg sm:text-xl font-medium tracking-wide">{stage.formattedCost}</p>
-                  <p className={cn("text-xs font-bold mt-0.5", stage.delta >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-danger)]")}>
-                    {stage.delta >= 0 ? '↑' : '↓'} {Math.abs(stage.delta).toFixed(1)}%
-                  </p>
-                </div>
-
-                {/* Central Box (Soft Neumorphism Exactly as Image 1) */}
+            <div key={stage.name} className="group relative flex w-full flex-col items-center">
+              <div className="relative flex min-h-[140px] w-full flex-col items-center justify-center gap-4 sm:flex-row sm:gap-8">
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <div 
-                      className="funnel-stage relative z-10 flex flex-col justify-center items-center transition-transform hover:scale-[1.01]"
-                        style={{
-                          width: `clamp(220px, ${stage.width}, 100%)`, 
-                          background: 'transparent',
-                          borderRadius: '24px',
-                          padding: '16px 24px',
-                          boxShadow: '0 8px 32px rgba(229, 57, 58, 0.04)',
-                          border: '1px solid var(--color-border-subtle)',
-                          borderTop: '2px solid var(--color-accent)'
-                        }}
+                    <div
+                      className="funnel-stage relative z-10 flex flex-col items-center justify-center transition-transform hover:scale-[1.01]"
+                      style={{
+                        width: `clamp(220px, ${stage.width}, 100%)`,
+                        background: "transparent",
+                        borderRadius: "24px",
+                        padding: "16px 24px",
+                        boxShadow: "0 8px 32px rgba(229, 57, 58, 0.04)",
+                        border: "1px solid var(--color-border-subtle)",
+                        borderTop: "2px solid var(--color-accent)",
+                      }}
                     >
-                      <span className="text-[10px] sm:text-xs text-[var(--color-text-secondary)] uppercase font-semibold tracking-widest">{stage.name}</span>
-                      <strong className="text-3xl sm:text-[2.6rem] text-foreground font-bold leading-none my-1 tracking-tight">{stage.value}</strong>
-                      <span 
-                        className={cn(
-                          "text-xs font-bold",
-                          stage.delta >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"
-                        )}
-                      >
-                        {stage.delta >= 0 ? '↑' : '↓'} {Math.abs(stage.delta).toFixed(1)}%
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)] sm:text-xs">
+                        {stage.name}
+                      </span>
+                      <strong className="my-1 text-3xl font-bold leading-none tracking-tight text-foreground sm:text-[2.6rem]">
+                        {stage.value}
+                      </strong>
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)]">
+                        {stage.shareLabel}
                       </span>
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="right" className="bg-[var(--color-bg-surface)] text-foreground border-[var(--color-border-medium)]">
+                  <TooltipContent side="right" className="border-[var(--color-border-medium)] bg-[var(--color-bg-surface)] text-foreground">
                     <p className="font-bold">{stage.name}</p>
-                    <p className="text-xs text-muted-foreground">{stage.percentOfTotal}% de retenção do funil total</p>
+                    <p className="text-xs text-[var(--color-text-secondary)]">
+                      {stage.value} de {effectiveTotalLeads} leads estao nesta etapa
+                    </p>
                   </TooltipContent>
                 </Tooltip>
 
-                {/* Right Metric (Taxa) - Bare Text, NO borders */}
-                <div className="hidden sm:flex flex-col items-center sm:items-start flex-none w-[120px] text-left z-10 transition-opacity opacity-70 group-hover:opacity-100">
-                  <p className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-semibold mb-1">Taxa {stage.name}</p>
-                  <p className="text-foreground text-lg sm:text-xl font-medium tracking-wide">{stage.convRate}</p>
-                  <p className={cn("text-xs font-bold mt-0.5 text-[var(--color-danger)]")}>
-                     {index > 0 ? "↓ " + (100 - parseFloat(stage.convRate)).toFixed(1) + "%" : "0.0%"}
+                <div className="hidden w-[140px] flex-none text-left opacity-70 transition-opacity group-hover:opacity-100 sm:flex sm:flex-col sm:items-start">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    Conversao
+                  </p>
+                  <p className="text-lg font-medium tracking-wide text-foreground sm:text-xl">
+                    {stage.conversionLabel}
+                  </p>
+                  <p
+                    className={cn(
+                      "mt-0.5 text-xs font-medium",
+                      index === 0 ? "text-[var(--color-text-secondary)]" : "text-[var(--color-danger)]"
+                    )}
+                  >
+                    {index === 0 ? stage.conversionSupport : `Queda de ${stage.dropFromPrevious.toFixed(1)}%`}
                   </p>
                 </div>
-
               </div>
 
-              {/* Vertical Connector exactly as Image 1 (subtle dropping pin) */}
               {index < funnelStages.length - 1 && (
-                <div className="h-6 sm:h-8 w-[2px] bg-[var(--color-border-medium)] mx-auto opacity-30 z-0 my-1"></div>
+                <div className="z-0 mx-auto my-1 h-6 w-[2px] bg-[var(--color-border-medium)] opacity-30 sm:h-8" />
               )}
             </div>
           ))}

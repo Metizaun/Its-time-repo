@@ -46,7 +46,7 @@ export function PipelineToolbar({
       <div className="flex items-center gap-3">
       <Select value={selectedInstance} onValueChange={onInstanceChange} disabled={instancesLoading}>
         <SelectTrigger className="w-[220px] bg-[var(--color-bg-surface)] border-[var(--color-border-subtle)] text-foreground rounded-xl focus:ring-0 focus:ring-offset-0">
-          <Building2 className="w-4 h-4 mr-2 text-[var(--color-text-muted)]" />
+          <Building2 className="w-4 h-4 mr-2 text-[var(--color-text-secondary)]" />
           <SelectValue placeholder="Todas as Instâncias" />
         </SelectTrigger>
         <SelectContent className="bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] rounded-xl">

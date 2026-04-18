@@ -89,7 +89,7 @@ export function KanbanColumn({
     <div
       className={cn(
         "flex-1 min-w-[280px] w-[280px] bg-[var(--color-bg-surface)] rounded-xl transition-all relative flex flex-col shrink-0 overflow-hidden border border-[var(--color-border-subtle)] border-t-2",
-        isLeadDragOver && "bg-[var(--color-bg-elevated)]",
+        isLeadDragOver && "bg-[var(--color-border-subtle)]",
         isDraggingColumn && "opacity-50"
       )}
       style={{ 

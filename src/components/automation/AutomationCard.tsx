@@ -1,14 +1,12 @@
 import { Badge } from "@/components/ui/badge";
 import {
   buildAutomationLookupMaps,
-  formatAnchorEventLabel,
-  formatReentryModeLabel,
   summarizeRuleNode,
   type AutomationJourney,
   type AutomationStep,
 } from "@/lib/automation";
 import { cn } from "@/lib/utils";
-import { Clock3, MessageSquareMore, PenSquare, Waypoints } from "lucide-react";
+import { PenSquare, Sparkles } from "lucide-react";
 import type { PipelineStage } from "@/types";
 
 import { formatDelayLabel, getMessagePreview, sortStepsForDisplay } from "./automation-utils";
@@ -43,7 +41,6 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
               {journey.is_active ? "Ativa" : "Inativa"}
             </Badge>
             <Badge variant="outline">{journey.instance_name}</Badge>
-            <Badge variant="outline">{formatAnchorEventLabel(journey.anchor_event)}</Badge>
           </div>
         </div>
 
@@ -52,18 +49,10 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
         </div>
       </div>
 
-      <div className="mt-4 grid gap-2 text-xs text-muted-foreground">
+      <div className="mt-4 rounded-xl border bg-background/70 px-3 py-3 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1">
-          <Waypoints className="h-3.5 w-3.5" />
-          Entrada: {summarizeRuleNode(journey.entry_rule, lookups)}
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Clock3 className="h-3.5 w-3.5" />
-          Reentrada: {formatReentryModeLabel(journey.reentry_mode)}
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <MessageSquareMore className="h-3.5 w-3.5" />
-          Saida: {summarizeRuleNode(journey.exit_rule, lookups)}
+          <Sparkles className="h-3.5 w-3.5" />
+          Comeca quando: {summarizeRuleNode(journey.entry_rule, lookups)}
         </span>
       </div>
 
@@ -77,7 +66,7 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
             <div key={step.id} className="rounded-xl border bg-background/80 px-3 py-3">
               <div className="flex items-center gap-2">
                 <Badge variant="secondary" className="text-[11px]">
-                  {formatDelayLabel(step.delay_minutes)}
+                  {formatDelayLabel(step.delay_minutes, journey.anchor_event)}
                 </Badge>
                 {!step.is_active && (
                   <Badge variant="outline" className="text-[11px]">
@@ -94,7 +83,7 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
 
         <div className="flex items-center justify-between px-1 text-xs font-medium text-muted-foreground">
           <span>{orderedSteps.length} mensagens</span>
-          {orderedSteps[0] ? <span>Primeira: {formatDelayLabel(orderedSteps[0].delay_minutes)}</span> : null}
+          {orderedSteps[0] ? <span>Primeira: {formatDelayLabel(orderedSteps[0].delay_minutes, journey.anchor_event)}</span> : null}
         </div>
 
         {remainingSteps > 0 && (

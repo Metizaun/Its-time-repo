@@ -1,4 +1,4 @@
-import { Lead } from "@/types";
+import { Lead, PipelineStage } from "@/types";
 import { format, parseISO } from "date-fns";
 
 export interface KPIMetrics {
@@ -73,6 +73,7 @@ export function groupLeadsByOrigin(leads: Lead[]): OriginData[] {
 export interface FunnelStep {
   name: string;
   value: number;
+  color?: string;
 }
 
 export function computeFunnelData(leads: Lead[]): FunnelStep[] {
@@ -89,6 +90,50 @@ export function computeFunnelData(leads: Lead[]): FunnelStep[] {
     name: status,
     value: leads.filter((l) => l.status === status).length,
   }));
+}
+
+// ─── Funil baseado em etapas reais do pipeline ─────────────────────────────
+/**
+ * Computa os dados do funil a partir das etapas reais do pipeline.
+ * Conta leads por stage_id (fallback para status normalizado se stage_id for nulo).
+ *
+ * @param leads       - Lista de leads (já filtrada por período/instância)
+ * @param stages      - Todas as etapas do pipeline (ordem preservada)
+ * @param selectedIds - IDs das etapas escolhidas pelo usuário para exibição no funil
+ */
+export function computeFunnelDataFromStages(
+  leads: Lead[],
+  stages: PipelineStage[],
+  selectedIds: string[]
+): FunnelStep[] {
+  const selectedStages = stages.filter((s) => selectedIds.includes(s.id));
+  const normalize = (v?: string | null) =>
+    (v || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+  return selectedStages.map((stage) => {
+    const stageNameNorm = normalize(stage.name);
+
+    const count = leads.filter((lead) => {
+      if (lead.stage_id === stage.id) return true;
+
+      if (!lead.stage_id) {
+        const statusNorm = normalize(lead.status);
+        if (statusNorm === stageNameNorm) return true;
+      }
+
+      return false;
+    }).length;
+
+    return {
+      name: stage.name,
+      value: count,
+      color: stage.color,
+    };
+  });
 }
 
 export interface RevenueByVendor {

@@ -1,83 +1,205 @@
+import { useMemo, useState } from "react";
+import { Building2, Check, DollarSign, Filter, Target, TrendingUp, Users } from "lucide-react";
+
 import { useLeads } from "@/hooks/useLeads";
 import { useInstances } from "@/hooks/useInstances";
+import { usePipelineStages } from "@/hooks/usePipelineStages";
+import { useAuth } from "@/contexts/AuthContext";
 import { useApp } from "@/context/AppContext";
 import { KPICard } from "@/components/KPICard";
 import { LineChart } from "@/components/charts/LineChart";
 import { BarChart } from "@/components/charts/BarChart";
 import { FunnelChart } from "@/components/charts/FunnelChart";
 import { RevenueByVendorChart } from "@/components/charts/RevenueByVendorChart";
-import { TrendingUp, Users, DollarSign, Target, Building2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/material-ui-dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useState, useMemo } from "react";
-// Removemos imports manuais de data-fns que causavam o erro (isAfter, etc)
-// Importamos a função utilitária segura:
+import { cn } from "@/lib/utils";
 import { filterLeadsByPeriod } from "@/lib/utils/filters";
-import { 
-  groupLeadsByDay, 
-  groupLeadsByOrigin, 
-  computeFunnelData, 
-  groupRevenueByVendor 
+import {
+  computeFunnelDataFromStages,
+  groupLeadsByDay,
+  groupLeadsByOrigin,
+  groupRevenueByVendor,
 } from "@/lib/utils/metrics";
-import { Lead } from "@/types"; // Garantindo a tipagem
+import { Lead, PipelineStage } from "@/types";
+
+const MAX_FUNNEL_STAGES = 5;
+
+function getEffectiveFunnelStages(stages: PipelineStage[]) {
+  const selectedStages = stages.filter((stage) => stage.is_funnel_stage);
+
+  if (selectedStages.length > 0 && selectedStages.length <= MAX_FUNNEL_STAGES) {
+    return selectedStages;
+  }
+
+  return stages.slice(0, MAX_FUNNEL_STAGES);
+}
 
 export default function Dashboard() {
   const { leads, loading } = useLeads({ enableRealtime: false });
+  const { stages, toggleFunnelStage } = usePipelineStages();
   const { instances, loading: instancesLoading } = useInstances();
+  const { userRole } = useAuth();
   const { ui, setPeriodFilter } = useApp();
   const [selectedInstance, setSelectedInstance] = useState<string>("todas");
+  const isAdmin = userRole === "ADMIN";
 
-  // PASSO 1: Normalizar/Converter os leads PRIMEIRO.
-  // Isso garante que todo o resto do código trabalhe com dados limpos e tipados.
   const normalizedLeads = useMemo(() => {
-    return leads.map(l => ({
-      ...l,
-      // Mapeamento para garantir compatibilidade com a interface Lead e Utils
-      nome: l.lead_name || 'Sem nome',
-      cidade: l.last_city || '',
-      email: l.email || '',
-      telefone: l.contact_phone || '',
-      origem: l.source || 'Desconhecido',
-      conexao: (l.connection_level || 'Média') as "Baixa" | "Média" | "Alta",
-      valor: l.value || 0,
-      dataCriacao: l.created_at, // O utilitário filters.ts espera dataCriacao
-      responsavel: l.owner_name || 'Sem responsável',
-      observacoes: ''
-    })) as unknown as Lead[]; // Casting para garantir compatibilidade com filters.ts
+    return leads.map((lead) => ({
+      ...lead,
+      nome: lead.lead_name || "Sem nome",
+      cidade: lead.last_city || "",
+      email: lead.email || "",
+      telefone: lead.contact_phone || "",
+      origem: lead.source || "Desconhecido",
+      conexao: (lead.connection_level || "Media") as any,
+      valor: lead.value || 0,
+      dataCriacao: lead.created_at,
+      responsavel: lead.owner_name || "Sem responsável",
+      observacoes: "",
+    })) as unknown as Lead[];
   }, [leads]);
-  
-  // PASSO 2: Filtrar por período usando a função utilitária SEGURA.
-  // A função filterLeadsByPeriod em filters.ts usa comparações que não crasham a aplicação.
-  const periodFilteredLeads = useMemo(() => {
-    return filterLeadsByPeriod(normalizedLeads, ui.periodFilter, ui.customRange);
-  }, [normalizedLeads, ui.periodFilter, ui.customRange]);
-  
-  // PASSO 3: Filtrar por instância (agora operando sobre os dados já filtrados por data)
+
+  const periodFilteredLeads = useMemo(
+    () => filterLeadsByPeriod(normalizedLeads, ui.periodFilter, ui.customRange),
+    [normalizedLeads, ui.periodFilter, ui.customRange]
+  );
+
   const filteredLeads = useMemo(() => {
     if (selectedInstance === "todas") return periodFilteredLeads;
-    // Filtrar por instance_name do lead (que vem da view v_lead_details)
-    return periodFilteredLeads.filter(lead => {
+
+    return periodFilteredLeads.filter((lead) => {
       const leadInstanceName = (lead as any).instance_name;
       return leadInstanceName === selectedInstance;
     });
   }, [periodFilteredLeads, selectedInstance]);
-  
-  // Compute KPIs
+
+  const selectedFunnelStages = useMemo(() => getEffectiveFunnelStages(stages), [stages]);
+  const selectedFunnelStageIds = useMemo(
+    () => selectedFunnelStages.map((stage) => stage.id),
+    [selectedFunnelStages]
+  );
+
+  const handleFunnelStageToggle = async (stageId: string, nextEnabled: boolean) => {
+    if (!isAdmin) return;
+    await toggleFunnelStage(stageId, nextEnabled);
+  };
+
   const kpis = useMemo(() => {
     const totalLeads = filteredLeads.length;
-    const negociosGanhos = filteredLeads.filter(l => l.status === "Fechado").length;
+    const negociosGanhos = filteredLeads.filter((lead) => lead.status === "Fechado").length;
     const valorTotal = filteredLeads
-      .filter(l => l.status === "Fechado")
-      .reduce((sum, l) => sum + (l.valor || 0), 0); // Note: l.valor já existe pois normalizamos antes
+      .filter((lead) => lead.status === "Fechado")
+      .reduce((sum, lead) => sum + (lead.valor || 0), 0);
     const taxaConversao = totalLeads > 0 ? (negociosGanhos / totalLeads) * 100 : 0;
-    
+
     return { totalLeads, negociosGanhos, valorTotal, taxaConversao };
   }, [filteredLeads]);
 
-  // Métricas para os gráficos
   const dailyData = useMemo(() => groupLeadsByDay(filteredLeads as any), [filteredLeads]);
   const originData = useMemo(() => groupLeadsByOrigin(filteredLeads as any), [filteredLeads]);
-  const funnelData = useMemo(() => computeFunnelData(filteredLeads as any), [filteredLeads]);
+  const funnelData = useMemo(() => {
+    if (!stages.length || selectedFunnelStageIds.length === 0) {
+      return [];
+    }
+
+    return computeFunnelDataFromStages(filteredLeads as any, stages, selectedFunnelStageIds);
+  }, [filteredLeads, selectedFunnelStageIds, stages]);
   const revenueByVendor = useMemo(() => groupRevenueByVendor(filteredLeads as any), [filteredLeads]);
+
+  const funnelHeaderAction = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Selecionar etapas do funil"
+          className="group inline-flex h-11 w-11 items-center justify-center rounded-[18px] border border-white/10 bg-[rgba(5,8,14,0.34)] text-white/75 shadow-[0_10px_30px_rgba(0,0,0,0.16)] backdrop-blur-xl transition-all duration-200 hover:border-white/15 hover:bg-[rgba(8,12,18,0.46)] hover:text-white/90"
+        >
+          <Filter className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent
+        align="end"
+        sideOffset={10}
+        className="w-[360px] overflow-hidden rounded-[28px] p-0"
+      >
+        <div className="border-b border-white/8 px-5 pb-4 pt-5">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold tracking-tight text-white">Etapas do funil</p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-white/65">
+              {selectedFunnelStageIds.length}/{MAX_FUNNEL_STAGES}
+            </span>
+          </div>
+        </div>
+
+        <DropdownMenuLabel className="px-5 pb-2 pt-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
+          Pipeline
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator className="mx-4 my-0 h-px bg-white/8" />
+
+        <div className="max-h-80 overflow-y-auto px-2 py-2">
+          {stages.length === 0 ? (
+            <p className="px-4 py-5 text-xs text-white/55">Nenhuma etapa do pipeline encontrada.</p>
+          ) : (
+            stages.map((stage) => {
+              const isChecked = selectedFunnelStageIds.includes(stage.id);
+
+              return (
+                <DropdownMenuItem
+                  key={stage.id}
+                  disabled={!isAdmin}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    void handleFunnelStageToggle(stage.id, !isChecked);
+                  }}
+                  className={cn(
+                    "mb-1.5 rounded-[22px] border border-white/[0.06] px-0 py-0 text-white/85",
+                    "focus:bg-transparent focus:text-white",
+                    !isAdmin && "cursor-default",
+                    isChecked
+                      ? "bg-white/[0.08]"
+                      : "bg-transparent hover:bg-white/[0.04]"
+                  )}
+                >
+                  <div className="flex w-full items-center justify-between gap-4 px-4 py-3">
+                    <p className="min-w-0 truncate text-[13px] font-semibold text-white">{stage.name}</p>
+
+                    <span
+                      className={cn(
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-all",
+                        isChecked
+                          ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white shadow-[0_0_18px_rgba(229,57,58,0.24)]"
+                          : "border-white/12 bg-white/[0.02] text-transparent"
+                      )}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              );
+            })
+          )}
+        </div>
+
+        <DropdownMenuSeparator className="mx-4 my-0 h-px bg-white/8" />
+        {!isAdmin ? (
+          <div className="px-5 py-4 text-xs text-white/50">
+            Somente usuários ADMIN podem editar o filtro do funil.
+          </div>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   if (loading) {
     return (
@@ -90,20 +212,18 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold">Dashboard</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Visão geral do desempenho de vendas
-          </p>
+          <p className="text-muted-foreground mt-1 text-sm">Visão geral do desempenho de vendas</p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <Select value={selectedInstance} onValueChange={setSelectedInstance} disabled={instancesLoading}>
             <SelectTrigger className="w-full sm:w-[210px]">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 <Building2 className="w-4 h-4" />
-                <div className="flex-1 min-w-0">
+                <div className="min-w-0 flex-1">
                   <SelectValue className="truncate block" placeholder="Todas as instâncias" />
                 </div>
               </div>
@@ -118,12 +238,10 @@ export default function Dashboard() {
             </SelectContent>
           </Select>
 
-          {/* O seletor de período atualiza o contexto global 'ui.periodFilter', 
-              que dispara o recálculo do useMemo 'periodFilteredLeads' acima */}
           <Select value={ui.periodFilter} onValueChange={(value: any) => setPeriodFilter(value)}>
             <SelectTrigger className="w-full sm:w-[180px]">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                <div className="flex-1 min-w-0">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <div className="min-w-0 flex-1">
                   <SelectValue className="truncate block" />
                 </div>
               </div>
@@ -145,18 +263,8 @@ export default function Dashboard() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0">
-        <KPICard
-          title="Total de Leads"
-          value={kpis.totalLeads}
-          icon={Users}
-          subtitle="leads no período"
-        />
-        <KPICard
-          title="Negócios Ganhos"
-          value={kpis.negociosGanhos}
-          icon={Target}
-          subtitle="vendas fechadas"
-        />
+        <KPICard title="Total de Leads" value={kpis.totalLeads} icon={Users} subtitle="leads no periodo" />
+        <KPICard title="Negócios Ganhos" value={kpis.negociosGanhos} icon={Target} subtitle="vendas fechadas" />
         <KPICard
           title="Receita Total"
           value={
@@ -177,18 +285,22 @@ export default function Dashboard() {
           title="Taxa de Conversão"
           value={`${kpis.taxaConversao.toFixed(1)}%`}
           icon={TrendingUp}
-          subtitle="leads → vendas"
+          subtitle="leads para vendas"
         />
       </div>
 
-      {/* Gráficos */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <LineChart data={dailyData} title="Evolução de Leads" />
         <BarChart data={originData} title="Leads por Origem" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <FunnelChart data={funnelData} title="Funil de Vendas" />
+        <FunnelChart
+          data={funnelData}
+          title="Funil de Vendas"
+          headerAction={funnelHeaderAction}
+          totalLeads={filteredLeads.length}
+        />
         <RevenueByVendorChart data={revenueByVendor} title="Receita por Vendedor" />
       </div>
     </div>
