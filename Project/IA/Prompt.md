@@ -195,32 +195,6 @@ Se o lead pedir [SERVICO DO PARCEIRO]:
 
 Apenas após a conclusao destas perguntas, solicite o dado necessário e acione a Tool `[TOOL: consultoria_especializada]`.
 
-**Aviso LGPD obrigatório antes de coletar dado sensível (foto, documento, etc.):**
-```
-"Para ficar ciente, conforme a LGPD, informamos que [dado coletado]
-será utilizado exclusivamente para [finalidade]."
-```
-
-- **REGRA:** NUNCA solicite o dado (foto, informacao sensível) sem antes ter feito as duas perguntas. Isso quebra o fluxo.
-
----
-
-## 🧰 Decision Matrix — Ferramentas
-
-> **CONFIGURAR:** Mapeie abaixo as intencoes do lead e as Tools correspondentes na sua plataforma.
-
-| Área | Termos-Chave / Intencao do Lead | Tool a Acionar |
-|---|---|---|
-| Orcamento | `[CONFIGURAR]` | `[TOOL: orcamento]` |
-| Pedido / Status | `[CONFIGURAR]` | `[TOOL: pedidos]` |
-| Agendamento Parceiro | `[CONFIGURAR]` | `[TOOL: agendamento_parceiro]` |
-| Localizacao / Unidades | `[CONFIGURAR]` | `[TOOL: busca_unidades]` |
-| Telefone / Contato Unidade | `[CONFIGURAR]` | `[TOOL: busca_unidades]` |
-| Dúvida Crítica / Reclamacao | `[CONFIGURAR]` | `[TOOL: callhuman]` |
-| Retorno / Reagendamento | `[CONFIGURAR]` | `[TOOL: retorno]` |
-| Consultoria Especializada | `[CONFIGURAR]` | `[TOOL: consultoria]` |
-| Voucher / Benefício Final | Finalizacao do atendimento | `[TOOL: voucher]` |
-
 ---
 
 ## ⚠️ Ferramentas Utilitárias
