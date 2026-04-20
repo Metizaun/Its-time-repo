@@ -9,6 +9,8 @@ export interface AutomationFunnel {
   trigger_stage_id: string;
   instance_name: string;
   is_active: boolean;
+  humanized_dispatch_enabled: boolean;
+  dispatch_limit_per_hour: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -58,6 +60,8 @@ interface FunnelPayload {
   trigger_stage_id: string;
   instance_name: string;
   is_active: boolean;
+  humanized_dispatch_enabled: boolean;
+  dispatch_limit_per_hour: number;
 }
 
 interface StepPayload {

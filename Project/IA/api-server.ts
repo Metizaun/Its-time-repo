@@ -128,6 +128,34 @@ app.post(
   })
 );
 
+app.get(
+  "/api/chat/leads/:leadId/ai-state",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const leadId = getSingleParam(req.params.leadId);
+    const result = await manager.getLeadAiState(req.authContext!, leadId);
+    res.json(result);
+  })
+);
+
+app.put(
+  "/api/chat/leads/:leadId/ai-state",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (typeof req.body.enabled !== "boolean") {
+      throw new HttpError(400, "Campo enabled e obrigatorio");
+    }
+
+    const leadId = getSingleParam(req.params.leadId);
+    const result = await manager.updateLeadAiState(
+      req.authContext!,
+      leadId,
+      req.body.enabled
+    );
+    res.json(result);
+  })
+);
+
 app.post(
   "/api/instances",
   authMiddleware,

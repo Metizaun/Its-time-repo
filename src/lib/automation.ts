@@ -51,6 +51,8 @@ export interface AutomationJourney {
   trigger_stage_id: string;
   instance_name: string;
   is_active: boolean;
+  humanized_dispatch_enabled: boolean;
+  dispatch_limit_per_hour: number;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -90,6 +92,7 @@ export interface AutomationExecution {
   cancelled_at: string | null;
   status: "pending" | "processing" | "sent" | "failed" | "cancelled";
   rendered_message: string | null;
+  dispatch_meta: JsonLike | null;
   phone_snapshot: string | null;
   instance_snapshot: string | null;
   lead_name_snapshot: string | null;
@@ -106,6 +109,14 @@ export interface AutomationExecution {
   created_at: string;
   updated_at: string;
 }
+
+export type JsonLike =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: JsonLike | undefined }
+  | JsonLike[];
 
 export interface AutomationEnrollment {
   id: string;

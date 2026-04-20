@@ -66,6 +66,8 @@ type JourneyFormState = {
   trigger_stage_id: string;
   instance_name: string;
   is_active: boolean;
+  humanized_dispatch_enabled: boolean;
+  dispatch_limit_per_hour: number;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: "stage_entered_at" | "last_outbound" | "last_inbound";
@@ -154,6 +156,8 @@ function buildInitialJourneyForm(params: {
       trigger_stage_id: defaultStageId,
       instance_name: params.preselectedInstanceName || "",
       is_active: true,
+      humanized_dispatch_enabled: false,
+      dispatch_limit_per_hour: 40,
       entry_rule: createDefaultEntryRule(defaultStageId),
       exit_rule: createDefaultExitRule(),
       anchor_event: "stage_entered_at",
@@ -169,6 +173,8 @@ function buildInitialJourneyForm(params: {
     trigger_stage_id: params.journey.trigger_stage_id,
     instance_name: params.journey.instance_name,
     is_active: params.journey.is_active,
+    humanized_dispatch_enabled: params.journey.humanized_dispatch_enabled,
+    dispatch_limit_per_hour: params.journey.dispatch_limit_per_hour || 40,
     entry_rule: normalizeRuleNode(params.journey.entry_rule, createDefaultEntryRule(params.journey.trigger_stage_id)),
     exit_rule: normalizeRuleNode(params.journey.exit_rule, createDefaultExitRule()),
     anchor_event: params.journey.anchor_event,
@@ -401,6 +407,11 @@ export function AutomationMessageModal({
       return;
     }
 
+    if (!Number.isInteger(journeyForm.dispatch_limit_per_hour) || journeyForm.dispatch_limit_per_hour < 1) {
+      toast.error("Informe um valor valido em Limite de disparos");
+      return;
+    }
+
     try {
       setSavingJourney(true);
 
@@ -409,6 +420,8 @@ export function AutomationMessageModal({
         trigger_stage_id: journeyForm.trigger_stage_id,
         instance_name: journeyForm.instance_name,
         is_active: journeyForm.is_active,
+        humanized_dispatch_enabled: journeyForm.humanized_dispatch_enabled,
+        dispatch_limit_per_hour: journeyForm.dispatch_limit_per_hour,
         entry_rule: normalizeRuleNode(journeyForm.entry_rule, createDefaultEntryRule(journeyForm.trigger_stage_id)),
         exit_rule: normalizeRuleNode(journeyForm.exit_rule, createDefaultExitRule()),
         anchor_event: journeyForm.anchor_event,
@@ -590,7 +603,7 @@ export function AutomationMessageModal({
             <RecipePicker onSelect={applyRecipe} />
           ) : (
             <div className="space-y-6">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px_220px_160px]">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px_180px]">
                 <div className="space-y-2">
                   <Label htmlFor="journey-name">Nome da automacao</Label>
                   <Input
@@ -648,6 +661,44 @@ export function AutomationMessageModal({
                     checked={journeyForm.is_active}
                     onCheckedChange={(checked) => handleJourneyFieldChange("is_active", checked)}
                   />
+                </div>
+
+                <div className="flex items-center justify-between rounded-2xl border px-4 py-3">
+                  <div>
+                    <p className="font-medium">Envio humanizado</p>
+                    <p className="text-xs text-muted-foreground">
+                      Espalha disparos por instancia com fila, limite e janela comercial.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={journeyForm.humanized_dispatch_enabled}
+                    onCheckedChange={(checked) =>
+                      handleJourneyFieldChange("humanized_dispatch_enabled", checked)
+                    }
+                  />
+                </div>
+
+                <div className="rounded-2xl border px-4 py-3">
+                  <Label htmlFor="dispatch-limit" className="font-medium">
+                    Limite de disparos
+                  </Label>
+                  <Input
+                    id="dispatch-limit"
+                    type="number"
+                    min={1}
+                    step={1}
+                    className="mt-3"
+                    value={journeyForm.dispatch_limit_per_hour}
+                    onChange={(event) =>
+                      handleJourneyFieldChange(
+                        "dispatch_limit_per_hour",
+                        Math.max(0, Math.trunc(Number(event.target.value || 0)))
+                      )
+                    }
+                  />
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Valor padrao 40. A regra interna continua sendo aplicada por hora.
+                  </p>
                 </div>
               </div>
 

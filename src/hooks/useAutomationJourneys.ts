@@ -21,6 +21,8 @@ export interface AutomationJourneyPayload {
   trigger_stage_id: string;
   instance_name: string;
   is_active: boolean;
+  humanized_dispatch_enabled: boolean;
+  dispatch_limit_per_hour: number;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -42,6 +44,8 @@ function normalizeJourney(row: Record<string, unknown>) {
     ...(row as Omit<AutomationJourney, "entry_rule" | "exit_rule" | "anchor_event" | "reentry_mode">),
     entry_rule: normalizeRuleNode(row.entry_rule),
     exit_rule: normalizeRuleNode(row.exit_rule),
+    humanized_dispatch_enabled: Boolean(row.humanized_dispatch_enabled),
+    dispatch_limit_per_hour: Number(row.dispatch_limit_per_hour ?? 40),
     anchor_event: (row.anchor_event as AutomationAnchorEvent | null) ?? "stage_entered_at",
     reentry_mode: (row.reentry_mode as AutomationReentryMode | null) ?? "restart_on_match",
     reply_target_stage_id: (row.reply_target_stage_id as string | null) ?? null,

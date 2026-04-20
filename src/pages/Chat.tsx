@@ -8,11 +8,14 @@ import { ChatInput } from "@/components/chat/ChatInput";
 import { MessageSquare } from "lucide-react";
 import EditLeadModal from "@/components/modals/EditLeadModal";
 import { useApp } from "@/context/AppContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useLeadAiControl } from "@/hooks/useLeadAiControl";
 import { useSearchParams } from "react-router-dom";
 
 export default function Chat() {
   const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
   const { ui } = useApp();
+  const { userRole } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
@@ -50,6 +53,12 @@ export default function Chat() {
 
   // Encontra o objeto Lead baseado no ID selecionado dentro da lista filtrada
   const selectedLead = filteredLeads.find((l) => l.id === selectedLeadId);
+  const isAdmin = userRole === "ADMIN";
+  const leadAiControl = useLeadAiControl(
+    selectedLead?.id ?? null,
+    selectedLead?.instance_name ?? null,
+    { enabled: isAdmin }
+  );
 
   return (
     <div className="h-[calc(100vh-4rem)] flex">
@@ -65,11 +74,24 @@ export default function Chat() {
       <div className="flex-1 flex flex-col">
         {selectedLead ? (
           <>
-            {/* Header simples: apenas Avatar + Nome */}
-            <ChatHeader 
+            <ChatHeader
+              key={selectedLead.id}
               leadName={selectedLead.lead_name}
               instanceName={selectedLead.instance_name}
               onOpenDetails={() => setEditingLead(selectedLead)}
+              aiControl={
+                isAdmin
+                  ? {
+                      enabled: leadAiControl.enabled,
+                      available: leadAiControl.available,
+                      reason: leadAiControl.reason,
+                      bypassingGlobalInactive: leadAiControl.bypassingGlobalInactive,
+                      loading: leadAiControl.loading,
+                      saving: leadAiControl.saving,
+                      onToggle: leadAiControl.toggle,
+                    }
+                  : null
+              }
             />
             
             <MessageList messages={messages} loading={messagesLoading} />

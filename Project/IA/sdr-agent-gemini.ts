@@ -124,6 +124,37 @@ type AiRunRow = {
   input_snapshot: JsonRecord;
 };
 
+type LeadAiReason = "active" | "manual_off" | "auto_pause" | "global_inactive" | "no_agent";
+
+type LeadAiStateRow = {
+  agent_id: string;
+  lead_id: string;
+  freeze_until: string | null;
+  last_processed_message_at: string | null;
+  last_inbound_at: string | null;
+  last_ai_reply_at: string | null;
+  last_classified_stage_id: string | null;
+  last_confidence: number | null;
+  status: "active" | "paused" | "error";
+  manual_ai_enabled: boolean | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type LeadAiControlState = {
+  success: true;
+  leadId: string;
+  instanceName: string | null;
+  agentId: string | null;
+  available: boolean;
+  enabled: boolean;
+  agentIsActive: boolean;
+  manualAiEnabled: boolean | null;
+  pausedUntil: string | null;
+  bypassingGlobalInactive: boolean;
+  reason: LeadAiReason;
+};
+
 type ParsedWebhookMessage = {
   instanceName: string;
   fromMe: boolean;
@@ -716,12 +747,18 @@ export class AgentManager {
     return data as AgentRow;
   }
 
-  private async getActiveAgentByInstance(instanceName: string) {
-    const { data, error } = await this.serviceClient
+  private async getAnyAgentByInstance(instanceName: string, acesId?: number) {
+    let query = this.serviceClient
       .from("ai_agents")
       .select("*")
-      .eq("instance_name", instanceName)
-      .eq("is_active", true)
+      .eq("instance_name", instanceName);
+
+    if (typeof acesId === "number") {
+      query = query.eq("aces_id", acesId);
+    }
+
+    const { data, error } = await query
+      .order("is_active", { ascending: false })
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1040,6 +1077,47 @@ export class AgentManager {
     }
 
     return { success: true };
+  }
+
+  async getLeadAiState(context: AuthContext, leadId: string) {
+    this.ensureAdmin(context);
+
+    const lead = await this.loadLeadById(leadId, context.acesId);
+    const agent =
+      lead.instancia?.trim()
+        ? await this.getAnyAgentByInstance(lead.instancia, context.acesId)
+        : null;
+
+    return this.resolveLeadAiState(lead.id, agent, lead.instancia);
+  }
+
+  async updateLeadAiState(context: AuthContext, leadId: string, enabled: boolean) {
+    this.ensureAdmin(context);
+
+    const lead = await this.loadLeadById(leadId, context.acesId);
+    const instanceName = lead.instancia?.trim() ?? "";
+    if (!instanceName) {
+      throw new HttpError(409, "Sem agente configurado para esta instancia");
+    }
+
+    const agent = await this.getAnyAgentByInstance(instanceName, context.acesId);
+    if (!agent) {
+      throw new HttpError(409, "Sem agente configurado para esta instancia");
+    }
+
+    await this.upsertLeadState(agent.id, lead.id, enabled
+      ? {
+          manual_ai_enabled: agent.is_active ? null : true,
+          freeze_until: null,
+          status: "active",
+        }
+      : {
+          manual_ai_enabled: false,
+          freeze_until: null,
+          status: "paused",
+        });
+
+    return this.resolveLeadAiState(lead.id, agent, instanceName);
   }
 
   async listInstances(context: AuthContext) {
@@ -1597,7 +1675,90 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel consultar o estado da IA para o lead", error);
     }
 
-    return (data as JsonRecord | null) ?? null;
+    return (data as LeadAiStateRow | null) ?? null;
+  }
+
+  private async resolveLeadAiState(
+    leadId: string,
+    agent: AgentRow | null,
+    instanceName?: string | null
+  ): Promise<LeadAiControlState> {
+    if (!agent) {
+      return {
+        success: true,
+        leadId,
+        instanceName: instanceName ?? null,
+        agentId: null,
+        available: false,
+        enabled: false,
+        agentIsActive: false,
+        manualAiEnabled: null,
+        pausedUntil: null,
+        bypassingGlobalInactive: false,
+        reason: "no_agent",
+      };
+    }
+
+    const leadState = await this.getLeadState(agent.id, leadId);
+    const manualAiEnabled =
+      typeof leadState?.manual_ai_enabled === "boolean"
+        ? leadState.manual_ai_enabled
+        : null;
+    const pausedUntil = asString(leadState?.freeze_until);
+    const isPaused = Boolean(pausedUntil && new Date(pausedUntil) > new Date());
+    const baseState = {
+      success: true as const,
+      leadId,
+      instanceName: instanceName ?? agent.instance_name ?? null,
+      agentId: agent.id,
+      available: true,
+      agentIsActive: agent.is_active,
+      manualAiEnabled,
+      pausedUntil,
+    };
+
+    if (manualAiEnabled === false) {
+      return {
+        ...baseState,
+        enabled: false,
+        bypassingGlobalInactive: false,
+        reason: "manual_off",
+      };
+    }
+
+    if (isPaused) {
+      return {
+        ...baseState,
+        enabled: false,
+        bypassingGlobalInactive: false,
+        reason: "auto_pause",
+      };
+    }
+
+    if (manualAiEnabled === true) {
+      return {
+        ...baseState,
+        enabled: true,
+        bypassingGlobalInactive: !agent.is_active,
+        reason: "active",
+      };
+    }
+
+    if (agent.is_active) {
+      return {
+        ...baseState,
+        enabled: true,
+        bypassingGlobalInactive: false,
+        reason: "active",
+      };
+    }
+
+    return {
+      ...baseState,
+      enabled: false,
+      bypassingGlobalInactive: false,
+      reason: "global_inactive",
+    };
   }
 
   private async upsertLeadState(agentId: string, leadId: string, payload: JsonRecord) {
@@ -1989,9 +2150,8 @@ export class AgentManager {
     }
 
     const lead = await this.loadLeadById(leadId, agent.aces_id);
-    const leadState = await this.getLeadState(agent.id, lead.id);
-    const freezeUntil = asString(leadState?.freeze_until);
-    if (freezeUntil && new Date(freezeUntil) > new Date()) {
+    const aiState = await this.resolveLeadAiState(lead.id, agent, lead.instancia);
+    if (!aiState.enabled) {
       return;
     }
 
@@ -2079,7 +2239,7 @@ export class AgentManager {
       return { ignored: true, reason: "Instancia nao cadastrada no CRM" };
     }
 
-    const agent = await this.getActiveAgentByInstance(message.instanceName);
+    const agent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
     const normalizedContent = await this.normalizeInboundContent(message, agent);
     const duplicated = await this.dedupeIncomingMessage(message.messageId);
     if (duplicated) {
@@ -2110,8 +2270,9 @@ export class AgentManager {
         sentAt: message.sentAt,
       });
 
+      const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
       let freezeUntil: string | null = null;
-      if (agent) {
+      if (agent && aiState.reason !== "manual_off") {
         freezeUntil = await this.freezeLead(agent, lead.id);
         await this.createRun({
           agentId: agent.id,
@@ -2131,8 +2292,17 @@ export class AgentManager {
         success: true,
         leadId: lead.id,
         agentId: agent?.id ?? null,
-        capturedOnly: !agent,
-        reason: agent ? "Handoff humano detectado" : "Mensagem humana registrada sem agente ativo",
+        capturedOnly: !aiState.enabled,
+        reason:
+          freezeUntil
+            ? "Handoff humano detectado"
+            : aiState.reason === "manual_off"
+              ? "Mensagem humana registrada com IA desligada para este lead"
+              : aiState.reason === "global_inactive"
+                ? "Mensagem humana registrada com agente global desligado"
+                : aiState.reason === "no_agent"
+                  ? "Mensagem humana registrada sem agente configurado"
+                  : "Mensagem humana registrada",
         freezeUntil,
       };
     }
@@ -2154,14 +2324,23 @@ export class AgentManager {
       sentAt: message.sentAt,
     });
 
-    if (!agent) {
+    const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
+
+    if (!agent || !aiState.enabled) {
       return {
         success: true,
         leadId: lead.id,
         queued: false,
-        agentId: null,
+        agentId: agent?.id ?? null,
         capturedOnly: true,
-        reason: "Mensagem registrada sem agente ativo",
+        reason:
+          aiState.reason === "manual_off"
+            ? "Mensagem registrada com IA desligada para este lead"
+            : aiState.reason === "auto_pause"
+              ? "Mensagem registrada com IA pausada por atendimento humano"
+              : aiState.reason === "global_inactive"
+                ? "Mensagem registrada com agente global desligado"
+                : "Mensagem registrada sem agente configurado",
       };
     }
 
@@ -2181,6 +2360,7 @@ export class AgentManager {
       leadId: lead.id,
       queued: true,
       agentId: agent.id,
+      bypassingGlobalInactive: aiState.bypassingGlobalInactive,
     };
   }
 
@@ -2196,12 +2376,14 @@ export class AgentManager {
       throw new HttpError(400, "Nenhuma instancia de envio foi definida para este lead");
     }
 
-    const activeAgent = await this.getActiveAgentByInstance(instanceName);
-    const effectiveAgent = activeAgent && activeAgent.aces_id === context.acesId ? activeAgent : null;
+    const configuredAgent = await this.getAnyAgentByInstance(instanceName, context.acesId);
+    const aiState = configuredAgent
+      ? await this.resolveLeadAiState(lead.id, configuredAgent, instanceName)
+      : null;
 
     await this.sendReplyBlocks({
       agent:
-        effectiveAgent ??
+        configuredAgent ??
         ({
           id: "manual",
           aces_id: context.acesId,
@@ -2224,10 +2406,10 @@ export class AgentManager {
       createdBy: context.crmUserId,
     });
 
-    if (effectiveAgent) {
-      const freezeUntil = await this.freezeLead(effectiveAgent, lead.id);
+    if (configuredAgent && aiState?.reason !== "manual_off") {
+      const freezeUntil = await this.freezeLead(configuredAgent, lead.id);
       await this.createRun({
-        agentId: effectiveAgent.id,
+        agentId: configuredAgent.id,
         leadId: lead.id,
         inputSnapshot: {
           source: "manual_send",

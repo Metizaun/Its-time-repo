@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 
 type ClaimedExecution = {
   execution_id: string;
+  enrollment_id?: string | null;
   lead_id: string;
   aces_id: number;
   instance_name: string | null;
@@ -19,10 +20,17 @@ type ClaimedExecution = {
   attempt_count: number;
 };
 
+type HumanizedDispatchPlan = {
+  action: "send_now" | "defer";
+  humanized: boolean;
+  dispatch_at: string;
+  dispatch_meta: Record<string, unknown> | null;
+};
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`Variável de ambiente obrigatória ausente: ${name}`);
+    throw new Error(`Variavel de ambiente obrigatoria ausente: ${name}`);
   }
   return value;
 }
@@ -33,6 +41,19 @@ function normalizePhone(phone: string) {
 
 function renderTemplate(template: string, vars: Record<string, string>) {
   return template.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? `{${key}}`);
+}
+
+function renderExecutionMessage(execution: ClaimedExecution) {
+  if (!execution.template) {
+    throw new Error("Template do disparo nao encontrado");
+  }
+
+  return renderTemplate(execution.template, {
+    nome: execution.lead_name ?? "",
+    telefone: execution.phone ?? "",
+    cidade: execution.city ?? "",
+    status: execution.lead_status ?? "",
+  });
 }
 
 async function sendWhatsAppMessage(
@@ -63,7 +84,7 @@ export function startAutomationWorker() {
   const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   const evolutionApiUrl = requireEnv("EVOLUTION_API_URL");
   const evolutionApiKey = requireEnv("EVOLUTION_API_KEY");
-  const pollMs = Number(process.env.AUTOMATION_WORKER_POLL_MS ?? 300000);
+  const pollMs = Number(process.env.AUTOMATION_WORKER_POLL_MS ?? 15000);
   const batchSize = Number(process.env.AUTOMATION_WORKER_BATCH_SIZE ?? 50);
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -73,27 +94,7 @@ export function startAutomationWorker() {
 
   let running = false;
 
-  async function markExecution(
-    executionId: string,
-    payload: Partial<{
-      status: "sent" | "failed";
-      sent_at: string;
-      rendered_message: string;
-      last_error: string | null;
-      attempt_count: number;
-    }>
-  ) {
-    const { error } = await supabase
-      .from("automation_executions")
-      .update(payload)
-      .eq("id", executionId);
-
-    if (error) {
-      throw error;
-    }
-  }
-
-  async function saveOutboundMessage(execution: ClaimedExecution, content: string) {
+  async function saveOutboundMessage(execution: ClaimedExecution, content: string, sentAt: string) {
     const { error } = await supabase.from("message_history").insert({
       lead_id: execution.lead_id,
       aces_id: execution.aces_id,
@@ -102,7 +103,78 @@ export function startAutomationWorker() {
       source_type: "automation",
       conversation_id: `automation:${execution.execution_id}`,
       instance: execution.instance_name,
-      sent_at: new Date().toISOString(),
+      sent_at: sentAt,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function deferExecution(
+    executionId: string,
+    dispatchAt: string,
+    dispatchMeta: Record<string, unknown> | null
+  ) {
+    const { error } = await supabase
+      .from("automation_executions")
+      .update({
+        status: "pending",
+        scheduled_at: dispatchAt,
+        dispatch_meta: dispatchMeta,
+        claimed_by: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", executionId)
+      .eq("status", "processing");
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function planHumanizedDispatch(
+    executionId: string,
+    messageLength: number
+  ): Promise<HumanizedDispatchPlan> {
+    const { data, error } = await supabase.rpc("rpc_plan_humanized_dispatch", {
+      p_execution_id: executionId,
+      p_message_length: messageLength,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    return data as HumanizedDispatchPlan;
+  }
+
+  async function markDispatchSent(executionId: string, sentAt: string) {
+    const { error } = await supabase.rpc("rpc_mark_humanized_dispatch_sent", {
+      p_execution_id: executionId,
+      p_sent_at: sentAt,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function completeExecution(executionId: string, renderedMessage: string) {
+    const { error } = await supabase.rpc("rpc_complete_automation_execution", {
+      p_execution_id: executionId,
+      p_rendered_message: renderedMessage,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function failExecution(executionId: string, reason: string) {
+    const { error } = await supabase.rpc("rpc_fail_automation_execution", {
+      p_execution_id: executionId,
+      p_error: reason,
     });
 
     if (error) {
@@ -118,75 +190,72 @@ export function startAutomationWorker() {
     running = true;
 
     try {
-      const { data, error } = await supabase.rpc("rpc_claim_due_automation_executions", {
-        p_limit: batchSize,
-      });
+      while (true) {
+        const { data, error } = await supabase.rpc("rpc_claim_due_automation_executions_v2", {
+          p_limit: batchSize,
+        });
 
-      if (error) {
-        throw error;
-      }
+        if (error) {
+          throw error;
+        }
 
-      const executions = (data as ClaimedExecution[]) || [];
-      if (executions.length === 0) {
-        return;
-      }
+        const executions = (data as ClaimedExecution[]) || [];
+        if (executions.length === 0) {
+          return;
+        }
 
-      for (const execution of executions) {
-        const nextAttempt = execution.attempt_count + 1;
+        for (const execution of executions) {
+          try {
+            if (!execution.instance_name) {
+              throw new Error("Instancia de envio nao definida");
+            }
 
-        try {
-          if (!execution.template) {
-            throw new Error("Template do disparo não encontrado");
+            if (!execution.phone) {
+              throw new Error("Lead sem telefone para disparo");
+            }
+
+            const renderedMessage = renderExecutionMessage(execution);
+            const dispatchPlan = await planHumanizedDispatch(
+              execution.execution_id,
+              renderedMessage.length
+            );
+
+            if (dispatchPlan.action === "defer") {
+              await deferExecution(
+                execution.execution_id,
+                dispatchPlan.dispatch_at,
+                dispatchPlan.dispatch_meta
+              );
+              continue;
+            }
+
+            await sendWhatsAppMessage(
+              evolutionApiUrl,
+              evolutionApiKey,
+              execution.instance_name,
+              execution.phone,
+              renderedMessage
+            );
+
+            const sentAt = new Date().toISOString();
+            await saveOutboundMessage(execution, renderedMessage, sentAt);
+            await markDispatchSent(execution.execution_id, sentAt);
+            await completeExecution(execution.execution_id, renderedMessage);
+          } catch (error: any) {
+            console.error(`[automation-worker] Falha ao processar execucao ${execution.execution_id}:`, error);
+
+            try {
+              await failExecution(
+                execution.execution_id,
+                error instanceof Error ? error.message : "Falha no disparo automatizado"
+              );
+            } catch (failError) {
+              console.error(
+                `[automation-worker] Falha adicional ao marcar execucao ${execution.execution_id} como erro:`,
+                failError
+              );
+            }
           }
-
-          if (!execution.instance_name) {
-            throw new Error("Instância de envio não definida");
-          }
-
-          if (!execution.phone) {
-            throw new Error("Lead sem telefone para disparo");
-          }
-
-          const renderedMessage = renderTemplate(execution.template, {
-            nome: execution.lead_name ?? "",
-            telefone: execution.phone ?? "",
-            cidade: execution.city ?? "",
-            status: execution.lead_status ?? "",
-          });
-
-          await sendWhatsAppMessage(
-            evolutionApiUrl,
-            evolutionApiKey,
-            execution.instance_name,
-            execution.phone,
-            renderedMessage
-          );
-
-          await saveOutboundMessage(execution, renderedMessage);
-
-          await markExecution(execution.execution_id, {
-            status: "sent",
-            sent_at: new Date().toISOString(),
-            rendered_message: renderedMessage,
-            last_error: null,
-            attempt_count: nextAttempt,
-          });
-        } catch (error: any) {
-          console.error(`[automation-worker] Falha ao processar execução ${execution.execution_id}:`, error);
-
-          await markExecution(execution.execution_id, {
-            status: "failed",
-            rendered_message: execution.template
-              ? renderTemplate(execution.template, {
-                  nome: execution.lead_name ?? "",
-                  telefone: execution.phone ?? "",
-                  cidade: execution.city ?? "",
-                  status: execution.lead_status ?? "",
-                })
-              : undefined,
-            last_error: error.message,
-            attempt_count: nextAttempt,
-          });
         }
       }
     } finally {
@@ -201,11 +270,11 @@ export function startAutomationWorker() {
   }, pollMs);
 
   processDueExecutions().catch((error) => {
-    console.error("[automation-worker] Erro na execução inicial:", error);
+    console.error("[automation-worker] Erro na execucao inicial:", error);
   });
 
   console.log(
-    `[automation-worker] Rodando a cada ${pollMs}ms com lote máximo de ${batchSize} execuções`
+    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes`
   );
 
   return {
