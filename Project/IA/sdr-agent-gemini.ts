@@ -337,6 +337,50 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
   return value;
 }
 
+function extractExternalErrorMessage(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
+  const record = asRecord(value);
+  const directMessage =
+    asString(record.message) ??
+    asString(record.error) ??
+    asString(record.reason) ??
+    asString(asRecord(record.response).message) ??
+    asString(asRecord(record.response).error);
+
+  if (directMessage) {
+    return directMessage;
+  }
+
+  if (Object.keys(record).length > 0) {
+    try {
+      return JSON.stringify(record);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function buildExternalRequestError(error: unknown, fallbackMessage: string) {
+  if (!axios.isAxiosError(error)) {
+    return new HttpError(500, fallbackMessage, error);
+  }
+
+  const statusCode = error.response?.status;
+  const responsePayload = error.response?.data ?? null;
+  const payloadMessage = extractExternalErrorMessage(responsePayload);
+  const message = payloadMessage ? `${fallbackMessage}: ${payloadMessage}` : fallbackMessage;
+  const resolvedStatus =
+    typeof statusCode === "number" && statusCode >= 400 && statusCode < 500 ? statusCode : 502;
+
+  return new HttpError(resolvedStatus, message, responsePayload ?? error.message);
+}
+
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
@@ -1959,17 +2003,26 @@ export class AgentManager {
     const cleanPhone = normalizePhone(phone);
     const number = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
 
-    await axios.post(
-      `${this.config.evolutionApiUrl}/message/sendText/${instanceName}`,
-      {
-        number: `${number}@s.whatsapp.net`,
-        text: content,
-        delay: 1000,
-      },
-      {
-        headers: { apikey: this.config.evolutionApiKey },
-      }
-    );
+    try {
+      await axios.post(
+        `${this.config.evolutionApiUrl}/message/sendText/${instanceName}`,
+        {
+          number: `${number}@s.whatsapp.net`,
+          text: content,
+          delay: 1000,
+        },
+        {
+          headers: { apikey: this.config.evolutionApiKey },
+        }
+      );
+    } catch (error) {
+      console.error("[crm-ai] Falha ao enviar mensagem na Evolution:", {
+        instanceName,
+        phone: `${number}@s.whatsapp.net`,
+        error: axios.isAxiosError(error) ? error.response?.data ?? error.message : error,
+      });
+      throw buildExternalRequestError(error, "Falha ao enviar mensagem na Evolution");
+    }
   }
 
   private async sendReplyBlocks(params: {

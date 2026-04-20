@@ -56,6 +56,34 @@ function renderExecutionMessage(execution: ClaimedExecution) {
   });
 }
 
+function extractExternalErrorMessage(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    const directMessage =
+      (typeof record.message === "string" && record.message.trim()) ||
+      (typeof record.error === "string" && record.error.trim()) ||
+      (typeof record.reason === "string" && record.reason.trim()) ||
+      null;
+
+    if (directMessage) {
+      return directMessage;
+    }
+
+    try {
+      return JSON.stringify(record);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 async function sendWhatsAppMessage(
   evolutionApiUrl: string,
   evolutionApiKey: string,
@@ -66,17 +94,25 @@ async function sendWhatsAppMessage(
   const cleanPhone = normalizePhone(phone);
   const finalNumber = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
 
-  await axios.post(
-    `${evolutionApiUrl}/message/sendText/${instanceName}`,
-    {
-      number: `${finalNumber}@s.whatsapp.net`,
-      text: message,
-      delay: 1000,
-    },
-    {
-      headers: { apikey: evolutionApiKey },
-    }
-  );
+  try {
+    await axios.post(
+      `${evolutionApiUrl}/message/sendText/${instanceName}`,
+      {
+        number: `${finalNumber}@s.whatsapp.net`,
+        text: message,
+        delay: 1000,
+      },
+      {
+        headers: { apikey: evolutionApiKey },
+      }
+    );
+  } catch (error) {
+    const payload = axios.isAxiosError(error) ? error.response?.data ?? error.message : error;
+    const payloadMessage = extractExternalErrorMessage(payload);
+    const messagePrefix = "Falha ao enviar mensagem na Evolution";
+
+    throw new Error(payloadMessage ? `${messagePrefix}: ${payloadMessage}` : messagePrefix);
+  }
 }
 
 export function startAutomationWorker() {

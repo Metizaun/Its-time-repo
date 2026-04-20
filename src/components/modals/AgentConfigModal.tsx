@@ -46,7 +46,7 @@ const PERSONALITY_LEVELS = [
   },
 ];
 
-const DEFAULT_MODEL = "gemini-2.0-flash";
+const DEFAULT_MODEL = "gemini-2.5-flash";
 
 interface AgentConfigModalProps {
   open: boolean;
