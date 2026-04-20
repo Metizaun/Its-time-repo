@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.env.*
+node_modules
+dist
+dist-ssr
+build
+coverage
+.next
+exemples
+implementation_plan.md
+DEPLOY_ENV_VPS.local.md
+Project/IA/node_modules
+Project/IA/dist
+Project/IA/tmp-*.log
+supabase/.branches

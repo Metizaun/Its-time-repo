@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  api:
+    image: ${BACKEND_IMAGE}
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_KEY: ${SUPABASE_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      REDIS_URL: ${REDIS_URL_FOR_CONTAINER}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET}
+      WEBHOOK_PUBLIC_BASE_URL: ${WEBHOOK_PUBLIC_BASE_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      PORT: ${API_PORT}
+      NODE_ENV: production
+      AUTOMATION_WORKER_ENABLED: ${AUTOMATION_WORKER_ENABLED}
+      AUTOMATION_WORKER_POLL_MS: ${AUTOMATION_WORKER_POLL_MS}
+      AUTOMATION_WORKER_BATCH_SIZE: ${AUTOMATION_WORKER_BATCH_SIZE}
+    networks:
+      - traefik-public
+    deploy:
+      replicas: ${BACKEND_REPLICAS}
+      placement:
+        constraints:
+          - node.hostname == ${SWARM_NODE_HOSTNAME}
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+        failure_action: rollback
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=${TRAEFIK_NETWORK}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.rule=Host(`${API_DOMAIN}`)"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.entrypoints=${TRAEFIK_ENTRYPOINTS}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.tls=true"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.service=${TRAEFIK_SERVICE_NAME}"
+        - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.server.port=${API_PORT}"
+        - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.passhostheader=true"
+
+networks:
+  traefik-public:
+    external: true
+    name: ${TRAEFIK_NETWORK}
