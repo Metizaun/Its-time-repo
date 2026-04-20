@@ -6,6 +6,7 @@ import {
   HttpError,
   type WebhookPayload,
 } from "./sdr-agent-gemini.js";
+import { assertRuntimeSchemaCompatibility } from "./schema-preflight.js";
 import { startAutomationWorker } from "./automation-worker.js";
 
 type AuthenticatedRequest = Request & {
@@ -422,13 +423,34 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const port = Number(process.env.PORT ?? 3000);
-app.listen(port, () => {
-  console.log(`[crm-ai-backend] Servidor rodando na porta ${port}`);
-});
+async function bootstrap() {
+  await assertRuntimeSchemaCompatibility({
+    supabaseUrl: requireEnv("SUPABASE_URL"),
+    supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  });
 
-if (process.env.AUTOMATION_WORKER_ENABLED === "true") {
-  startAutomationWorker();
+  app.listen(port, () => {
+    console.log(`[crm-ai-backend] Servidor rodando na porta ${port}`);
+  });
+
+  if (process.env.AUTOMATION_WORKER_ENABLED === "true") {
+    startAutomationWorker();
+  }
 }
+
+bootstrap().catch(async (error) => {
+  console.error(
+    error instanceof Error
+      ? error.message
+      : "[crm-ai-backend] Falha desconhecida ao inicializar o backend"
+  );
+  try {
+    await manager.dispose();
+  } catch (disposeError) {
+    console.error("[crm-ai-backend] Falha ao liberar recursos na inicializacao:", disposeError);
+  }
+  process.exit(1);
+});
 
 process.on("SIGINT", async () => {
   await manager.dispose();

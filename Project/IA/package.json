@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch api-server.ts",
     "automation:worker": "tsx automation-worker.ts",
+    "schema:check": "tsx schema-preflight.ts",
     "build": "tsc",
     "start": "node dist/api-server.js",
     "test": "jest",

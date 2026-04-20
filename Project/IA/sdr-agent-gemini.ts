@@ -366,6 +366,34 @@ function extractExternalErrorMessage(value: unknown): string | null {
   return null;
 }
 
+function extractSupabaseErrorMessage(value: unknown): string | null {
+  const record = asRecord(value);
+  const message = asString(record.message);
+  const details = asString(record.details);
+  const hint = asString(record.hint);
+  const code = asString(record.code);
+
+  const parts = [message, details, hint, code ? `code: ${code}` : null].filter(
+    (part): part is string => Boolean(part)
+  );
+
+  if (parts.length > 0) {
+    return parts.join(" | ");
+  }
+
+  return extractExternalErrorMessage(value);
+}
+
+function buildSupabaseOperationError(
+  error: unknown,
+  fallbackMessage: string,
+  statusCode = 500
+) {
+  const payloadMessage = extractSupabaseErrorMessage(error);
+  const message = payloadMessage ? `${fallbackMessage}: ${payloadMessage}` : fallbackMessage;
+  return new HttpError(statusCode, message, error);
+}
+
 function buildExternalRequestError(error: unknown, fallbackMessage: string) {
   if (!axios.isAxiosError(error)) {
     return new HttpError(500, fallbackMessage, error);
@@ -1817,7 +1845,16 @@ export class AgentManager {
     );
 
     if (error) {
-      throw new HttpError(500, "Nao foi possivel atualizar o estado da IA para o lead", error);
+      console.error("[crm-ai-backend] Falha ao atualizar ai_lead_state:", {
+        agentId,
+        leadId,
+        payload,
+        error,
+      });
+      throw buildSupabaseOperationError(
+        error,
+        "Nao foi possivel atualizar o estado da IA para o lead"
+      );
     }
   }
 

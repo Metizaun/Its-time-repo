@@ -25,6 +25,17 @@ Arquivos principais:
 - [scripts/setup-backend-vps.sh](C:/Users/lucas/Downloads/Meu%20projeto/Proejto/chat-query/scripts/setup-backend-vps.sh)
 - [scripts/deploy-backend-vps.sh](C:/Users/lucas/Downloads/Meu%20projeto/Proejto/chat-query/scripts/deploy-backend-vps.sh)
 
+Arquivos de migracao relevantes para o backend atual:
+- `supabase/migrations/20260418090000_add_automation_logic_engine_v2.sql`
+- `supabase/migrations/20260420110000_add_manual_ai_override_to_lead_state.sql`
+- `supabase/migrations/20260420130000_add_humanized_automation_dispatch.sql`
+
+Importante:
+- o deploy da VPS nao aplica migrations do Supabase
+- o banco do Supabase e externo ao Docker Swarm
+- o script de deploy agora valida o schema esperado antes de publicar a stack
+- se a validacao falhar, primeiro aplique as migrations pendentes no Supabase e so depois rode o deploy novamente
+
 ## 3. O que precisa existir na VPS
 
 - DNS de `api.itstime.pro` apontando para a VPS
@@ -99,9 +110,19 @@ Esse comando faz:
 - valida se o Swarm esta ativo
 - valida se a rede `lukas_net` existe
 - builda a imagem Docker do backend
+- valida se o schema atual do Supabase esta compativel com esta versao do backend
+- falha cedo se faltarem colunas ou RPCs esperadas
 - publica a stack no Swarm
 - registra a rota `api.itstime.pro` no Traefik
 - tenta validar `https://api.itstime.pro/health`
+
+Se o schema estiver atrasado, o deploy vai parar antes de publicar a stack. Nesse caso:
+1. abra o SQL Editor do Supabase
+2. aplique, nesta ordem:
+   - `20260418090000_add_automation_logic_engine_v2.sql`
+   - `20260420110000_add_manual_ai_override_to_lead_state.sql`
+   - `20260420130000_add_humanized_automation_dispatch.sql`
+3. rode novamente `bash scripts/setup-backend-vps.sh`
 
 ## 6. Se o nome da rede do Traefik mudar
 
@@ -142,6 +163,7 @@ bash scripts/deploy-backend-vps.sh
 O script:
 - faz `git pull` da `main` quando o repo tem `.git`
 - rebuilda a imagem com uma tag nova
+- valida o schema do Supabase dentro da imagem gerada
 - reaplica a stack no Swarm
 - espera o servico ficar saudavel
 
@@ -199,6 +221,7 @@ Resposta esperada:
 Se o deploy falhar:
 - rode `docker service ps itstime-api_api --no-trunc`
 - rode `docker service logs itstime-api_api --tail 100`
+- se a falha mencionar `schema-preflight`, faltam migrations no Supabase
 
 Se a URL publica nao responder:
 - confira o DNS de `api.itstime.pro`
@@ -209,6 +232,7 @@ Se o backend subir mas o frontend nao carregar dados:
 - confira `VITE_CRM_BACKEND_URL=https://api.itstime.pro` na Vercel
 - confira `CORS_ORIGINS=https://app.itstime.pro`
 - confira `https://api.itstime.pro/health`
+- confira se o deploy nao foi bloqueado pelo `schema-preflight`
 
 Se QR code ou mensagens falharem:
 - confira `EVOLUTION_API_URL=http://72.60.251.89:64970`

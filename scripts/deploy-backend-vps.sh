@@ -173,6 +173,14 @@ export SWARM_NODE_HOSTNAME
 log "Gerando imagem Docker $BACKEND_IMAGE"
 docker build -f "$API_DIR/Dockerfile" -t "$BACKEND_IMAGE" "$APP_DIR"
 
+log "Validando schema do Supabase antes do deploy"
+docker run --rm \
+  --env SUPABASE_URL \
+  --env SUPABASE_SERVICE_ROLE_KEY \
+  --entrypoint node \
+  "$BACKEND_IMAGE" \
+  dist/schema-preflight.js
+
 log "Publicando stack $STACK_NAME no Docker Swarm"
 docker stack deploy -c "$STACK_FILE" "$STACK_NAME"
 
