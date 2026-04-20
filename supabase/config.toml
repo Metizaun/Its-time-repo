@@ -6,7 +6,7 @@ extra_search_path = ["public", "extensions", "crm"]
 
 [auth]
 enabled = true
-site_url = "http://localhost:3000"
+site_url = "https://app.itstime.pro"
 additional_redirect_urls = []
 
 [auth.mfa]
