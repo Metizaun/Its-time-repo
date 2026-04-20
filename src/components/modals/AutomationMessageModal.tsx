@@ -780,7 +780,7 @@ export function AutomationMessageModal({
 
                       <div className="rounded-2xl border bg-background/60 px-4 py-3">
                         <Label htmlFor="dispatch-limit" className="font-medium">
-                          Limite de disparos
+                          Disparos por hora
                         </Label>
                         <Input
                           id="dispatch-limit"
