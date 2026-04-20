@@ -265,6 +265,35 @@ function asString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function asBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    if (value === 1) {
+      return true;
+    }
+
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "sim"].includes(normalized)) {
+      return true;
+    }
+
+    if (["false", "0", "no", "nao", "não"].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
 function normalizePhone(phone: string): string {
   const clean = phone.replace(/\D/g, "");
   if (clean.startsWith("55") && clean.length > 11) {
@@ -2323,6 +2352,10 @@ export class AgentManager {
       return { ignored: true, reason: `Evento ${event} ignorado` };
     }
 
+    if (this.isGroupWebhookPayload(payload)) {
+      return { ignored: true, reason: "Mensagem de grupo ignorada" };
+    }
+
     const message = this.parseWebhookPayload(payload);
     const instance = await this.findInstanceByName(message.instanceName);
     if (!instance) {
@@ -2522,6 +2555,44 @@ export class AgentManager {
 
     const provided = headerValue?.replace(/^Bearer\s+/i, "").trim();
     return provided === this.config.evolutionWebhookSecret;
+  }
+
+  private isGroupWebhookPayload(payload: WebhookPayload) {
+    const root = asRecord(payload);
+    const data = asRecord(root.data);
+    const key = asRecord(data.key);
+    const remoteJid =
+      asString(key.remoteJid) ?? asString(data.remoteJid) ?? asString(root.remoteJid);
+
+    const explicitGroupFlag = [
+      asBoolean(root.isGroup),
+      asBoolean(data.isGroup),
+      asBoolean(key.isGroup),
+      asBoolean(asRecord(root.chat).isGroup),
+      asBoolean(asRecord(data.chat).isGroup),
+      asBoolean(asRecord(root.sender).isGroup),
+      asBoolean(asRecord(data.sender).isGroup),
+    ].find((value): value is boolean => value !== null);
+
+    if (explicitGroupFlag !== undefined) {
+      return explicitGroupFlag;
+    }
+
+    if (remoteJid?.endsWith("@g.us")) {
+      return true;
+    }
+
+    const participant =
+      asString(key.participant) ??
+      asString(data.participant) ??
+      asString(root.participant) ??
+      asString(asRecord(data.sender).participant);
+
+    if (participant && remoteJid?.includes("-")) {
+      return true;
+    }
+
+    return false;
   }
 
   async dispose() {
