@@ -1740,7 +1740,7 @@ export class AgentManager {
     };
   }
 
-  private async normalizeInboundContent(message: ParsedWebhookMessage, agent: AgentRow) {
+  private async normalizeInboundContent(message: ParsedWebhookMessage, agent?: AgentRow | null) {
     if (message.content.trim()) {
       return message.content.trim();
     }
@@ -1758,7 +1758,7 @@ export class AgentManager {
       return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
     }
 
-    const model = this.getModel(agent.model);
+    const model = this.getModel(agent?.model?.trim() || "gemini-2.5-flash");
     const prompt =
       message.mediaKind === "audio"
         ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
@@ -2074,12 +2074,12 @@ export class AgentManager {
     }
 
     const message = this.parseWebhookPayload(payload);
-    const agent = await this.getActiveAgentByInstance(message.instanceName);
-
-    if (!agent) {
-      return { ignored: true, reason: "Nenhum agente ativo para a instancia informada" };
+    const instance = await this.findInstanceByName(message.instanceName);
+    if (!instance) {
+      return { ignored: true, reason: "Instancia nao cadastrada no CRM" };
     }
 
+    const agent = await this.getActiveAgentByInstance(message.instanceName);
     const normalizedContent = await this.normalizeInboundContent(message, agent);
     const duplicated = await this.dedupeIncomingMessage(message.messageId);
     if (duplicated) {
@@ -2092,14 +2092,16 @@ export class AgentManager {
         return { ignored: true, reason: "Echo de mensagem ja enviada pelo backend" };
       }
 
-      const lead = await this.findLeadByPhone(agent.aces_id, message.phone);
-      if (!lead) {
-        return { ignored: true, reason: "Mensagem fromMe sem lead relacionado" };
-      }
+      const lead = await this.findOrCreateLead(
+        instance.aces_id,
+        message.phone,
+        message.instanceName,
+        message.pushName
+      );
 
       await this.saveMessage({
         leadId: lead.id,
-        acesId: lead.aces_id,
+        acesId: instance.aces_id,
         content: normalizedContent,
         direction: "outbound",
         sourceType: "human",
@@ -2108,27 +2110,42 @@ export class AgentManager {
         sentAt: message.sentAt,
       });
 
-      const freezeUntil = await this.freezeLead(agent, lead.id);
-      await this.createRun({
-        agentId: agent.id,
-        leadId: lead.id,
-        inputSnapshot: {
-          reason: "manual_handoff_from_evolution",
-          payload: message.raw,
-        },
-        outputSnapshot: {
-          freeze_until: freezeUntil,
-        },
-        actionTaken: "manual_pause",
-      });
+      let freezeUntil: string | null = null;
+      if (agent) {
+        freezeUntil = await this.freezeLead(agent, lead.id);
+        await this.createRun({
+          agentId: agent.id,
+          leadId: lead.id,
+          inputSnapshot: {
+            reason: "manual_handoff_from_evolution",
+            payload: message.raw,
+          },
+          outputSnapshot: {
+            freeze_until: freezeUntil,
+          },
+          actionTaken: "manual_pause",
+        });
+      }
 
-      return { ignored: true, reason: "Handoff humano detectado", freezeUntil };
+      return {
+        success: true,
+        leadId: lead.id,
+        agentId: agent?.id ?? null,
+        capturedOnly: !agent,
+        reason: agent ? "Handoff humano detectado" : "Mensagem humana registrada sem agente ativo",
+        freezeUntil,
+      };
     }
 
-    const lead = await this.findOrCreateLead(agent.aces_id, message.phone, message.instanceName, message.pushName);
+    const lead = await this.findOrCreateLead(
+      instance.aces_id,
+      message.phone,
+      message.instanceName,
+      message.pushName
+    );
     const savedMessage = await this.saveMessage({
       leadId: lead.id,
-      acesId: lead.aces_id,
+      acesId: instance.aces_id,
       content: normalizedContent,
       direction: "inbound",
       sourceType: "lead",
@@ -2136,6 +2153,17 @@ export class AgentManager {
       conversationId: message.conversationId,
       sentAt: message.sentAt,
     });
+
+    if (!agent) {
+      return {
+        success: true,
+        leadId: lead.id,
+        queued: false,
+        agentId: null,
+        capturedOnly: true,
+        reason: "Mensagem registrada sem agente ativo",
+      };
+    }
 
     await this.upsertLeadState(agent.id, lead.id, {
       last_inbound_at: message.sentAt,
