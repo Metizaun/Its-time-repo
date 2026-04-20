@@ -34,7 +34,7 @@ Arquivos principais:
 
 No seu caso, o padrao esperado e:
 - rede Traefik: `lukas_net`
-- cert resolver do Traefik: `letsencrypt`
+- cert resolver do Traefik: `letsencryptresolver`
 - Redis Docker: `evolution_redis`
 
 ## 4. `.env.local` na raiz do projeto
@@ -112,7 +112,7 @@ cd /opt/chat-query
 TRAEFIK_NETWORK=nome-da-sua-rede bash scripts/setup-backend-vps.sh
 ```
 
-Se o nome do cert resolver nao for `letsencrypt`, rode assim:
+Se o nome do cert resolver nao for `letsencryptresolver`, rode assim:
 
 ```bash
 cd /opt/chat-query
@@ -203,7 +203,7 @@ Se o deploy falhar:
 Se a URL publica nao responder:
 - confira o DNS de `api.itstime.pro`
 - confira se o Traefik esta na rede `lukas_net`
-- confira se o cert resolver do Traefik se chama `letsencrypt`
+- confira se o cert resolver do Traefik se chama `letsencryptresolver`
 
 Se o backend subir mas o frontend nao carregar dados:
 - confira `VITE_CRM_BACKEND_URL=https://api.itstime.pro` na Vercel
