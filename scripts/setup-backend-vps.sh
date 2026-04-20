@@ -70,6 +70,7 @@ apt update
 apt install -y nginx curl git
 curl -fsSL "https://deb.nodesource.com/setup_${NPM_NODE_MAJOR}.x" | bash -
 apt install -y nodejs
+systemctl enable nginx >/dev/null 2>&1 || true
 
 if ! command -v pm2 >/dev/null 2>&1; then
   npm install -g pm2
@@ -90,7 +91,11 @@ write_nginx_config
 ln -sfn /etc/nginx/sites-available/itstime-api /etc/nginx/sites-enabled/itstime-api
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
-systemctl reload nginx
+if systemctl is-active --quiet nginx; then
+  systemctl reload nginx
+else
+  systemctl start nginx
+fi
 
 log "Executando deploy do backend como $APP_OWNER"
 sudo -u "$APP_OWNER" APP_DIR="$APP_DIR" API_PORT="$API_PORT" PM2_APP_NAME="$PM2_APP_NAME" \
