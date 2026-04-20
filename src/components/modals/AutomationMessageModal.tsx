@@ -603,7 +603,7 @@ export function AutomationMessageModal({
             <RecipePicker onSelect={applyRecipe} />
           ) : (
             <div className="space-y-6">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px_180px]">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
                 <div className="space-y-2">
                   <Label htmlFor="journey-name">Nome da automacao</Label>
                   <Input
@@ -652,53 +652,23 @@ export function AutomationMessageModal({
                   </Select>
                 </div>
 
-                <div className="flex items-center justify-between rounded-2xl border px-4 py-3">
-                  <div>
-                    <p className="font-medium">Automacao ativa</p>
-                    <p className="text-xs text-muted-foreground">Ative quando quiser colocar essa jornada em uso.</p>
-                  </div>
-                  <Switch
-                    checked={journeyForm.is_active}
-                    onCheckedChange={(checked) => handleJourneyFieldChange("is_active", checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between rounded-2xl border px-4 py-3">
-                  <div>
-                    <p className="font-medium">Envio humanizado</p>
-                    <p className="text-xs text-muted-foreground">
-                      Espalha disparos por instancia com fila, limite e janela comercial.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={journeyForm.humanized_dispatch_enabled}
-                    onCheckedChange={(checked) =>
-                      handleJourneyFieldChange("humanized_dispatch_enabled", checked)
-                    }
-                  />
-                </div>
-
-                <div className="rounded-2xl border px-4 py-3">
-                  <Label htmlFor="dispatch-limit" className="font-medium">
-                    Limite de disparos
-                  </Label>
-                  <Input
-                    id="dispatch-limit"
-                    type="number"
-                    min={1}
-                    step={1}
-                    className="mt-3"
-                    value={journeyForm.dispatch_limit_per_hour}
-                    onChange={(event) =>
-                      handleJourneyFieldChange(
-                        "dispatch_limit_per_hour",
-                        Math.max(0, Math.trunc(Number(event.target.value || 0)))
-                      )
-                    }
-                  />
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Valor padrao 40. A regra interna continua sendo aplicada por hora.
-                  </p>
+                <div className="space-y-2">
+                  <Label>Mover para</Label>
+                  <Select
+                    value={journeyForm.reply_target_stage_id || atendimentoStageId}
+                    onValueChange={(value) => handleJourneyFieldChange("reply_target_stage_id", value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione a etapa" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {stages.map((stage) => (
+                        <SelectItem key={stage.id} value={stage.id}>
+                          {stage.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -788,35 +758,44 @@ export function AutomationMessageModal({
                     tags={tags}
                   />
 
-                  <div className="space-y-3 rounded-[24px] border bg-card/70 p-5">
-                    <div className="space-y-1">
-                      <h3 className="font-semibold">Quando o lead responder</h3>
-                      <p className="text-sm text-muted-foreground">
-                        A automacao sera encerrada automaticamente e o lead vai para a etapa escolhida.
-                      </p>
-                    </div>
-
-                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
-                      <div className="rounded-2xl border bg-background/60 px-4 py-3 text-sm text-muted-foreground">
-                        Destino padrao: Atendimento. So altere isso se quiser mandar a resposta para outra etapa.
+                  <div className="rounded-[24px] border bg-card/70 p-5">
+                    <div className="grid gap-4 lg:grid-cols-3">
+                      <div className="flex items-center justify-between rounded-2xl border bg-background/60 px-4 py-3">
+                        <p className="font-medium">Automacao ativa</p>
+                        <Switch
+                          checked={journeyForm.is_active}
+                          onCheckedChange={(checked) => handleJourneyFieldChange("is_active", checked)}
+                        />
                       </div>
-                      <div className="space-y-2">
-                        <Label>Mover para</Label>
-                        <Select
-                          value={journeyForm.reply_target_stage_id || atendimentoStageId}
-                          onValueChange={(value) => handleJourneyFieldChange("reply_target_stage_id", value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Selecione a etapa" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {stages.map((stage) => (
-                              <SelectItem key={stage.id} value={stage.id}>
-                                {stage.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+
+                      <div className="flex items-center justify-between rounded-2xl border bg-background/60 px-4 py-3">
+                        <p className="font-medium">Envio humanizado</p>
+                        <Switch
+                          checked={journeyForm.humanized_dispatch_enabled}
+                          onCheckedChange={(checked) =>
+                            handleJourneyFieldChange("humanized_dispatch_enabled", checked)
+                          }
+                        />
+                      </div>
+
+                      <div className="rounded-2xl border bg-background/60 px-4 py-3">
+                        <Label htmlFor="dispatch-limit" className="font-medium">
+                          Limite de disparos
+                        </Label>
+                        <Input
+                          id="dispatch-limit"
+                          type="number"
+                          min={1}
+                          step={1}
+                          className="mt-3"
+                          value={journeyForm.dispatch_limit_per_hour}
+                          onChange={(event) =>
+                            handleJourneyFieldChange(
+                              "dispatch_limit_per_hour",
+                              Math.max(0, Math.trunc(Number(event.target.value || 0)))
+                            )
+                          }
+                        />
                       </div>
                     </div>
                   </div>

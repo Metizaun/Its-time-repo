@@ -23,6 +23,10 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
   const previewSteps = orderedSteps.slice(0, 2);
   const remainingSteps = Math.max(orderedSteps.length - previewSteps.length, 0);
   const lookups = buildAutomationLookupMaps({ stages });
+  const entrySummary = summarizeRuleNode(journey.entry_rule, lookups);
+  const firstStepSummary = orderedSteps[0]
+    ? `Primeira: ${formatDelayLabel(orderedSteps[0].delay_minutes, journey.anchor_event)}`
+    : null;
 
   return (
     <button
@@ -34,25 +38,33 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-semibold leading-tight">{journey.name}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold leading-tight" title={journey.name}>
+            {journey.name}
+          </p>
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
             <Badge variant={journey.is_active ? "default" : "outline"}>
               {journey.is_active ? "Ativa" : "Inativa"}
             </Badge>
-            <Badge variant="outline">{journey.instance_name}</Badge>
+            <Badge variant="outline" className="min-w-0 max-w-full overflow-hidden">
+              <span className="truncate" title={journey.instance_name}>
+                {journey.instance_name}
+              </span>
+            </Badge>
           </div>
         </div>
 
-        <div className="rounded-full border p-2 text-muted-foreground transition-colors group-hover:text-foreground">
+        <div className="shrink-0 rounded-full border p-2 text-muted-foreground transition-colors group-hover:text-foreground">
           <PenSquare className="h-4 w-4" />
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border bg-background/70 px-3 py-3 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1">
-          <Sparkles className="h-3.5 w-3.5" />
-          Comeca quando: {summarizeRuleNode(journey.entry_rule, lookups)}
+      <div className="mt-4 overflow-hidden rounded-xl border bg-background/70 px-3 py-3 text-xs text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-1">
+          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate" title={`Comeca quando: ${entrySummary}`}>
+            Comeca quando: {entrySummary}
+          </span>
         </span>
       </div>
 
@@ -62,28 +74,39 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
             Nenhuma mensagem configurada ainda.
           </div>
         ) : (
-          previewSteps.map((step) => (
-            <div key={step.id} className="rounded-xl border bg-background/80 px-3 py-3">
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="text-[11px]">
-                  {formatDelayLabel(step.delay_minutes, journey.anchor_event)}
-                </Badge>
-                {!step.is_active && (
-                  <Badge variant="outline" className="text-[11px]">
-                    Pausada
+          previewSteps.map((step) => {
+            const delayLabel = formatDelayLabel(step.delay_minutes, journey.anchor_event);
+            const messagePreview = getMessagePreview(step.message_template);
+
+            return (
+              <div key={step.id} className="overflow-hidden rounded-xl border bg-background/80 px-3 py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Badge variant="secondary" className="min-w-0 max-w-full overflow-hidden text-[11px]">
+                    <span className="truncate" title={delayLabel}>
+                      {delayLabel}
+                    </span>
                   </Badge>
-                )}
+                  {!step.is_active && (
+                    <Badge variant="outline" className="shrink-0 text-[11px]">
+                      Pausada
+                    </Badge>
+                  )}
+                </div>
+                <p className="mt-2 truncate text-sm leading-relaxed text-muted-foreground" title={messagePreview}>
+                  {messagePreview}
+                </p>
               </div>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {getMessagePreview(step.message_template)}
-              </p>
-            </div>
-          ))
+            );
+          })
         )}
 
-        <div className="flex items-center justify-between px-1 text-xs font-medium text-muted-foreground">
-          <span>{orderedSteps.length} mensagens</span>
-          {orderedSteps[0] ? <span>Primeira: {formatDelayLabel(orderedSteps[0].delay_minutes, journey.anchor_event)}</span> : null}
+        <div className="flex min-w-0 items-center justify-between gap-3 px-1 text-xs font-medium text-muted-foreground">
+          <span className="shrink-0">{orderedSteps.length} mensagens</span>
+          {firstStepSummary ? (
+            <span className="min-w-0 truncate text-right" title={firstStepSummary}>
+              {firstStepSummary}
+            </span>
+          ) : null}
         </div>
 
         {remainingSteps > 0 && (
