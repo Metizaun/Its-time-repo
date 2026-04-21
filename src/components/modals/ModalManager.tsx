@@ -3,6 +3,7 @@ import { LeadModal } from "./LeadModal";
 import { LeadDrawer } from "@/components/drawers/LeadDrawer";
 import { StageModal } from "@/components/kanban/StageModal";
 import { DeleteStageModal } from "@/components/kanban/DeleteStageModal";
+import { LeadCsvImportModal } from "./LeadCsvImportModal";
 
 export function ModalManager() {
   const { ui, closeModal } = useApp();
@@ -11,6 +12,10 @@ export function ModalManager() {
     <>
       {ui.modal?.type === "createLead" && (
         <LeadModal isOpen={true} onClose={closeModal} />
+      )}
+
+      {ui.modal?.type === "IMPORT_LEADS_CSV" && (
+        <LeadCsvImportModal open={true} onClose={closeModal} />
       )}
 
       {ui.modal?.type === "STAGE_FORM" && (

@@ -1,7 +1,7 @@
 import { useLeads } from "@/hooks/useLeads";
 import { useApp } from "@/context/AppContext";
 import { Button } from "@/components/ui/button";
-import { Plus, Download, Pencil } from "lucide-react";
+import { Plus, Download, Pencil, Upload } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { useEffect, useMemo, useState } from "react";
 import EditLeadModal from "@/components/modals/EditLeadModal";
 import { Lead } from "@/hooks/useLeads";
-import { exportToCSV, exportGenericToCSV } from "@/lib/utils/export";
+import { downloadLeadImportTemplate, exportToCSV, exportGenericToCSV } from "@/lib/utils/export";
 import { supabase } from "@/integrations/supabase/client";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -30,6 +30,10 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Erro inesperado";
+}
 
 export default function Leads() {
   const { leads, loading, refetch } = useLeads({ enableRealtime: false });
@@ -159,9 +163,9 @@ export default function Leads() {
         exportToCSV(filteredLeads, `leads-export-${format(new Date(), "dd-MM-yyyy")}.csv`);
         toast.success("Download iniciado!");
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      toast.error(error.message || "Erro ao exportar CSV");
+      toast.error(getErrorMessage(error) || "Erro ao exportar CSV");
     }
   };
 
@@ -186,7 +190,7 @@ export default function Leads() {
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="outline">
@@ -219,6 +223,14 @@ export default function Leads() {
           <Button variant="outline" onClick={handleExport}>
             <Download className="w-4 h-4 mr-2" />
             Exportar CSV
+          </Button>
+          <Button variant="outline" onClick={() => downloadLeadImportTemplate()}>
+            <Download className="w-4 h-4 mr-2" />
+            Baixar modelo CSV
+          </Button>
+          <Button variant="outline" onClick={() => openModal("IMPORT_LEADS_CSV")}>
+            <Upload className="w-4 h-4 mr-2" />
+            Importar CSV
           </Button>
           <Button onClick={() => openModal("createLead")}>
             <Plus className="w-4 h-4 mr-2" />

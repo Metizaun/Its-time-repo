@@ -27,6 +27,21 @@ import {
 import type { PipelineStage } from "@/types";
 
 const USER_CATALOG = getUserVisiblePredicateCatalog();
+const HIDDEN_EXTRA_CONDITION_PREDICATES = new Set<AutomationRulePredicate["predicate"]>(["stage_is", "stage_in"]);
+const AVAILABLE_USER_CATALOG = USER_CATALOG.filter(
+  (item) => !HIDDEN_EXTRA_CONDITION_PREDICATES.has(item.predicate),
+);
+const DEFAULT_CONDITION_PREDICATE = AVAILABLE_USER_CATALOG[0]?.predicate ?? "days_in_stage_gte";
+
+function getConditionCatalog(predicate: AutomationRulePredicate["predicate"]) {
+  if (!HIDDEN_EXTRA_CONDITION_PREDICATES.has(predicate)) {
+    return AVAILABLE_USER_CATALOG;
+  }
+
+  const currentDefinition = USER_CATALOG.find((item) => item.predicate === predicate);
+
+  return currentDefinition ? [currentDefinition, ...AVAILABLE_USER_CATALOG] : AVAILABLE_USER_CATALOG;
+}
 
 function MultiStageSelector({
   value,
@@ -316,7 +331,7 @@ export function AutomationConditionComposer({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {USER_CATALOG.map((item) => (
+                          {getConditionCatalog(condition.predicate).map((item) => (
                             <SelectItem key={item.predicate} value={item.predicate}>
                               {item.label}
                             </SelectItem>
@@ -362,7 +377,7 @@ export function AutomationConditionComposer({
 
       <Button
         variant="outline"
-        onClick={() => handleConditionsChange([...visibleConditions, createPredicate("stage_is")])}
+        onClick={() => handleConditionsChange([...visibleConditions, createPredicate(DEFAULT_CONDITION_PREDICATE)])}
       >
         <Plus className="h-4 w-4" />
         Adicionar condicao

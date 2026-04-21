@@ -57,7 +57,7 @@ export function exportToCSV(leads: Lead[], filename: string = "leads.csv") {
  * Função genérica para exportar qualquer array de objetos para CSV
  * Detecta automaticamente as colunas baseado nas chaves do primeiro objeto
  */
-export function exportGenericToCSV(data: Record<string, any>[], filename: string = "export.csv") {
+export function exportGenericToCSV(data: Record<string, unknown>[], filename: string = "export.csv") {
   if (!data || data.length === 0) {
     throw new Error("Não há dados para exportar");
   }
@@ -81,6 +81,24 @@ export function exportGenericToCSV(data: Record<string, any>[], filename: string
   const csvContent = [headers.join(","), ...rows.map((row) => row.join(","))].join("\n");
 
   // Adiciona BOM para o Excel reconhecer acentos corretamente
+  const bom = "\uFEFF";
+  const blob = new Blob([bom + csvContent], { type: "text/csv;charset=utf-8;" });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export function downloadLeadImportTemplate(filename: string = "modelo-importacao-leads.csv") {
+  const headers = ["nome", "telefone", "email", "cidade", "observacoes"];
+  const csvContent = headers.join(",") + "\n";
+
   const bom = "\uFEFF";
   const blob = new Blob([bom + csvContent], { type: "text/csv;charset=utf-8;" });
 
