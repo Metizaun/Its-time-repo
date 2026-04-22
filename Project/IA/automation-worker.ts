@@ -20,12 +20,36 @@ type ClaimedExecution = {
   attempt_count: number;
 };
 
+type BrasilApiHoliday = {
+  date?: string;
+  name?: string;
+  type?: string;
+};
+
 type HumanizedDispatchPlan = {
   action: "send_now" | "defer";
   humanized: boolean;
   dispatch_at: string;
   dispatch_meta: Record<string, unknown> | null;
 };
+
+const HOLIDAY_COUNTRY_CODE = "BR";
+const PLACEHOLDER_PATTERN = /(\{|\[)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(\}|\])/g;
+const UNRESOLVED_PLACEHOLDER_PATTERN = /[\{\[]\s*[a-zA-Z_][a-zA-Z0-9_]*\s*[\}\]]/;
+const GENERIC_NAME_PATTERNS = [
+  /^clinica de estetica$/i,
+  /^clinica odontologica$/i,
+  /^consultorio odontologico$/i,
+  /^limpeza de pele\b/i,
+  /^dentista\b/i,
+  /^implante\b/i,
+  /^advogado\b/i,
+  /^oftalmologista\b/i,
+  /^centro$/i,
+  /^curitiba$/i,
+  /^sao paulo$/i,
+  /^sao jose dos pinhais$/i,
+];
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -39,8 +63,88 @@ function normalizePhone(phone: string) {
   return phone.replace(/\D/g, "");
 }
 
+function normalizeTextForComparison(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function cleanBusinessNamePart(value: string) {
+  return value
+    .replace(/[\u0000-\u001f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.])/g, "$1")
+    .replace(/^[\s.,;:|\-\u2013\u2014]+|[\s.,;:|\-\u2013\u2014]+$/gu, "")
+    .trim();
+}
+
+function stripBusinessNameDetails(value: string) {
+  let normalized = cleanBusinessNamePart(value);
+  const commaParts = normalized.split(/\s*,\s+/).map(cleanBusinessNamePart).filter(Boolean);
+  if (commaParts.length > 1) {
+    normalized = commaParts[0];
+  }
+
+  const withoutTrailingParentheses = cleanBusinessNamePart(
+    normalized.replace(/\s*\([^)]{3,80}\)\s*$/g, "")
+  );
+  if (withoutTrailingParentheses && withoutTrailingParentheses.split(/\s+/).length >= 2) {
+    normalized = withoutTrailingParentheses;
+  }
+
+  return normalized.replace(/\.$/, "");
+}
+
+function isGenericBusinessNamePart(value: string) {
+  const normalized = normalizeTextForComparison(value).replace(/[.,]/g, "").trim();
+  if (!normalized || normalized === ".") {
+    return true;
+  }
+
+  return GENERIC_NAME_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function normalizeBusinessName(rawName: string | null) {
+  const text = cleanBusinessNamePart(rawName ?? "");
+  if (!text || text === ".") {
+    return "sua empresa";
+  }
+
+  const strongParts = text
+    .split(/\s+(?:\||-|\u2013|\u2014|\u2022|\u00b7)\s+/u)
+    .map(stripBusinessNameDetails)
+    .filter(Boolean);
+  const candidates = strongParts.length > 1 ? strongParts : [stripBusinessNameDetails(text)];
+  const firstSpecificCandidate = candidates.find((candidate) => !isGenericBusinessNamePart(candidate));
+  const chosenCandidate = firstSpecificCandidate || candidates[0] || text;
+  const normalizedCandidate = cleanBusinessNamePart(chosenCandidate).slice(0, 80);
+
+  return normalizedCandidate || "sua empresa";
+}
+
+function normalizeTemplateKey(key: string) {
+  const normalized = normalizeTextForComparison(key.trim());
+
+  if (normalized === "empresa" || normalized === "empresas") {
+    return "empresa";
+  }
+
+  return normalized;
+}
+
 function renderTemplate(template: string, vars: Record<string, string>) {
-  return template.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? `{${key}}`);
+  return template.replace(PLACEHOLDER_PATTERN, (placeholder, _open, key: string) => {
+    const normalizedKey = normalizeTemplateKey(key);
+    return vars[normalizedKey] ?? placeholder;
+  });
+}
+
+function assertNoUnresolvedPlaceholders(message: string) {
+  const unresolved = message.match(UNRESOLVED_PLACEHOLDER_PATTERN)?.[0];
+  if (unresolved) {
+    throw new Error(`Mensagem contem variavel nao resolvida: ${unresolved}`);
+  }
 }
 
 function renderExecutionMessage(execution: ClaimedExecution) {
@@ -48,12 +152,16 @@ function renderExecutionMessage(execution: ClaimedExecution) {
     throw new Error("Template do disparo nao encontrado");
   }
 
-  return renderTemplate(execution.template, {
+  const renderedMessage = renderTemplate(execution.template, {
+    empresa: normalizeBusinessName(execution.lead_name),
     nome: execution.lead_name ?? "",
     telefone: execution.phone ?? "",
     cidade: execution.city ?? "",
     status: execution.lead_status ?? "",
   });
+
+  assertNoUnresolvedPlaceholders(renderedMessage);
+  return renderedMessage;
 }
 
 function extractExternalErrorMessage(value: unknown): string | null {
@@ -129,6 +237,122 @@ export function startAutomationWorker() {
   });
 
   let running = false;
+  const holidayCacheYears = new Set<number>();
+
+  function getFallbackNationalHolidays(year: number): BrasilApiHoliday[] {
+    const easter = getEasterDate(year);
+    const goodFriday = new Date(Date.UTC(year, easter.getUTCMonth(), easter.getUTCDate() - 2));
+
+    return [
+      { date: `${year}-01-01`, name: "Confraternizacao Universal", type: "national" },
+      { date: goodFriday.toISOString().slice(0, 10), name: "Paixao de Cristo", type: "national" },
+      { date: `${year}-04-21`, name: "Tiradentes", type: "national" },
+      { date: `${year}-05-01`, name: "Dia do Trabalho", type: "national" },
+      { date: `${year}-09-07`, name: "Independencia do Brasil", type: "national" },
+      { date: `${year}-10-12`, name: "Nossa Senhora Aparecida", type: "national" },
+      { date: `${year}-11-02`, name: "Finados", type: "national" },
+      { date: `${year}-11-15`, name: "Proclamacao da Republica", type: "national" },
+      { date: `${year}-11-20`, name: "Consciencia Negra", type: "national" },
+      { date: `${year}-12-25`, name: "Natal", type: "national" },
+    ];
+  }
+
+  function getEasterDate(year: number) {
+    const a = year % 19;
+    const b = Math.floor(year / 100);
+    const c = year % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31) - 1;
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+
+    return new Date(Date.UTC(year, month, day));
+  }
+
+  async function fetchNationalHolidays(year: number) {
+    try {
+      const response = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as unknown;
+      if (!Array.isArray(payload)) {
+        throw new Error("Resposta invalida da BrasilAPI");
+      }
+
+      return payload as BrasilApiHoliday[];
+    } catch (error) {
+      console.warn(
+        `[automation-worker] Falha ao consultar BrasilAPI para feriados de ${year}; usando fallback local:`,
+        error instanceof Error ? error.message : error
+      );
+      return getFallbackNationalHolidays(year);
+    }
+  }
+
+  async function ensureNationalHolidaysCached(year: number) {
+    if (holidayCacheYears.has(year)) {
+      return;
+    }
+
+    const { count, error: countError } = await supabase
+      .from("automation_holidays")
+      .select("holiday_date", { count: "exact", head: true })
+      .eq("country_code", HOLIDAY_COUNTRY_CODE)
+      .eq("type", "national")
+      .gte("holiday_date", `${year}-01-01`)
+      .lte("holiday_date", `${year}-12-31`);
+
+    if (countError) {
+      throw countError;
+    }
+
+    if ((count ?? 0) > 0) {
+      holidayCacheYears.add(year);
+      return;
+    }
+
+    const holidays = await fetchNationalHolidays(year);
+    const rows = holidays
+      .filter((holiday) => typeof holiday.date === "string" && holiday.date.trim())
+      .map((holiday) => ({
+        country_code: HOLIDAY_COUNTRY_CODE,
+        holiday_date: holiday.date,
+        name: holiday.name || "Feriado nacional",
+        type: "national",
+        source: "brasilapi",
+      }));
+
+    if (rows.length === 0) {
+      throw new Error(`Nenhum feriado nacional encontrado para ${year}`);
+    }
+
+    const { error: upsertError } = await supabase
+      .from("automation_holidays")
+      .upsert(rows, { onConflict: "country_code,holiday_date,type" });
+
+    if (upsertError) {
+      throw upsertError;
+    }
+
+    holidayCacheYears.add(year);
+  }
+
+  async function ensureHolidayCacheForDispatch() {
+    const now = new Date();
+    await Promise.all([
+      ensureNationalHolidaysCached(now.getUTCFullYear()),
+      ensureNationalHolidaysCached(now.getUTCFullYear() + 1),
+    ]);
+  }
 
   async function saveOutboundMessage(execution: ClaimedExecution, content: string, sentAt: string) {
     const { error } = await supabase.from("message_history").insert({
@@ -226,6 +450,8 @@ export function startAutomationWorker() {
     running = true;
 
     try {
+      await ensureHolidayCacheForDispatch();
+
       while (true) {
         const { data, error } = await supabase.rpc("rpc_claim_due_automation_executions_v2", {
           p_limit: batchSize,

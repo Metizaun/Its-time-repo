@@ -133,6 +133,21 @@ async function validateHumanizedMarkRpc(serviceClient: SupabaseClient<any, any, 
     : null;
 }
 
+async function validateHumanizedWindowRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("is_humanized_dispatch_window", {
+    p_at: new Date().toISOString(),
+    p_timezone: "America/Sao_Paulo",
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.is_humanized_dispatch_window",
+        "supabase/migrations/20260421160000_fix_automation_humanized_instance_holidays.sql",
+        error
+      )
+    : null;
+}
+
 export async function assertRuntimeSchemaCompatibility(
   config: SchemaPreflightConfig = {}
 ) {
@@ -182,8 +197,16 @@ export async function assertRuntimeSchemaCompatibility(
       "crm.automation_executions.dispatch_meta",
       "supabase/migrations/20260420130000_add_humanized_automation_dispatch.sql"
     ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_holidays",
+      ["id", "country_code", "holiday_date", "name", "type", "source"],
+      "crm.automation_holidays",
+      "supabase/migrations/20260421160000_fix_automation_humanized_instance_holidays.sql"
+    ),
     validateHumanizedPlanRpc(serviceClient),
     validateHumanizedMarkRpc(serviceClient),
+    validateHumanizedWindowRpc(serviceClient),
   ]);
 
   const failures = checks.filter((check): check is SchemaFailure => check !== null);

@@ -239,6 +239,7 @@ const USER_VISIBLE_PREDICATES: AutomationPredicateName[] = [
   "no_inbound_since_anchor",
   "lead_replied",
   "tag_has",
+  "instance_is",
 ];
 
 const SIMPLE_HIDDEN_PREDICATES: AutomationPredicateName[] = ["lead_visible_is_true"];
@@ -346,12 +347,12 @@ export const AUTOMATION_PREDICATE_CATALOG: AutomationPredicateCatalogItem[] = [
   },
   {
     predicate: "instance_is",
-    label: "Instancia da conversa",
+    label: "Instancia do lead",
     shortLabel: "Instancia",
-    sentenceLabel: "Instancia da conversa",
-    description: "Predicado tecnico usado pelo motor.",
+    sentenceLabel: "Instancia do lead",
+    description: "Limita a automacao aos leads dessa instancia.",
     category: "lead",
-    visibility: "internal",
+    visibility: "user",
     input: "instance",
   },
   {
@@ -576,14 +577,28 @@ export function normalizeRuleNode(input: unknown, fallback?: AutomationRuleNode)
   return createRuleGroup("all", []);
 }
 
-export function createDefaultEntryRule(triggerStageId?: string | null) {
-  return createRuleGroup("all", [
+function createInstancePredicate(instanceName?: string | null) {
+  return {
+    ...createPredicate("instance_is"),
+    value: instanceName || "",
+  };
+}
+
+export function createDefaultEntryRule(triggerStageId?: string | null, instanceName?: string | null) {
+  const children: AutomationRuleNode[] = [
     {
       ...createPredicate("stage_is"),
       value: triggerStageId || "",
     },
-    createPredicate("lead_visible_is_true"),
-  ]);
+  ];
+
+  if (instanceName) {
+    children.push(createInstancePredicate(instanceName));
+  }
+
+  children.push(createPredicate("lead_visible_is_true"));
+
+  return createRuleGroup("all", children);
 }
 
 export function createDefaultExitRule() {
@@ -614,34 +629,95 @@ export function updateDefaultEntryRuleStage(rule: AutomationRuleNode, triggerSta
   };
 }
 
-export function createJourneyEntryRuleFromRecipe(recipeId: AutomationRecipeId, stageId?: string | null) {
+export function updateDefaultEntryRuleInstance(rule: AutomationRuleNode, instanceName: string) {
+  const normalized = normalizeRuleNode(rule);
+
+  if (normalized.type !== "group") {
+    return createDefaultEntryRule(null, instanceName);
+  }
+
+  let foundInstancePredicate = false;
+  const nextChildren = normalized.children.map((child) => {
+    if (child.type !== "predicate" || child.predicate !== "instance_is") {
+      return child;
+    }
+
+    foundInstancePredicate = true;
+    return {
+      ...child,
+      value: instanceName,
+    };
+  });
+
+  if (!foundInstancePredicate) {
+    const leadVisibleIndex = nextChildren.findIndex(
+      (child) => child.type === "predicate" && child.predicate === "lead_visible_is_true",
+    );
+    const instancePredicate = createInstancePredicate(instanceName);
+
+    if (leadVisibleIndex >= 0) {
+      nextChildren.splice(leadVisibleIndex, 0, instancePredicate);
+    } else {
+      nextChildren.push(instancePredicate);
+    }
+  }
+
+  return {
+    ...normalized,
+    children: nextChildren,
+  };
+}
+
+export function createJourneyEntryRuleFromRecipe(
+  recipeId: AutomationRecipeId,
+  stageId?: string | null,
+  instanceName?: string | null,
+) {
   if (recipeId === "message_after_stage_time") {
-    return createRuleGroup("all", [
+    const children: AutomationRuleNode[] = [
       {
         ...createPredicate("stage_is"),
         value: stageId || "",
       },
-      createPredicate("lead_visible_is_true"),
-    ]);
+    ];
+
+    if (instanceName) {
+      children.push(createInstancePredicate(instanceName));
+    }
+
+    children.push(createPredicate("lead_visible_is_true"));
+    return createRuleGroup("all", children);
   }
 
   if (recipeId === "nutrition_after_reply") {
-    return createRuleGroup("all", [
+    const children: AutomationRuleNode[] = [
       {
         ...createPredicate("stage_is"),
         value: stageId || "",
       },
-      createPredicate("lead_visible_is_true"),
-    ]);
+    ];
+
+    if (instanceName) {
+      children.push(createInstancePredicate(instanceName));
+    }
+
+    children.push(createPredicate("lead_visible_is_true"));
+    return createRuleGroup("all", children);
   }
 
-  return createRuleGroup("all", [
+  const children: AutomationRuleNode[] = [
     {
       ...createPredicate("stage_is"),
       value: stageId || "",
     },
-    createPredicate("lead_visible_is_true"),
-  ]);
+  ];
+
+  if (instanceName) {
+    children.push(createInstancePredicate(instanceName));
+  }
+
+  children.push(createPredicate("lead_visible_is_true"));
+  return createRuleGroup("all", children);
 }
 
 export function getAutomationRecipeById(recipeId: AutomationRecipeId) {

@@ -24,6 +24,7 @@ import {
   type AutomationRulePredicate,
   type AutomationTagOption,
 } from "@/lib/automation";
+import type { Instance } from "@/hooks/useInstances";
 import type { PipelineStage } from "@/types";
 
 const USER_CATALOG = getUserVisiblePredicateCatalog();
@@ -106,11 +107,13 @@ function ConditionValueField({
   onChange,
   stages,
   tags,
+  instances,
 }: {
   condition: AutomationRulePredicate;
   onChange: (condition: AutomationRulePredicate) => void;
   stages: PipelineStage[];
   tags: AutomationTagOption[];
+  instances: Instance[];
 }) {
   const definition = USER_CATALOG.find((item) => item.predicate === condition.predicate);
 
@@ -219,6 +222,31 @@ function ConditionValueField({
     );
   }
 
+  if (definition.input === "instance") {
+    return (
+      <Select
+        value={typeof condition.value === "string" ? condition.value : ""}
+        onValueChange={(value) =>
+          onChange({
+            ...condition,
+            value,
+          })
+        }
+      >
+        <SelectTrigger>
+          <SelectValue placeholder="Selecione a instancia" />
+        </SelectTrigger>
+        <SelectContent>
+          {instances.map((instance) => (
+            <SelectItem key={instance.instancia} value={instance.instancia}>
+              {instance.instancia}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
   return null;
 }
 
@@ -228,6 +256,7 @@ interface AutomationConditionComposerProps {
   onChange: (value: AutomationRuleNode) => void;
   stages: PipelineStage[];
   tags: AutomationTagOption[];
+  instances: Instance[];
 }
 
 export function AutomationConditionComposer({
@@ -236,6 +265,7 @@ export function AutomationConditionComposer({
   onChange,
   stages,
   tags,
+  instances,
 }: AutomationConditionComposerProps) {
   const analysis = analyzeRuleForComposer(value);
 
@@ -351,6 +381,7 @@ export function AutomationConditionComposer({
                         }
                         stages={stages}
                         tags={tags}
+                        instances={instances}
                       />
                     </div>
                   </div>

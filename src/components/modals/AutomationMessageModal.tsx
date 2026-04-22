@@ -43,6 +43,7 @@ import {
   getAutomationRecipeById,
   minutesToTimeUnit,
   normalizeRuleNode,
+  updateDefaultEntryRuleInstance,
   updateDefaultEntryRuleStage,
   timeUnitToMinutes,
   type AutomationExecution,
@@ -158,7 +159,7 @@ function buildInitialJourneyForm(params: {
       is_active: true,
       humanized_dispatch_enabled: false,
       dispatch_limit_per_hour: 40,
-      entry_rule: createDefaultEntryRule(defaultStageId),
+      entry_rule: createDefaultEntryRule(defaultStageId, params.preselectedInstanceName),
       exit_rule: createDefaultExitRule(),
       anchor_event: "stage_entered_at",
       reentry_mode: "restart_on_match",
@@ -175,7 +176,13 @@ function buildInitialJourneyForm(params: {
     is_active: params.journey.is_active,
     humanized_dispatch_enabled: params.journey.humanized_dispatch_enabled,
     dispatch_limit_per_hour: params.journey.dispatch_limit_per_hour || 40,
-    entry_rule: normalizeRuleNode(params.journey.entry_rule, createDefaultEntryRule(params.journey.trigger_stage_id)),
+    entry_rule: updateDefaultEntryRuleInstance(
+      normalizeRuleNode(
+        params.journey.entry_rule,
+        createDefaultEntryRule(params.journey.trigger_stage_id, params.journey.instance_name),
+      ),
+      params.journey.instance_name,
+    ),
     exit_rule: normalizeRuleNode(params.journey.exit_rule, createDefaultExitRule()),
     anchor_event: params.journey.anchor_event,
     reentry_mode: params.journey.reentry_mode,
@@ -361,7 +368,7 @@ export function AutomationMessageModal({
     setJourneyForm((previous) => ({
       ...previous,
       name: previous.name.trim() ? previous.name : recipe.title,
-      entry_rule: createJourneyEntryRuleFromRecipe(recipeId, previous.trigger_stage_id),
+      entry_rule: createJourneyEntryRuleFromRecipe(recipeId, previous.trigger_stage_id, previous.instance_name),
       exit_rule: createDefaultExitRule(),
       anchor_event: recipe.anchor_event,
       reentry_mode: recipe.reentry_mode,
@@ -380,6 +387,10 @@ export function AutomationMessageModal({
 
       if (field === "trigger_stage_id" && typeof value === "string" && value.length > 0) {
         nextState.entry_rule = updateDefaultEntryRuleStage(previous.entry_rule, value);
+      }
+
+      if (field === "instance_name" && typeof value === "string" && value.length > 0) {
+        nextState.entry_rule = updateDefaultEntryRuleInstance(previous.entry_rule, value);
       }
 
       return nextState;
@@ -422,7 +433,10 @@ export function AutomationMessageModal({
         is_active: journeyForm.is_active,
         humanized_dispatch_enabled: journeyForm.humanized_dispatch_enabled,
         dispatch_limit_per_hour: journeyForm.dispatch_limit_per_hour,
-        entry_rule: normalizeRuleNode(journeyForm.entry_rule, createDefaultEntryRule(journeyForm.trigger_stage_id)),
+        entry_rule: normalizeRuleNode(
+          updateDefaultEntryRuleInstance(journeyForm.entry_rule, journeyForm.instance_name),
+          createDefaultEntryRule(journeyForm.trigger_stage_id, journeyForm.instance_name),
+        ),
         exit_rule: normalizeRuleNode(journeyForm.exit_rule, createDefaultExitRule()),
         anchor_event: journeyForm.anchor_event,
         reentry_mode: journeyForm.reentry_mode,
@@ -756,6 +770,7 @@ export function AutomationMessageModal({
                     onChange={(nextValue) => handleJourneyFieldChange("entry_rule", nextValue)}
                     stages={stages}
                     tags={tags}
+                    instances={instances}
                   />
 
                   <div className="rounded-[24px] border bg-card/70 p-5">
@@ -992,6 +1007,7 @@ export function AutomationMessageModal({
                               }
                               stages={stages}
                               tags={tags}
+                              instances={instances}
                             />
                           </div>
                         ) : null}
