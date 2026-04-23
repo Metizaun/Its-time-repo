@@ -176,6 +176,14 @@ export interface AutomationTagOption {
   urgencia: number | null;
 }
 
+export interface AutomationLeadSourceOption {
+  value: string;
+  label: string;
+  count: number;
+}
+
+export const NO_LEAD_SOURCE_VALUE = "__automation_no_lead_source__";
+
 export interface AutomationLookupMaps {
   stages?: Record<string, string>;
   owners?: Record<string, string>;
@@ -207,7 +215,8 @@ export interface AutomationPredicateCatalogItem {
     | "direction"
     | "owner"
     | "tag"
-    | "instance";
+    | "instance"
+    | "lead-source";
 }
 
 export interface AutomationRecipe {
@@ -367,7 +376,7 @@ export const AUTOMATION_PREDICATE_CATALOG: AutomationPredicateCatalogItem[] = [
     description: "Filtra leads pela origem de captacao (ex: Instagram, Site).",
     category: "lead",
     visibility: "user",
-    input: "text",
+    input: "lead-source",
   },
   {
     predicate: "status_is",
@@ -922,6 +931,10 @@ function formatPredicateValue(
 
   if (predicate.predicate === "instance_is" && typeof rawValue === "string") {
     return lookups.instances?.[rawValue] ?? rawValue;
+  }
+
+  if (predicate.predicate === "origem_is" && rawValue === NO_LEAD_SOURCE_VALUE) {
+    return "Sem origem";
   }
 
   if (typeof rawValue === "boolean") {

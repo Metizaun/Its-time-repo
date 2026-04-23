@@ -46,6 +46,7 @@ import {
   timeUnitToMinutes,
   type AutomationExecution,
   type AutomationJourney,
+  type AutomationLeadSourceOption,
   type AutomationOwnerOption,
   type AutomationPreviewResult,
   type AutomationRecipeId,
@@ -272,6 +273,7 @@ interface AutomationMessageModalProps {
   instances: Instance[];
   owners: AutomationOwnerOption[];
   tags: AutomationTagOption[];
+  leadSources: AutomationLeadSourceOption[];
   previewLeads: Lead[];
   executions: AutomationExecution[];
   executionsLoading: boolean;
@@ -299,6 +301,7 @@ export function AutomationMessageModal({
   instances,
   owners,
   tags,
+  leadSources,
   previewLeads,
   executions,
   executionsLoading,
@@ -757,6 +760,7 @@ export function AutomationMessageModal({
                     onChange={(nextValue) => handleJourneyFieldChange("entry_rule", nextValue)}
                     stages={stages}
                     tags={tags}
+                    leadSources={leadSources}
                     instances={instances}
                   />
 
@@ -991,6 +995,7 @@ export function AutomationMessageModal({
                               }
                               stages={stages}
                               tags={tags}
+                              leadSources={leadSources}
                               instances={instances}
                             />
                           </div>

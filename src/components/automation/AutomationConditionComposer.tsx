@@ -22,6 +22,7 @@ import {
   type AutomationRuleGroupOperator,
   type AutomationRuleNode,
   type AutomationRulePredicate,
+  type AutomationLeadSourceOption,
   type AutomationTagOption,
 } from "@/lib/automation";
 import type { Instance } from "@/hooks/useInstances";
@@ -34,14 +35,26 @@ const AVAILABLE_USER_CATALOG = USER_CATALOG.filter(
 );
 const DEFAULT_CONDITION_PREDICATE = AVAILABLE_USER_CATALOG[0]?.predicate ?? "days_in_stage_gte";
 
-function getConditionCatalog(predicate: AutomationRulePredicate["predicate"]) {
+function getConditionCatalog(
+  predicate: AutomationRulePredicate["predicate"],
+  selectedPredicates: Set<AutomationRulePredicate["predicate"]> = new Set(),
+) {
   if (!HIDDEN_EXTRA_CONDITION_PREDICATES.has(predicate)) {
-    return AVAILABLE_USER_CATALOG;
+    return AVAILABLE_USER_CATALOG.filter((item) => item.predicate === predicate || !selectedPredicates.has(item.predicate));
   }
 
   const currentDefinition = USER_CATALOG.find((item) => item.predicate === predicate);
+  const availableDefinitions = AVAILABLE_USER_CATALOG.filter(
+    (item) => item.predicate === predicate || !selectedPredicates.has(item.predicate),
+  );
 
-  return currentDefinition ? [currentDefinition, ...AVAILABLE_USER_CATALOG] : AVAILABLE_USER_CATALOG;
+  return currentDefinition ? [currentDefinition, ...availableDefinitions] : availableDefinitions;
+}
+
+function getNextAvailablePredicate(conditions: AutomationRulePredicate[]) {
+  const selectedPredicates = new Set(conditions.map((condition) => condition.predicate));
+
+  return AVAILABLE_USER_CATALOG.find((item) => !selectedPredicates.has(item.predicate))?.predicate ?? null;
 }
 
 function MultiStageSelector({
@@ -108,12 +121,14 @@ function ConditionValueField({
   stages,
   tags,
   instances,
+  leadSources,
 }: {
   condition: AutomationRulePredicate;
   onChange: (condition: AutomationRulePredicate) => void;
   stages: PipelineStage[];
   tags: AutomationTagOption[];
   instances: Instance[];
+  leadSources: AutomationLeadSourceOption[];
 }) {
   const definition = USER_CATALOG.find((item) => item.predicate === condition.predicate);
 
@@ -263,6 +278,39 @@ function ConditionValueField({
     );
   }
 
+  if (definition.input === "lead-source") {
+    const currentValue = typeof condition.value === "string" ? condition.value : "";
+    const currentValueExists = leadSources.some((source) => source.value === currentValue);
+    const sourceOptions =
+      currentValue && !currentValueExists
+        ? [{ value: currentValue, label: currentValue, count: 0 }, ...leadSources]
+        : leadSources;
+
+    return (
+      <Select
+        value={currentValue}
+        onValueChange={(value) =>
+          onChange({
+            ...condition,
+            value,
+          })
+        }
+        disabled={sourceOptions.length === 0}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={sourceOptions.length === 0 ? "Nenhuma origem encontrada" : "Selecione a origem"} />
+        </SelectTrigger>
+        <SelectContent>
+          {sourceOptions.map((source) => (
+            <SelectItem key={source.value} value={source.value}>
+              {source.count > 0 ? `${source.label} (${source.count})` : source.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
   return null;
 }
 
@@ -273,6 +321,7 @@ interface AutomationConditionComposerProps {
   stages: PipelineStage[];
   tags: AutomationTagOption[];
   instances: Instance[];
+  leadSources: AutomationLeadSourceOption[];
 }
 
 export function AutomationConditionComposer({
@@ -282,6 +331,7 @@ export function AutomationConditionComposer({
   stages,
   tags,
   instances,
+  leadSources,
 }: AutomationConditionComposerProps) {
   const analysis = analyzeRuleForComposer(value);
 
@@ -327,6 +377,8 @@ export function AutomationConditionComposer({
   };
 
   const visibleConditions = analysis.visibleConditions;
+  const selectedPredicates = new Set(visibleConditions.map((condition) => condition.predicate));
+  const nextAvailablePredicate = getNextAvailablePredicate(visibleConditions);
 
   return (
     <div className="space-y-4 rounded-[24px] border bg-card/70 p-5">
@@ -377,7 +429,7 @@ export function AutomationConditionComposer({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {getConditionCatalog(condition.predicate).map((item) => (
+                          {getConditionCatalog(condition.predicate, selectedPredicates).map((item) => (
                             <SelectItem key={item.predicate} value={item.predicate}>
                               {item.label}
                             </SelectItem>
@@ -398,6 +450,7 @@ export function AutomationConditionComposer({
                         stages={stages}
                         tags={tags}
                         instances={instances}
+                        leadSources={leadSources}
                       />
                     </div>
                   </div>
@@ -424,10 +477,17 @@ export function AutomationConditionComposer({
 
       <Button
         variant="outline"
-        onClick={() => handleConditionsChange([...visibleConditions, createPredicate(DEFAULT_CONDITION_PREDICATE)])}
+        onClick={() => {
+          if (!nextAvailablePredicate) {
+            return;
+          }
+
+          handleConditionsChange([...visibleConditions, createPredicate(nextAvailablePredicate)]);
+        }}
+        disabled={!nextAvailablePredicate}
       >
         <Plus className="h-4 w-4" />
-        Adicionar condicao
+        {nextAvailablePredicate ? "Adicionar condicao" : "Todas as condicoes foram adicionadas"}
       </Button>
     </div>
   );

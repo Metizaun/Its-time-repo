@@ -29,7 +29,7 @@ export default function Automacao() {
   const showAutomationDebug = import.meta.env.DEV || import.meta.env.VITE_SHOW_AUTOMATION_DEBUG === "true";
   const { stages, loading: loadingStages } = usePipelineStages();
   const { instances, loading: loadingInstances } = useInstances();
-  const { owners, tags, loading: loadingCatalog } = useAutomationCatalog(automationEnabled);
+  const { owners, tags, leadSources, loading: loadingCatalog } = useAutomationCatalog(automationEnabled);
   const {
     journeys,
     stepsByJourney,
@@ -214,6 +214,7 @@ export default function Automacao() {
         instances={instances}
         owners={owners}
         tags={tags}
+        leadSources={leadSources}
         previewLeads={previewLeads}
         executions={executions}
         executionsLoading={executionsLoading}
