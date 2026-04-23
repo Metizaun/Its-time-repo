@@ -9,6 +9,7 @@ import {
 import { useLeadCsvImport } from "@/hooks/useLeadCsvImport";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
+import { useInstances } from "@/hooks/useInstances";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -66,8 +67,10 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
   const [stageId, setStageId] = useState("");
   const [source, setSource] = useState("CSV Importado");
   const [ownerId, setOwnerId] = useState("");
+  const [instanceName, setInstanceName] = useState("");
   const { stages, loading: loadingStages } = usePipelineStages();
   const { users, loading: loadingUsers } = useCrmUsers();
+  const { instances, loading: loadingInstances } = useInstances();
   const {
     selectedFile,
     summary,
@@ -82,13 +85,15 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
   } = useLeadCsvImport();
 
   const confirmedUsers = useMemo(() => users.filter((user) => !!user.id), [users]);
-  const hasImportDependencies = stageId.length > 0 && ownerId.length > 0 && source.trim().length > 0;
+  const hasImportDependencies =
+    stageId.length > 0 && ownerId.length > 0 && instanceName.length > 0 && source.trim().length > 0;
 
   useEffect(() => {
     if (!open) {
       setIsDragging(false);
       setStageId("");
       setOwnerId("");
+      setInstanceName("");
       setSource("CSV Importado");
       reset();
       return;
@@ -101,7 +106,11 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
     if (!ownerId && confirmedUsers.length > 0) {
       setOwnerId(confirmedUsers[0].id);
     }
-  }, [confirmedUsers, open, ownerId, reset, stageId, stages]);
+
+    if (!instanceName && instances.length > 0) {
+      setInstanceName(instances[0].instancia);
+    }
+  }, [confirmedUsers, instanceName, instances, open, ownerId, reset, stageId, stages]);
 
   const handleSelectFile = async (file: File | null) => {
     if (!file) return;
@@ -121,6 +130,7 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
       stageId,
       source: source.trim(),
       ownerId,
+      instanceName,
     });
 
     if (result.success) {
@@ -165,6 +175,22 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
                 disabled={importing}
                 placeholder="CSV Importado"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="csv-instance">Instancia</Label>
+              <Select value={instanceName} onValueChange={setInstanceName} disabled={loadingInstances || importing}>
+                <SelectTrigger id="csv-instance">
+                  <SelectValue placeholder={loadingInstances ? "Carregando instancias..." : "Selecione a instancia"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {instances.map((instance) => (
+                    <SelectItem key={instance.instancia} value={instance.instancia}>
+                      {instance.instancia}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
@@ -370,7 +396,7 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
           <Button
             type="button"
             onClick={() => void handleImport()}
-            disabled={!readyToImport || !hasImportDependencies || loadingStages || loadingUsers}
+            disabled={!readyToImport || !hasImportDependencies || loadingStages || loadingUsers || loadingInstances}
           >
             {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             Importar CSV

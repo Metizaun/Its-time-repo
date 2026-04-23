@@ -37,8 +37,6 @@ import {
   createDefaultExitRule,
   createJourneyEntryRuleFromRecipe,
   createRuleGroup,
-  formatAnchorEventLabel,
-  formatReentryModeLabel,
   formatTimingSummary,
   getAutomationRecipeById,
   minutesToTimeUnit,
@@ -206,6 +204,20 @@ function buildStepLabel(stepForm: StepFormState, anchorEvent: JourneyFormState["
   );
 }
 
+function buildStepPayload(
+  stepForm: StepFormState,
+  anchorEvent: JourneyFormState["anchor_event"],
+  delayMinutes: number,
+): AutomationStepPayload {
+  return {
+    label: buildStepLabel(stepForm, anchorEvent),
+    delay_minutes: delayMinutes,
+    message_template: stepForm.message_template.trim(),
+    is_active: stepForm.is_active,
+    step_rule: stepForm.step_rule_enabled ? normalizeRuleNode(stepForm.step_rule, createRuleGroup("all", [])) : null,
+  };
+}
+
 function RecipePicker({
   onSelect,
 }: {
@@ -235,13 +247,14 @@ function RecipePicker({
 
             <p className="mt-3 text-sm text-muted-foreground">{recipe.description}</p>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Badge variant="outline">{formatAnchorEventLabel(recipe.anchor_event)}</Badge>
-              <Badge variant="outline">{formatReentryModeLabel(recipe.reentry_mode)}</Badge>
-            </div>
-
             <div className="mt-4 rounded-2xl border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-              Sugestao inicial: {formatTimingSummary(recipe.suggested_step.delay_minutes, recipe.anchor_event)}
+              Primeira mensagem: {
+                (() => {
+                  const t = minutesToTimeUnit(recipe.suggested_step.delay_minutes);
+                  const labels: Record<string, string> = { minute: "min", hour: "hora", day: "dia" };
+                  return `${t.value} ${labels[t.unit] ?? t.unit}${t.value > 1 && t.unit !== "minute" ? "s" : ""} apos entrar na etapa`;
+                })()
+              }
             </div>
           </button>
         ))}
@@ -268,7 +281,7 @@ interface AutomationMessageModalProps {
   preselectedStageId: string | null;
   preselectedInstanceName: string | null;
   onSelectJourney: (journeyId: string | null) => void;
-  createJourney: (payload: AutomationJourneyPayload) => Promise<AutomationJourney>;
+  createJourney: (payload: AutomationJourneyPayload, initialStepPayload?: AutomationStepPayload | null) => Promise<AutomationJourney>;
   updateJourney: (journeyId: string, payload: AutomationJourneyPayload) => Promise<AutomationJourney>;
   deleteJourney: (journeyId: string) => Promise<void>;
   createStep: (journeyId: string, payload: AutomationStepPayload) => Promise<AutomationStep>;
@@ -444,9 +457,29 @@ export function AutomationMessageModal({
         builder_version: 2,
       };
 
+      const isCreatingJourney = !journeyForm.id;
+      const shouldCreateInitialStep =
+        isCreatingJourney && !stepForm.id && stepForm.message_template.trim().length > 0;
+
+      if (isCreatingJourney && journeyForm.is_active && !shouldCreateInitialStep) {
+        toast.error("Escreva a primeira mensagem antes de ativar a automacao");
+        setActiveTab("messages");
+        return;
+      }
+
+      if (shouldCreateInitialStep && stepForm.timing_mode === "after" && currentStepDelayMinutes < 1) {
+        toast.error("Escolha um tempo valido para a primeira mensagem");
+        setActiveTab("messages");
+        return;
+      }
+
+      const initialStepPayload = shouldCreateInitialStep
+        ? buildStepPayload(stepForm, journeyForm.anchor_event, currentStepDelayMinutes)
+        : null;
+
       const savedJourney = journeyForm.id
         ? await updateJourney(journeyForm.id, payload)
-        : await createJourney(payload);
+        : await createJourney(payload, initialStepPayload);
 
       onSelectJourney(savedJourney.id);
       setJourneyForm(
@@ -505,13 +538,7 @@ export function AutomationMessageModal({
     try {
       setSavingStep(true);
 
-      const payload: AutomationStepPayload = {
-        label: buildStepLabel(stepForm, journeyForm.anchor_event),
-        delay_minutes: currentStepDelayMinutes,
-        message_template: stepForm.message_template.trim(),
-        is_active: stepForm.is_active,
-        step_rule: stepForm.step_rule_enabled ? normalizeRuleNode(stepForm.step_rule, createRuleGroup("all", [])) : null,
-      };
+      const payload = buildStepPayload(stepForm, journeyForm.anchor_event, currentStepDelayMinutes);
 
       if (stepForm.id) {
         await updateStep(stepForm.id, currentJourneyId, payload);
@@ -629,7 +656,7 @@ export function AutomationMessageModal({
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Etapa do Kanban</Label>
+                  <Label>Etapa do Funil</Label>
                   <Select
                     value={journeyForm.trigger_stage_id}
                     onValueChange={(value) => handleJourneyFieldChange("trigger_stage_id", value)}
@@ -724,46 +751,6 @@ export function AutomationMessageModal({
                 </TabsList>
 
                 <TabsContent value="entry" className="space-y-6">
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>Comecar quando</Label>
-                      <Select
-                        value={journeyForm.anchor_event}
-                        onValueChange={(value: JourneyFormState["anchor_event"]) =>
-                          handleJourneyFieldChange("anchor_event", value)
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="stage_entered_at">Entrar na etapa</SelectItem>
-                          <SelectItem value="last_outbound">Minha ultima mensagem</SelectItem>
-                          <SelectItem value="last_inbound">Ultima resposta do lead</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Se acontecer de novo</Label>
-                      <Select
-                        value={journeyForm.reentry_mode}
-                        onValueChange={(value: JourneyFormState["reentry_mode"]) =>
-                          handleJourneyFieldChange("reentry_mode", value)
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="restart_on_match">Reiniciar o prazo</SelectItem>
-                          <SelectItem value="ignore_if_active">Manter a automacao atual</SelectItem>
-                          <SelectItem value="allow_parallel">Criar outra automacao</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
                   <AutomationConditionComposer
                     title="Quando essa jornada deve entrar"
                     value={journeyForm.entry_rule}
@@ -817,11 +804,8 @@ export function AutomationMessageModal({
                 </TabsContent>
 
                 <TabsContent value="messages" className="space-y-6">
-                  <div className="flex flex-wrap items-center gap-2 rounded-2xl border bg-card/70 px-4 py-3 text-sm text-muted-foreground">
-                    <Badge variant="outline">{formatAnchorEventLabel(journeyForm.anchor_event)}</Badge>
-                    <span>
-                      Cada mensagem usa esse ponto de partida para contar o prazo de envio.
-                    </span>
+                  <div className="rounded-2xl border bg-card/70 px-4 py-3 text-sm text-muted-foreground">
+                    <span>Disparos ativos entre 08h e 18h59 de acordo com o limite por hora configurado.</span>
                   </div>
 
                   <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">

@@ -25,7 +25,8 @@ export type AutomationPredicateName =
   | "owner_is"
   | "instance_is"
   | "status_is"
-  | "lead_visible_is_true";
+  | "lead_visible_is_true"
+  | "origem_is";
 
 export interface AutomationRulePredicate {
   id: string;
@@ -231,8 +232,6 @@ export interface AutomationComposerAnalysis {
 }
 
 const USER_VISIBLE_PREDICATES: AutomationPredicateName[] = [
-  "stage_is",
-  "stage_in",
   "days_in_stage_gte",
   "hours_since_last_outbound_gte",
   "hours_since_last_inbound_gte",
@@ -240,9 +239,14 @@ const USER_VISIBLE_PREDICATES: AutomationPredicateName[] = [
   "lead_replied",
   "tag_has",
   "instance_is",
+  "origem_is",
 ];
 
-const SIMPLE_HIDDEN_PREDICATES: AutomationPredicateName[] = ["lead_visible_is_true"];
+const SIMPLE_HIDDEN_PREDICATES: AutomationPredicateName[] = [
+  "lead_visible_is_true",
+  "stage_is",
+  "stage_in",
+];
 
 export const AUTOMATION_PREDICATE_CATALOG: AutomationPredicateCatalogItem[] = [
   {
@@ -356,6 +360,16 @@ export const AUTOMATION_PREDICATE_CATALOG: AutomationPredicateCatalogItem[] = [
     input: "instance",
   },
   {
+    predicate: "origem_is",
+    label: "Origem do lead",
+    shortLabel: "Origem",
+    sentenceLabel: "Origem do lead e",
+    description: "Filtra leads pela origem de captacao (ex: Instagram, Site).",
+    category: "lead",
+    visibility: "user",
+    input: "text",
+  },
+  {
     predicate: "status_is",
     label: "Status do lead",
     shortLabel: "Status do lead",
@@ -378,7 +392,6 @@ export const AUTOMATION_PREDICATE_CATALOG: AutomationPredicateCatalogItem[] = [
 ];
 
 export const AUTOMATION_ANCHOR_EVENT_OPTIONS: Array<{ value: AutomationAnchorEvent; label: string }> = [
-  { value: "stage_entered_at", label: "Entrar na etapa" },
   { value: "last_outbound", label: "Minha ultima mensagem" },
   { value: "last_inbound", label: "Ultima resposta do lead" },
 ];
@@ -403,37 +416,37 @@ export const AUTOMATION_TIME_UNIT_OPTIONS: Array<{ value: AutomationTimeUnit; la
 export const AUTOMATION_RECIPES: AutomationRecipe[] = [
   {
     id: "follow_up_last_message",
-    title: "Follow-up da minha ultima mensagem",
-    description: "Ideal para retomar um contato algumas horas depois da sua ultima mensagem.",
-    anchor_event: "last_outbound",
-    reentry_mode: "restart_on_match",
+    title: "Follow-up rapido",
+    description: "Envia uma mensagem algumas horas depois do lead entrar na etapa. Ideal para primeiro contato ou retomada.",
+    anchor_event: "stage_entered_at",
+    reentry_mode: "ignore_if_active",
     suggested_step: {
       label: "Follow-up",
       delay_minutes: 240,
-      message_template: "Oi {nome}, sigo por aqui caso queira continuar o atendimento.",
+      message_template: "Oi {nome}, tudo bem? Vi que seu atendimento chegou aqui e quero te ajudar a seguir.",
     },
   },
   {
     id: "message_after_stage_time",
-    title: "Mensagem apos tempo na etapa",
-    description: "Boa para acionar o lead depois de alguns dias parado na etapa atual.",
+    title: "Retomada de atendimento",
+    description: "Reativa leads que ficaram parados na etapa por alguns dias sem avanco.",
     anchor_event: "stage_entered_at",
     reentry_mode: "ignore_if_active",
     suggested_step: {
-      label: "Retomada da etapa",
-      delay_minutes: 43200,
-      message_template: "Oi {nome}, vi que seu atendimento ficou parado por aqui. Quer que eu te ajude a seguir?",
+      label: "Retomada",
+      delay_minutes: 4320,
+      message_template: "Oi {nome}, vi que seu atendimento ficou parado por aqui. Posso te ajudar a seguir?",
     },
   },
   {
     id: "nutrition_after_reply",
-    title: "Nutricao apos resposta do lead",
-    description: "Perfeita para continuar a conversa depois da ultima resposta do lead.",
-    anchor_event: "last_inbound",
-    reentry_mode: "restart_on_match",
+    title: "Sequencia de nutricao",
+    description: "Envia mensagens periodicas para manter o lead engajado ao longo da jornada.",
+    anchor_event: "stage_entered_at",
+    reentry_mode: "ignore_if_active",
     suggested_step: {
-      label: "Mensagem de nutricao",
-      delay_minutes: 1440,
+      label: "Nutricao",
+      delay_minutes: 10080,
       message_template: "Oi {nome}, trouxe mais um conteudo que pode te ajudar no proximo passo.",
     },
   },

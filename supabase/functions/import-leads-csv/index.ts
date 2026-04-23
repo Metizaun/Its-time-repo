@@ -13,6 +13,7 @@ type ImportLeadCsvOptions = {
   stageId?: unknown;
   source?: unknown;
   ownerId?: unknown;
+  instanceName?: unknown;
 };
 
 type ImportLeadCsvBody = {
@@ -106,6 +107,7 @@ function validatePayload(body: ImportLeadCsvBody) {
   const stageId = normalizeText(importOptions.stageId);
   const source = normalizeText(importOptions.source);
   const ownerId = normalizeText(importOptions.ownerId);
+  const instanceName = normalizeText(importOptions.instanceName);
 
   if (!rows) {
     throw new Error("Payload invalido: rows deve ser um array.");
@@ -123,12 +125,17 @@ function validatePayload(body: ImportLeadCsvBody) {
     throw new Error("Selecione um responsavel valido.");
   }
 
+  if (!instanceName) {
+    throw new Error("Selecione uma instancia valida para importar.");
+  }
+
   return {
     rows,
     importOptions: {
       stageId,
       source,
       ownerId,
+      instanceName,
     },
   };
 }
@@ -190,10 +197,10 @@ function sanitizeRows(rows: ImportLeadCsvRow[]) {
   return { validRows, invalidRows };
 }
 
-async function ensureStageAndOwnerAccess(
+async function ensureImportOptionsAccess(
   adminClient: ReturnType<typeof createClient>,
   acesId: number,
-  importOptions: { stageId: string; source: string; ownerId: string }
+  importOptions: { stageId: string; source: string; ownerId: string; instanceName: string }
 ) {
   const { data: stage, error: stageError } = await adminClient
     .schema("crm")
@@ -218,12 +225,24 @@ async function ensureStageAndOwnerAccess(
   if (ownerError || !owner) {
     throw new Error("Responsavel invalido para a conta atual.");
   }
+
+  const { data: instance, error: instanceError } = await adminClient
+    .schema("crm")
+    .from("instance")
+    .select("instancia")
+    .eq("instancia", importOptions.instanceName)
+    .eq("aces_id", acesId)
+    .maybeSingle();
+
+  if (instanceError || !instance) {
+    throw new Error("Instancia invalida para a conta atual.");
+  }
 }
 
 async function insertRowsInChunks(
   adminClient: ReturnType<typeof createClient>,
   acesId: number,
-  importOptions: { stageId: string; source: string; ownerId: string },
+  importOptions: { stageId: string; source: string; ownerId: string; instanceName: string },
   rows: Array<{
     name: string;
     contact_phone: string;
@@ -240,6 +259,7 @@ async function insertRowsInChunks(
       ...row,
       stage_id: importOptions.stageId,
       owner_id: importOptions.ownerId,
+      instancia: importOptions.instanceName,
       Fonte: importOptions.source,
       aces_id: acesId,
       view: true,
@@ -288,7 +308,7 @@ Deno.serve(async (req) => {
 
     const { rows, importOptions } = validatePayload(body);
     const { validRows, invalidRows } = sanitizeRows(rows);
-    await ensureStageAndOwnerAccess(context.adminClient, context.crmUser.aces_id, importOptions);
+    await ensureImportOptionsAccess(context.adminClient, context.crmUser.aces_id, importOptions);
 
     const inserted = await insertRowsInChunks(
       context.adminClient,

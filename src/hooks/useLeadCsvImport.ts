@@ -92,7 +92,7 @@ function parseCsvFile(file: File) {
 async function callImportLeadsCsvFunction(
   body: {
     rows: LeadCsvImportRow[];
-    importOptions: { stageId: string; source: string; ownerId: string };
+    importOptions: { stageId: string; source: string; ownerId: string; instanceName: string };
   }
 ) {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -295,7 +295,7 @@ export function useLeadCsvImport() {
     }
   }, [reset]);
 
-  const importLeads = useCallback(async (options: { stageId: string; source: string; ownerId: string }) => {
+  const importLeads = useCallback(async (options: { stageId: string; source: string; ownerId: string; instanceName: string }) => {
     if (!summary || validRows.length === 0) {
       toast.error("Nenhum lead pronto para importar", {
         description: "Carregue um CSV valido antes de continuar.",

@@ -247,6 +247,22 @@ function ConditionValueField({
     );
   }
 
+  if (definition.input === "text") {
+    return (
+      <Input
+        type="text"
+        placeholder="Ex: Instagram"
+        value={typeof condition.value === "string" ? condition.value : ""}
+        onChange={(event) =>
+          onChange({
+            ...condition,
+            value: event.target.value,
+          })
+        }
+      />
+    );
+  }
+
   return null;
 }
 

@@ -32,6 +32,8 @@ type PlaceResult = {
   isImported?: boolean;
 };
 
+type UnknownRecord = Record<string, unknown>;
+
 type BuscarLeadsInvokeBody =
   | { action: "counter" }
   | { action: "start"; payload: BuscarLeadsStartPayload }
@@ -39,6 +41,14 @@ type BuscarLeadsInvokeBody =
 
 const APIFY_ACTOR_ID = Deno.env.get("APIFY_ACTOR_ID") ?? "nwua9Gu5YrADL7ZDj";
 const APIFY_BASE_URL = "https://api.apify.com/v2";
+const DEFAULT_RADIUS_KM = 10;
+const DEFAULT_MINIMUM_STARS = 4;
+const DEFAULT_MAX_RESULTS = 50;
+const MIN_RADIUS_KM = 1;
+const MAX_RADIUS_KM = 50;
+const MIN_MAX_RESULTS = 1;
+const MAX_MAX_RESULTS = 500;
+const SUPPORTED_FIELDS = new Set(["phone", "website", "email", "hours", "reviews", "photos", "prices"]);
 
 function buildCorsHeaders(origin: string | null) {
   return {
@@ -67,10 +77,64 @@ function normalizeSearchStrings(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function normalizeFields(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => SUPPORTED_FIELDS.has(item));
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number) {
+  return Math.round(clampNumber(value, fallback, min, max));
+}
+
+function normalizeLanguage(value: unknown) {
+  const language = String(value ?? "pt").trim();
+  const normalizedLanguage = language.toLowerCase();
+  if (normalizedLanguage === "pt" || normalizedLanguage === "pt-br") return "pt-BR";
+  if (normalizedLanguage === "pt-pt") return "pt-PT";
+  return language || "pt-BR";
+}
+
+function normalizeStartPayload(payload: Partial<BuscarLeadsStartPayload> | null): BuscarLeadsStartPayload {
+  const rawPayload = (payload ?? {}) as Partial<BuscarLeadsStartPayload>;
+  return {
+    searchStrings: normalizeSearchStrings(rawPayload.searchStrings),
+    locationQuery: String(rawPayload.locationQuery ?? "").trim(),
+    country: String(rawPayload.country ?? "BR").trim().toUpperCase(),
+    radiusKm: clampNumber(rawPayload.radiusKm, DEFAULT_RADIUS_KM, MIN_RADIUS_KM, MAX_RADIUS_KM),
+    minimumStars: clampNumber(rawPayload.minimumStars, DEFAULT_MINIMUM_STARS, 1, 5),
+    maxResults: clampInteger(rawPayload.maxResults, DEFAULT_MAX_RESULTS, MIN_MAX_RESULTS, MAX_MAX_RESULTS),
+    language: normalizeLanguage(rawPayload.language),
+    fields: normalizeFields(rawPayload.fields),
+    instancia: String(rawPayload.instancia ?? "").trim(),
+  };
+}
+
 function normalizePhone(value: unknown): string | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
   return raw.replace(/[^\d+]/g, "") || null;
+}
+
+function normalizeNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  const parsed = String(value ?? "").trim();
+  return parsed || null;
+}
+
+function asRecord(value: unknown): UnknownRecord {
+  return value && typeof value === "object" ? (value as UnknownRecord) : {};
 }
 
 function mapApifyStatus(status?: string): { status: "queued" | "running" | "succeeded" | "failed"; progress: number } {
@@ -111,6 +175,64 @@ async function geocodeLocation(locationQuery: string, country: string) {
     lat: Number(item.lat),
     lng: Number(item.lon),
     label: item.display_name ?? locationQuery,
+  };
+}
+
+function mapMinimumStarsToApify(value: number) {
+  if (value >= 4.5) return "fourAndHalf";
+  if (value >= 4) return "four";
+  if (value >= 3.5) return "threeAndHalf";
+  if (value >= 3) return "three";
+  if (value >= 2.5) return "twoAndHalf";
+  if (value >= 2) return "two";
+  return undefined;
+}
+
+function buildApifyInput(
+  payload: BuscarLeadsStartPayload,
+  center: Awaited<ReturnType<typeof geocodeLocation>>
+) {
+  const fields = new Set(payload.fields);
+  const shouldScrapeDetails =
+    fields.has("hours") ||
+    fields.has("reviews") ||
+    fields.has("photos") ||
+    fields.has("prices");
+  const placeMinimumStars = mapMinimumStarsToApify(payload.minimumStars);
+
+  return {
+    searchStringsArray: payload.searchStrings,
+    ...(center
+      ? {
+          customGeolocation: {
+            type: "Point",
+            coordinates: [center.lng, center.lat],
+            radiusKm: payload.radiusKm,
+          },
+        }
+      : {
+          locationQuery: `${payload.locationQuery}, ${payload.country}`,
+          countryCode: payload.country.toLowerCase(),
+        }),
+    maxCrawledPlacesPerSearch: payload.maxResults,
+    language: payload.language,
+    ...(placeMinimumStars ? { placeMinimumStars } : {}),
+    scrapePlaceDetailPage: shouldScrapeDetails,
+    scrapeContacts: fields.has("email"),
+    maxReviews: fields.has("reviews") ? 5 : 0,
+    maxImages: fields.has("photos") ? 10 : 0,
+    includeWebResults: false,
+    scrapeSocialMediaProfiles: {
+      facebooks: false,
+      instagrams: false,
+      youtubes: false,
+      tiktoks: false,
+      twitters: false,
+    },
+    maximumLeadsEnrichmentRecords: 0,
+    proxyConfig: {
+      useApifyProxy: true,
+    },
   };
 }
 
@@ -168,18 +290,19 @@ async function startRun(payload: BuscarLeadsStartPayload, origin: string | null)
     return jsonResponse({ error: "APIFY_API_TOKEN não configurado" }, { status: 500 }, origin);
   }
 
-  const normalizedSearches = payload.searchStrings
-    .map((item) => String(item ?? "").trim())
-    .filter(Boolean)
-    .map((term) => `${term} ${payload.locationQuery}`.trim());
+  const center = await geocodeLocation(payload.locationQuery, payload.country);
+  if (!center) {
+    return jsonResponse(
+      {
+        error:
+          "NÃ£o foi possÃ­vel localizar a cidade/regiÃ£o para aplicar o raio de busca. Tente usar Cidade, Estado.",
+      },
+      { status: 400 },
+      origin
+    );
+  }
 
-  const apifyInput = {
-    searchStringsArray: normalizedSearches.length ? normalizedSearches : payload.searchStrings,
-    maxCrawledPlaces: payload.maxResults,
-    proxyConfig: {
-      useApifyProxy: true,
-    },
-  };
+  const apifyInput = buildApifyInput(payload, center);
 
   const url = `${APIFY_BASE_URL}/acts/${APIFY_ACTOR_ID}/runs?token=${token}`;
   const response = await fetch(url, {
@@ -202,7 +325,6 @@ async function startRun(payload: BuscarLeadsStartPayload, origin: string | null)
   }
 
   const run = raw?.data ?? raw;
-  const center = await geocodeLocation(payload.locationQuery, payload.country);
 
   return jsonResponse(
     {
@@ -236,28 +358,37 @@ async function fetchDatasetItems(datasetId: string) {
   return Array.isArray(raw) ? raw : [];
 }
 
-function mapPlace(item: any, fallbackCountry: string): PlaceResult {
-  const latitude = item?.location?.lat ?? item?.latitude ?? item?.gpsCoordinates?.latitude ?? null;
-  const longitude = item?.location?.lng ?? item?.longitude ?? item?.gpsCoordinates?.longitude ?? null;
-  const city = item?.city ?? item?.addressParsed?.city ?? null;
-  const region = item?.state ?? item?.addressParsed?.state ?? null;
-  const country = item?.countryCode ?? item?.country ?? fallbackCountry;
+function mapPlace(item: unknown, fallbackCountry: string): PlaceResult {
+  const place = asRecord(item);
+  const location = asRecord(place.location);
+  const gpsCoordinates = asRecord(place.gpsCoordinates);
+  const addressParsed = asRecord(place.addressParsed);
+  const latitude = location.lat ?? place.latitude ?? gpsCoordinates.latitude ?? null;
+  const longitude = location.lng ?? place.longitude ?? gpsCoordinates.longitude ?? null;
+  const country = normalizeOptionalString(place.countryCode ?? place.country) ?? fallbackCountry;
+  const rating = normalizeNumber(place.totalScore ?? place.rating);
+  const reviewsCount = normalizeNumber(place.reviewsCount ?? place.reviews);
 
   return {
-    externalId: item?.placeId ?? item?.id ?? undefined,
-    name: String(item?.title ?? item?.name ?? "Sem nome"),
-    phone: normalizePhone(item?.phone ?? item?.phoneUnformatted ?? item?.phoneNumber),
-    email: item?.email ?? null,
-    website: item?.website ?? item?.url ?? null,
-    rating: item?.totalScore ?? item?.rating ?? null,
-    reviewsCount: item?.reviewsCount ?? item?.reviews ?? null,
-    address: item?.address ?? item?.street ?? null,
-    city,
-    region,
+    externalId: normalizeOptionalString(place.placeId ?? place.id) ?? undefined,
+    name: normalizeOptionalString(place.title ?? place.name) ?? "Sem nome",
+    phone: normalizePhone(place.phone ?? place.phoneUnformatted ?? place.phoneNumber),
+    email: normalizeOptionalString(place.email),
+    website: normalizeOptionalString(place.website ?? place.url),
+    rating,
+    reviewsCount,
+    address: normalizeOptionalString(place.address ?? place.street),
+    city: normalizeOptionalString(place.city ?? addressParsed.city),
+    region: normalizeOptionalString(place.state ?? addressParsed.state),
     country,
     lat: latitude === null ? null : Number(latitude),
     lng: longitude === null ? null : Number(longitude),
   };
+}
+
+function filterPlacesByMinimumStars(places: PlaceResult[], minimumStars: number) {
+  if (minimumStars <= 1) return places;
+  return places.filter((place) => typeof place.rating === "number" && place.rating >= minimumStars);
 }
 
 async function importLeads(params: {
@@ -364,10 +495,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "Payload de busca ausente" }, { status: 400 }, origin);
       }
 
-      const normalizedPayload: BuscarLeadsStartPayload = {
-        ...payload,
-        searchStrings: normalizeSearchStrings(payload.searchStrings),
-      };
+      const normalizedPayload = normalizeStartPayload(payload);
 
       if (!normalizedPayload.searchStrings.length) {
         return jsonResponse({ error: "Informe ao menos um termo de busca" }, { status: 400 }, origin);
@@ -396,8 +524,8 @@ Deno.serve(async (req) => {
 
       const payload =
         bodyPayload && "payload" in bodyPayload
-          ? bodyPayload.payload
-          : (JSON.parse(rawPayload as string) as BuscarLeadsStartPayload);
+          ? normalizeStartPayload(bodyPayload.payload)
+          : normalizeStartPayload(JSON.parse(rawPayload as string) as BuscarLeadsStartPayload);
       const run = await fetchApifyRun(runId);
       const mappedStatus = mapApifyStatus(run?.status);
       const center = await geocodeLocation(payload.locationQuery, payload.country);
@@ -418,7 +546,10 @@ Deno.serve(async (req) => {
 
       const datasetId = run?.defaultDatasetId;
       const items = datasetId ? await fetchDatasetItems(datasetId) : [];
-      const places = items.map((item) => mapPlace(item, payload.country));
+      const places = filterPlacesByMinimumStars(
+        items.map((item) => mapPlace(item, payload.country)),
+        payload.minimumStars
+      );
       const { insertedRows, duplicates, withPhone } = await importLeads({
         adminClient,
         crmUser,

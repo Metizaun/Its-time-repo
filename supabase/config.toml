@@ -45,3 +45,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/buscar-leads/deno.json"
 entrypoint = "./functions/buscar-leads/index.ts"
+
+[functions.import-leads-csv]
+enabled = true
+verify_jwt = false
+import_map = "./functions/import-leads-csv/deno.json"
+entrypoint = "./functions/import-leads-csv/index.ts"

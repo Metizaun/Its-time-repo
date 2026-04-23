@@ -54,7 +54,7 @@ Deno.serve(async (req) => {
 
     // Buscar convite
     const { data: invitation, error: invitationError } = await supabaseAdmin
-      .schema("Crm")
+      .schema("crm")
       .from("user_invitations")
       .select("*")
       .eq("id", invitationId)

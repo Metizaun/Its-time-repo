@@ -285,11 +285,20 @@ export function useAutomationJourneys(enabled = true) {
       await invalidateJourneys();
       return result;
     },
-    createJourney: async (payload: AutomationJourneyPayload) => {
+    createJourney: async (payload: AutomationJourneyPayload, initialStepPayload?: AutomationStepPayload | null) => {
       const journey = await createJourneyMutation.mutateAsync(payload);
+      if (initialStepPayload) {
+        try {
+          await createStepMutation.mutateAsync({ funnelId: journey.id, payload: initialStepPayload });
+        } catch (error) {
+          await deleteJourneyMutation.mutateAsync(journey.id).catch(() => undefined);
+          throw error;
+        }
+      }
+
       await syncJourneyRpc(journey.id);
       await invalidateJourneys();
-      toast.success("Automacao criada com sucesso");
+      toast.success(initialStepPayload ? "Automacao criada com mensagem inicial" : "Automacao criada com sucesso");
       return journey;
     },
     updateJourney: async (journeyId: string, payload: AutomationJourneyPayload) => {
