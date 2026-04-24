@@ -180,25 +180,25 @@ export default function Leads() {
 
   return (
     <div className="space-y-6">
-      {/* ... O restante do seu JSX continua igual ... */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Leads</h1>
-          <p className="text-muted-foreground mt-1">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold">Leads</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
             {filteredLeads.length} lead{filteredLeads.length !== 1 ? "s" : ""} encontrado
             {filteredLeads.length !== 1 ? "s" : ""}
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 shrink-0">
           <Popover>
             <PopoverTrigger asChild>
-              <Button variant="outline">
+              <Button variant="outline" className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
                 {dateRange?.from && dateRange?.to
-                  ? `${format(dateRange.from, "dd/MM/yyyy")} - ${format(dateRange.to, "dd/MM/yyyy")}`
+                  ? `${format(dateRange.from, "dd/MM/yy")} - ${format(dateRange.to, "dd/MM/yy")}`
                   : dateRange?.from
-                  ? `A partir de ${format(dateRange.from, "dd/MM/yyyy")}`
-                  : "Selecionar período"}
+                  ? `A partir de ${format(dateRange.from, "dd/MM/yy")}`
+                  : "Período"}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-4" align="end">
@@ -219,28 +219,28 @@ export default function Leads() {
               </div>
             </PopoverContent>
           </Popover>
-          {/* O botão já chama handleExport, então está pronto */}
-          <Button variant="outline" onClick={handleExport}>
-            <Download className="w-4 h-4 mr-2" />
-            Exportar CSV
+
+          <Button variant="outline" onClick={handleExport} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
+            <Download className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Exportar CSV</span>
           </Button>
-          <Button variant="outline" onClick={() => downloadLeadImportTemplate()}>
-            <Download className="w-4 h-4 mr-2" />
-            Baixar modelo CSV
+          <Button variant="outline" onClick={() => downloadLeadImportTemplate()} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
+            <Download className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Modelo CSV</span>
           </Button>
-          <Button variant="outline" onClick={() => openModal("IMPORT_LEADS_CSV")}>
-            <Upload className="w-4 h-4 mr-2" />
-            Importar CSV
+          <Button variant="outline" onClick={() => openModal("IMPORT_LEADS_CSV")} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
+            <Upload className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Importar CSV</span>
           </Button>
-          <Button onClick={() => openModal("createLead")}>
-            <Plus className="w-4 h-4 mr-2" />
-            Novo Lead
+          <Button onClick={() => openModal("createLead")} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
+            <Plus className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Novo Lead</span>
           </Button>
         </div>
       </div>
       
       {/* ... Restante da tabela ... */}
-      <div className="rounded-lg border border-border overflow-hidden">
+      <div className="rounded-lg border border-border overflow-x-auto">
         <Table>
             {/* ... Conteúdo da tabela mantido ... */}
             <TableHeader>

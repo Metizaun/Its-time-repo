@@ -145,7 +145,7 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     font-feature-settings: 'cv11', 'ss01';
   }
-  
+
   h1, h2, h3, h4, h5, h6 {
     @apply font-semibold;
   }
@@ -156,36 +156,38 @@
   .hover-lift {
     @apply transition-all duration-200 hover:-translate-y-1 hover:shadow-lg;
   }
-  
+
   /* Skeleton animation */
   @keyframes pulse-subtle {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
-  
+
   .animate-pulse-subtle {
     animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
-  
+
   /* Drag placeholder */
   .drag-placeholder {
     @apply border-2 border-dashed border-primary/50 bg-primary/5 rounded-lg;
   }
-  
+
   /* Focus visible */
   .focus-ring {
     @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
   }
+
+  /* Sidebar width transition */
+  .transition-width {
+    transition-property: width;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 300ms;
+  }
 }
 
-@layer base {
-  * {
-    @apply border-border;
-  }
-
-  body {
-    @apply bg-background text-foreground;
-  }
+/* ── Mobile sidebar: body scroll lock ─────────────────────────────────────────────── */
+body.sidebar-mobile-open {
+  overflow: hidden;
 }
 
 /* ── Slider: track preenchido usa a cor primária do sistema ── */

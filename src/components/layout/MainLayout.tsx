@@ -3,50 +3,81 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { HelpDialog } from "@/components/HelpDialog";
 import { useApp } from "@/context/AppContext";
-import { useLocation } from "react-router-dom"; // 1. Importar useLocation
+import { useLocation } from "react-router-dom";
 
 const STORAGE_KEY = "Crm_sidebar_collapsed_v1";
 
+const TABLET_BP = 768;
+const DESKTOP_BP = 1280;
+
+function getMarginLeft(isMobile: boolean, collapsed: boolean): number {
+  if (isMobile) return 0;
+  return collapsed ? 64 : 280;
+}
+
 export function MainLayout({ children }: { children: ReactNode }) {
   const { openModal } = useApp();
-  const location = useLocation(); // 2. Obter a rota atual
-  
-  // 3. Verificar se é a página de chat
+  const location = useLocation();
+
   const isChatPage = location.pathname === "/chat";
 
-  // Sincronizar com o estado da sidebar via localStorage
+  const [isMobile, setIsMobile] = useState<boolean>(
+    () => window.innerWidth < TABLET_BP
+  );
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "false");
-    } catch {
-      return false;
-    }
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored !== null) return JSON.parse(stored);
+    } catch {}
+    return window.innerWidth < DESKTOP_BP;
   });
 
-  // Escutar mudanças no localStorage (quando sidebar é toggleada)
+  // Mobile drawer state
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Sync collapsed from localStorage (polling — works within same tab)
   useEffect(() => {
-    const handleStorageChange = () => {
+    const sync = () => {
       try {
-        setSidebarCollapsed(JSON.parse(localStorage.getItem(STORAGE_KEY) || "false"));
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored !== null) setSidebarCollapsed(JSON.parse(stored));
       } catch {}
     };
 
-    // Escutar evento de storage (funciona entre abas)
-    window.addEventListener("storage", handleStorageChange);
-    
-    // Polling para mesma aba (localStorage não dispara evento na mesma aba)
-    const interval = setInterval(handleStorageChange, 100);
-
+    window.addEventListener("storage", sync);
+    const interval = setInterval(sync, 150);
     return () => {
-      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("storage", sync);
       clearInterval(interval);
     };
   }, []);
 
+  // Handle window resize
+  useEffect(() => {
+    const handleResize = () => {
+      const width = window.innerWidth;
+      setIsMobile(width < TABLET_BP);
+      if (width >= TABLET_BP) {
+        // Close mobile drawer if screen grows
+        setMobileOpen(false);
+      }
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Keyboard shortcut: N = novo lead
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Novo Lead: N
-      if (e.key === "n" && !e.ctrlKey && !e.metaKey && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+      if (
+        e.key === "n" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        document.activeElement?.tagName !== "INPUT" &&
+        document.activeElement?.tagName !== "TEXTAREA"
+      ) {
         e.preventDefault();
         openModal("createLead");
       }
@@ -56,19 +87,32 @@ export function MainLayout({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [openModal]);
 
+  const marginLeft = getMarginLeft(isMobile, sidebarCollapsed);
+
   return (
     <div className="min-h-screen flex w-full bg-background">
-      <Sidebar />
-      <div 
-        className="flex-1 transition-all duration-300"
-        style={{ marginLeft: sidebarCollapsed ? "64px" : "280px" }}
+      <Sidebar
+        mobileOpen={mobileOpen}
+        onMobileClose={() => setMobileOpen(false)}
+      />
+
+      <div
+        className="flex-1 min-w-0 transition-[margin-left] duration-300"
+        style={{ marginLeft }}
       >
-        <Topbar />
-        {/* 4. Aplicação condicional das classes */}
-        <main className={isChatPage ? "w-full" : "p-8 max-w-[1920px] mx-auto"}>
+        <Topbar onOpenMobileSidebar={() => setMobileOpen(true)} isMobile={isMobile} />
+
+        <main
+          className={
+            isChatPage
+              ? "w-full"
+              : "p-4 sm:p-6 lg:p-8 max-w-[1920px] mx-auto"
+          }
+        >
           {children}
         </main>
       </div>
+
       <HelpDialog />
     </div>
   );
