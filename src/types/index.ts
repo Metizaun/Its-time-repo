@@ -33,6 +33,9 @@ export interface AIAgent {
   buffer_wait_ms: number;
   human_pause_minutes: number;
   auto_apply_threshold: number;
+  handoff_enabled: boolean;
+  handoff_prompt: string | null;
+  handoff_target_phone: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

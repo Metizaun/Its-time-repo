@@ -163,6 +163,13 @@ export async function assertRuntimeSchemaCompatibility(
   const checks = await Promise.all([
     validateSelectedColumns(
       serviceClient,
+      "ai_agents",
+      ["id", "handoff_enabled", "handoff_prompt", "handoff_target_phone"],
+      "crm.ai_agents (handoff)",
+      "supabase/migrations/20260423230000_add_ai_agent_handoff_config.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "ai_lead_state",
       ["agent_id", "lead_id", "manual_ai_enabled"],
       "crm.ai_lead_state.manual_ai_enabled",

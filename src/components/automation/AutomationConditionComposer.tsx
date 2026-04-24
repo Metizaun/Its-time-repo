@@ -322,6 +322,7 @@ interface AutomationConditionComposerProps {
   tags: AutomationTagOption[];
   instances: Instance[];
   leadSources: AutomationLeadSourceOption[];
+  compact?: boolean;
 }
 
 export function AutomationConditionComposer({
@@ -332,6 +333,7 @@ export function AutomationConditionComposer({
   tags,
   instances,
   leadSources,
+  compact = false,
 }: AutomationConditionComposerProps) {
   const analysis = analyzeRuleForComposer(value);
 
@@ -379,13 +381,17 @@ export function AutomationConditionComposer({
   const visibleConditions = analysis.visibleConditions;
   const selectedPredicates = new Set(visibleConditions.map((condition) => condition.predicate));
   const nextAvailablePredicate = getNextAvailablePredicate(visibleConditions);
+  const containerClassName = compact ? "space-y-3 rounded-[22px] border bg-card/70 p-4" : "space-y-4 rounded-[24px] border bg-card/70 p-5";
+  const conditionCardClassName = compact ? "rounded-2xl border bg-background/60 p-3" : "rounded-2xl border bg-background/60 p-4";
 
   return (
-    <div className="space-y-4 rounded-[24px] border bg-card/70 p-5">
+    <div className={containerClassName}>
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-1">
           <h3 className="font-semibold">{title}</h3>
-          <p className="text-sm text-muted-foreground">Escolha apenas as condicoes que fazem sentido para a jornada.</p>
+          {!compact ? (
+            <p className="text-sm text-muted-foreground">Escolha apenas as condicoes que fazem sentido para a jornada.</p>
+          ) : null}
         </div>
 
         <Select value={analysis.operator} onValueChange={handleOperatorChange}>
@@ -409,7 +415,7 @@ export function AutomationConditionComposer({
             const definition = USER_CATALOG.find((item) => item.predicate === condition.predicate);
 
             return (
-              <div key={condition.id} className="rounded-2xl border bg-background/60 p-4">
+              <div key={condition.id} className={conditionCardClassName}>
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="grid flex-1 gap-3 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
                     <div className="space-y-2">
@@ -456,7 +462,7 @@ export function AutomationConditionComposer({
                   </div>
 
                   <div className="flex items-center justify-between gap-3 lg:flex-col lg:items-end">
-                    <p className="text-xs text-muted-foreground">{definition?.description}</p>
+                    {!compact ? <p className="text-xs text-muted-foreground">{definition?.description}</p> : <span />}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -487,7 +493,7 @@ export function AutomationConditionComposer({
         disabled={!nextAvailablePredicate}
       >
         <Plus className="h-4 w-4" />
-        {nextAvailablePredicate ? "Adicionar condicao" : "Todas as condicoes foram adicionadas"}
+        {nextAvailablePredicate ? "Adicionar condicao" : compact ? "Condicoes completas" : "Todas as condicoes foram adicionadas"}
       </Button>
     </div>
   );

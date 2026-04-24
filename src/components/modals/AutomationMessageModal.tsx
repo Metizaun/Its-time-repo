@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Clock3, Save, Sparkles, Trash2, Workflow } from "lucide-react";
+import { ArrowLeft, Clock3, Plus, Save, Sparkles, Trash2, Workflow } from "lucide-react";
 import { toast } from "sonner";
 
 import { AutomationConditionComposer } from "@/components/automation/AutomationConditionComposer";
@@ -25,10 +25,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useAutomationMessageFlow } from "@/hooks/useAutomationMessageFlow";
 import type { Instance } from "@/hooks/useInstances";
 import type { Lead } from "@/hooks/useLeads";
 import {
@@ -55,6 +55,7 @@ import {
   type AutomationTagOption,
   type AutomationTimeUnit,
 } from "@/lib/automation";
+import { cn } from "@/lib/utils";
 import type { AutomationJourneyPayload, AutomationStepPayload } from "@/hooks/useAutomationJourneys";
 import type { PipelineStage } from "@/types";
 
@@ -264,6 +265,286 @@ function RecipePicker({
   );
 }
 
+function AutomationMessageStepCard({
+  title,
+  preview,
+  timingLabel,
+  leadCount,
+  isInactive,
+  isHighlighted,
+  isDraft = false,
+  onClick,
+}: {
+  title: string;
+  preview: string;
+  timingLabel: string;
+  leadCount: number | null;
+  isInactive: boolean;
+  isHighlighted: boolean;
+  isDraft?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "group relative flex h-[196px] w-full min-w-[250px] max-w-[280px] flex-col overflow-hidden rounded-[24px] border border-[var(--color-accent)]/70 bg-[rgba(10,10,10,0.88)] p-5 text-left text-white shadow-[0_8px_32px_rgba(229,57,58,0.05)] transition-all duration-200 hover:-translate-y-1 hover:border-[var(--color-accent)] hover:shadow-[0_12px_36px_rgba(229,57,58,0.11)]",
+        isInactive && "opacity-80",
+        isHighlighted &&
+          "border-[var(--color-accent)] shadow-[0_0_0_1px_rgba(229,57,58,0.32),0_0_24px_rgba(229,57,58,0.24),0_16px_40px_rgba(229,57,58,0.14)]",
+      )}
+    >
+      <div className="relative z-10 flex h-full flex-col">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-white/55">
+              {timingLabel}
+            </p>
+            <p className="mt-2 line-clamp-2 text-base font-bold leading-tight text-white">
+              {title}
+            </p>
+          </div>
+
+          <div className="text-right">
+            {isDraft ? <p className="text-[10px] uppercase tracking-[0.24em] text-white/50">Rascunho</p> : null}
+          </div>
+        </div>
+
+        <div className="mt-3 inline-flex w-fit rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-border-subtle)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
+          Mensagem
+        </div>
+        <p className="mt-4 line-clamp-4 text-sm leading-relaxed text-white/66">{preview}</p>
+
+        <div className="mt-auto flex items-end justify-between gap-3 border-t border-[var(--color-border-subtle)] pt-3">
+          <div className={cn("text-xs font-medium", isInactive ? "text-[var(--color-text-secondary)]" : "text-[var(--color-success)]")}>
+            {isInactive ? "Inativa" : "Ativa"}
+          </div>
+          {leadCount !== null ? (
+            <div className="rounded-full border border-[var(--color-accent)]/25 bg-[var(--color-accent)]/10 px-3 py-1 text-xs font-semibold text-[var(--color-accent)]">
+              {leadCount} leads
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function AutomationMessageEditorDialog({
+  open,
+  onOpenChange,
+  stepForm,
+  currentStepDelayMinutes,
+  journeyAnchorEvent,
+  journeySaved,
+  savingStep,
+  onStepFormChange,
+  onSave,
+  onCancelEdit,
+  onDelete,
+  stages,
+  tags,
+  instances,
+  leadSources,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  stepForm: StepFormState;
+  currentStepDelayMinutes: number;
+  journeyAnchorEvent: JourneyFormState["anchor_event"];
+  journeySaved: boolean;
+  savingStep: boolean;
+  onStepFormChange: (updater: (previous: StepFormState) => StepFormState) => void;
+  onSave: () => void;
+  onCancelEdit: () => void;
+  onDelete?: (() => void) | null;
+  stages: PipelineStage[];
+  tags: AutomationTagOption[];
+  instances: Instance[];
+  leadSources: AutomationLeadSourceOption[];
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[calc(100vh-3rem)] max-w-3xl overflow-y-auto rounded-[28px] border-white/10 bg-[#09090c] p-0 text-white">
+        <DialogHeader className="border-b border-white/10 px-6 py-5">
+          <DialogTitle className="text-white">{stepForm.id ? "Editar mensagem" : journeySaved ? "Nova mensagem" : "Primeira mensagem"}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-5 px-6 py-6">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_150px_150px]">
+            <div className="space-y-2">
+              <Label htmlFor="step-label" className="text-white/80">
+                Nome interno
+              </Label>
+              <Input
+                id="step-label"
+                value={stepForm.label}
+                onChange={(event) => onStepFormChange((previous) => ({ ...previous, label: event.target.value }))}
+                placeholder="Gerado automaticamente se ficar vazio"
+                className="border-white/10 bg-white/5 text-white placeholder:text-white/35"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-white/80">Quando enviar</Label>
+              <Select
+                value={stepForm.timing_mode}
+                onValueChange={(value: StepTimingMode) =>
+                  onStepFormChange((previous) => ({ ...previous, timing_mode: value }))
+                }
+              >
+                <SelectTrigger className="border-white/10 bg-white/5 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="border-white/10 bg-[#111115] text-white">
+                  <SelectItem value="now">Na hora</SelectItem>
+                  <SelectItem value="after">Depois de</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-end">
+              <div className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/78">
+                {formatTimingSummary(currentStepDelayMinutes, journeyAnchorEvent)}
+              </div>
+            </div>
+          </div>
+
+          {stepForm.timing_mode === "after" ? (
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_160px]">
+              <div className="space-y-2">
+                <Label htmlFor="step-delay" className="text-white/80">
+                  Tempo
+                </Label>
+                <Input
+                  id="step-delay"
+                  type="number"
+                  min={1}
+                  value={stepForm.delay_value}
+                  onChange={(event) =>
+                    onStepFormChange((previous) => ({ ...previous, delay_value: event.target.value }))
+                  }
+                  className="border-white/10 bg-white/5 text-white"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-white/80">Unidade</Label>
+                <Select
+                  value={stepForm.delay_unit}
+                  onValueChange={(value: AutomationTimeUnit) =>
+                    onStepFormChange((previous) => ({ ...previous, delay_unit: value }))
+                  }
+                >
+                  <SelectTrigger className="border-white/10 bg-white/5 text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-[#111115] text-white">
+                    <SelectItem value="minute">min</SelectItem>
+                    <SelectItem value="hour">hora</SelectItem>
+                    <SelectItem value="day">dia</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            <Label htmlFor="step-message" className="text-white/80">
+              Mensagem
+            </Label>
+            <Textarea
+              id="step-message"
+              rows={8}
+              value={stepForm.message_template}
+              onChange={(event) =>
+                onStepFormChange((previous) => ({ ...previous, message_template: event.target.value }))
+              }
+              placeholder="Oi {nome}, sigo por aqui para continuar o atendimento."
+              className="min-h-[210px] resize-none border-white/10 bg-white/5 text-white placeholder:text-white/35"
+            />
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="font-medium text-white">Mensagem ativa</p>
+              <p className="text-xs text-white/52">Mensagens inativas ficam no fluxo, mas nao disparam.</p>
+            </div>
+            <Switch
+              checked={stepForm.is_active}
+              onCheckedChange={(checked) => onStepFormChange((previous) => ({ ...previous, is_active: checked }))}
+            />
+          </div>
+
+          <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-medium text-white">Condicao extra</p>
+                <p className="text-xs text-white/52">Use apenas se essa mensagem depender de uma regra adicional.</p>
+              </div>
+              <Switch
+                checked={stepForm.step_rule_enabled}
+                onCheckedChange={(checked) =>
+                  onStepFormChange((previous) => ({ ...previous, step_rule_enabled: checked }))
+                }
+              />
+            </div>
+
+            {stepForm.step_rule_enabled ? (
+              <div className="mt-4">
+                <AutomationConditionComposer
+                  title="Regras da mensagem"
+                  compact
+                  value={stepForm.step_rule}
+                  onChange={(nextValue) =>
+                    onStepFormChange((previous) => ({ ...previous, step_rule: nextValue }))
+                  }
+                  stages={stages}
+                  tags={tags}
+                  leadSources={leadSources}
+                  instances={instances}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <DialogFooter className="border-t border-white/10 px-6 py-4">
+          <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+              {stepForm.id && onDelete ? (
+                <Button
+                  variant="outline"
+                  onClick={onDelete}
+                  className="border-white/15 bg-transparent text-white hover:bg-white/5 hover:text-white"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remover
+                </Button>
+              ) : null}
+              {stepForm.id ? (
+                <Button
+                  variant="outline"
+                  onClick={onCancelEdit}
+                  className="border-white/15 bg-transparent text-white hover:bg-white/5 hover:text-white"
+                >
+                  Cancelar edicao
+                </Button>
+              ) : null}
+            </div>
+
+            <Button onClick={onSave} disabled={savingStep} className="bg-[var(--color-accent)] text-white hover:brightness-110">
+              <Save className="h-4 w-4" />
+              {savingStep ? "Salvando..." : journeySaved ? (stepForm.id ? "Salvar mensagem" : "Adicionar mensagem") : "Salvar rascunho"}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 interface AutomationMessageModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -333,6 +614,7 @@ export function AutomationMessageModal({
   );
   const [savingJourney, setSavingJourney] = useState(false);
   const [savingStep, setSavingStep] = useState(false);
+  const [stepEditorOpen, setStepEditorOpen] = useState(false);
   const [selectedPreviewLeadId, setSelectedPreviewLeadId] = useState("");
   const [activeTab, setActiveTab] = useState("entry");
 
@@ -343,6 +625,15 @@ export function AutomationMessageModal({
     ? 0
     : timeUnitToMinutes(Math.max(1, Number(stepForm.delay_value || 1)), stepForm.delay_unit);
   const canShowEditor = !!journey || !!selectedRecipeId;
+  const { flow: messageFlow, loading: messageFlowLoading } = useAutomationMessageFlow(
+    journeyForm.id,
+    orderedSteps,
+    open && canShowEditor,
+  );
+  const editingStep = useMemo(
+    () => orderedSteps.find((step) => step.id === stepForm.id) ?? null,
+    [orderedSteps, stepForm.id],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -361,6 +652,7 @@ export function AutomationMessageModal({
     );
     setSelectedRecipeId(nextRecipeId);
     setStepForm(createInitialStepForm(nextRecipeId));
+    setStepEditorOpen(false);
     setActiveTab("entry");
   }, [journey, open, preselectedInstanceName, preselectedStageId, stages]);
 
@@ -520,13 +812,12 @@ export function AutomationMessageModal({
     }
   };
 
+  const handleStepFormChange = (updater: (previous: StepFormState) => StepFormState) => {
+    setStepForm((previous) => updater(previous));
+  };
+
   const handleSaveStep = async () => {
     const currentJourneyId = journeyForm.id || journey?.id || null;
-
-    if (!currentJourneyId) {
-      toast.error("Salve a automacao antes de criar mensagens");
-      return;
-    }
 
     if (!stepForm.message_template.trim()) {
       toast.error("Escreva a mensagem automatica");
@@ -541,6 +832,11 @@ export function AutomationMessageModal({
     try {
       setSavingStep(true);
 
+      if (!currentJourneyId) {
+        setStepEditorOpen(false);
+        return;
+      }
+
       const payload = buildStepPayload(stepForm, journeyForm.anchor_event, currentStepDelayMinutes);
 
       if (stepForm.id) {
@@ -550,11 +846,18 @@ export function AutomationMessageModal({
       }
 
       setStepForm(createInitialStepForm(selectedRecipeId));
+      setStepEditorOpen(false);
     } catch (error: unknown) {
       toast.error("Erro ao salvar mensagem", { description: getErrorDescription(error) });
     } finally {
       setSavingStep(false);
     }
+  };
+
+  const openNewStepEditor = () => {
+    setActiveTab("messages");
+    setStepForm(createInitialStepForm(selectedRecipeId));
+    setStepEditorOpen(true);
   };
 
   const handleEditStep = (step: AutomationStep) => {
@@ -572,6 +875,12 @@ export function AutomationMessageModal({
       step_rule: step.step_rule ? normalizeRuleNode(step.step_rule) : createRuleGroup("all", []),
       step_rule_enabled: !!step.step_rule,
     });
+    setStepEditorOpen(true);
+  };
+
+  const handleCancelStepEdit = () => {
+    setStepForm(createInitialStepForm(selectedRecipeId));
+    setStepEditorOpen(false);
   };
 
   const handleDeleteStep = async (step: AutomationStep) => {
@@ -589,6 +898,7 @@ export function AutomationMessageModal({
       await deleteStep(step.id, currentJourneyId);
       if (stepForm.id === step.id) {
         setStepForm(createInitialStepForm(selectedRecipeId));
+        setStepEditorOpen(false);
       }
     } catch (error: unknown) {
       toast.error("Erro ao remover mensagem", { description: getErrorDescription(error) });
@@ -609,7 +919,7 @@ export function AutomationMessageModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[calc(100vh-2rem)] max-w-6xl flex-col overflow-hidden p-0">
+      <DialogContent className="flex max-h-[calc(100vh-2rem)] max-w-7xl flex-col overflow-hidden p-0">
         <DialogHeader className="border-b px-6 py-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="space-y-1">
@@ -808,213 +1118,144 @@ export function AutomationMessageModal({
                 </TabsContent>
 
                 <TabsContent value="messages" className="space-y-6">
-                  <div className="rounded-2xl border bg-card/70 px-4 py-3 text-sm text-muted-foreground">
-                    <span>Disparos ativos entre 08h e 18h59 de acordo com o limite por hora configurado.</span>
-                  </div>
-
-                  <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-                    <div className="space-y-4">
+                  <div className="space-y-5 rounded-[28px] border bg-card/70 p-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                       <div>
                         <h3 className="flex items-center gap-2 font-semibold">
                           <Clock3 className="h-4 w-4" />
-                          Timeline da jornada
+                          Fluxo de mensagens
                         </h3>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          Veja a ordem das mensagens e o momento de cada envio.
+                          {journeyForm.id
+                            ? `${messageFlow.activeLeadsCount} leads ativos nesta jornada.`
+                            : "Monte a primeira mensagem e salve a automacao para distribuir os leads no fluxo."}
                         </p>
                       </div>
 
-                      <Separator />
-
-                      {!journeyForm.id ? (
-                        <div className="rounded-2xl border border-dashed px-4 py-8 text-sm text-muted-foreground">
-                          Salve a automacao para comecar a cadastrar mensagens.
-                        </div>
-                      ) : orderedSteps.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed px-4 py-8 text-sm text-muted-foreground">
-                          Nenhuma mensagem cadastrada ainda.
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {orderedSteps.map((step, index) => (
-                            <div key={step.id} className="rounded-2xl border bg-card/95 p-4">
-                              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <Badge variant="secondary">#{index + 1}</Badge>
-                                    <p className="font-medium">{formatDelayLabel(step.delay_minutes, journeyForm.anchor_event)}</p>
-                                    {!step.is_active ? <Badge variant="outline">Pausada</Badge> : null}
-                                    {step.step_rule ? <Badge variant="outline">Condicao extra configurada</Badge> : null}
-                                  </div>
-
-                                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                                    {getMessagePreview(step.message_template, 180)}
-                                  </p>
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                  <Button variant="outline" size="sm" onClick={() => handleEditStep(step)}>
-                                    Editar
-                                  </Button>
-                                  <Button variant="outline" size="sm" onClick={() => handleDeleteStep(step)}>
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-4 rounded-[24px] border bg-card/70 p-5">
-                      <div className="space-y-1">
-                        <h3 className="font-semibold">{stepForm.id ? "Editar mensagem" : "Nova mensagem"}</h3>
-                        <p className="text-sm text-muted-foreground">
-                          Escreva a mensagem e escolha quando ela deve ser enviada.
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="step-label">Nome interno (opcional)</Label>
-                        <Input
-                          id="step-label"
-                          value={stepForm.label}
-                          onChange={(event) => setStepForm((previous) => ({ ...previous, label: event.target.value }))}
-                          placeholder="Ex: Follow-up 4h"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Quando enviar</Label>
-                        <Select
-                          value={stepForm.timing_mode}
-                          onValueChange={(value: StepTimingMode) =>
-                            setStepForm((previous) => ({ ...previous, timing_mode: value }))
-                          }
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline">{orderedSteps.length} mensagens</Badge>
+                        {journeyForm.id ? <Badge variant="outline">{messageFlow.parkedCount} no fim</Badge> : null}
+                        <Button
+                          onClick={journeyForm.id ? openNewStepEditor : () => setStepEditorOpen(true)}
+                          className="bg-[var(--color-accent)] text-white hover:brightness-110"
                         >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="now">Na hora</SelectItem>
-                            <SelectItem value="after">Depois de</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      {stepForm.timing_mode === "after" ? (
-                        <div className="grid gap-4 grid-cols-[minmax(0,1fr)_140px]">
-                          <div className="space-y-2">
-                            <Label htmlFor="step-delay">Tempo</Label>
-                            <Input
-                              id="step-delay"
-                              type="number"
-                              min={1}
-                              value={stepForm.delay_value}
-                              onChange={(event) =>
-                                setStepForm((previous) => ({ ...previous, delay_value: event.target.value }))
-                              }
-                            />
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label>Unidade</Label>
-                            <Select
-                              value={stepForm.delay_unit}
-                              onValueChange={(value: AutomationTimeUnit) =>
-                                setStepForm((previous) => ({ ...previous, delay_unit: value }))
-                              }
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="minute">min</SelectItem>
-                                <SelectItem value="hour">hora</SelectItem>
-                                <SelectItem value="day">dia</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="rounded-2xl border bg-background/60 px-4 py-3 text-sm text-muted-foreground">
-                        {formatTimingSummary(currentStepDelayMinutes, journeyForm.anchor_event)}
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="step-message">Mensagem</Label>
-                        <Textarea
-                          id="step-message"
-                          rows={8}
-                          value={stepForm.message_template}
-                          onChange={(event) =>
-                            setStepForm((previous) => ({ ...previous, message_template: event.target.value }))
-                          }
-                          placeholder="Oi {nome}, sigo por aqui caso queira continuar o atendimento."
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between rounded-2xl border px-4 py-3">
-                        <div>
-                          <p className="font-medium">Mensagem ativa</p>
-                          <p className="text-xs text-muted-foreground">Mensagens pausadas nao geram novos envios.</p>
-                        </div>
-                        <Switch
-                          checked={stepForm.is_active}
-                          onCheckedChange={(checked) =>
-                            setStepForm((previous) => ({ ...previous, is_active: checked }))
-                          }
-                        />
-                      </div>
-
-                      <div className="rounded-2xl border px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="font-medium">So enviar se...</p>
-                            <p className="text-xs text-muted-foreground">
-                              Use apenas quando essa mensagem depender de alguma condicao extra.
-                            </p>
-                          </div>
-                          <Switch
-                            checked={stepForm.step_rule_enabled}
-                            onCheckedChange={(checked) =>
-                              setStepForm((previous) => ({ ...previous, step_rule_enabled: checked }))
-                            }
-                          />
-                        </div>
-
-                        {stepForm.step_rule_enabled ? (
-                          <div className="mt-4">
-                            <AutomationConditionComposer
-                              title="Condicao extra da mensagem"
-                              value={stepForm.step_rule}
-                              onChange={(nextValue) =>
-                                setStepForm((previous) => ({ ...previous, step_rule: nextValue }))
-                              }
-                              stages={stages}
-                              tags={tags}
-                              leadSources={leadSources}
-                              instances={instances}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2">
-                        {stepForm.id ? (
-                          <Button variant="outline" onClick={() => setStepForm(createInitialStepForm(selectedRecipeId))}>
-                            Cancelar edicao
-                          </Button>
-                        ) : null}
-                        <Button onClick={handleSaveStep} disabled={!journeyForm.id || savingStep}>
-                          <Save className="h-4 w-4" />
-                          {savingStep ? "Salvando..." : stepForm.id ? "Salvar mensagem" : "Adicionar mensagem"}
+                          <Plus className="h-4 w-4" />
+                          {journeyForm.id ? "Nova mensagem" : "Primeira mensagem"}
                         </Button>
                       </div>
                     </div>
+
+                    {messageFlowLoading && journeyForm.id ? (
+                      <div className="flex flex-wrap gap-3">
+                        <div className="h-[196px] w-[260px] animate-pulse rounded-[28px] border bg-background/40" />
+                        <div className="h-[196px] w-[260px] animate-pulse rounded-[28px] border bg-background/40" />
+                        <div className="h-[196px] w-[260px] animate-pulse rounded-[28px] border bg-background/40" />
+                      </div>
+                    ) : !journeyForm.id ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <AutomationMessageStepCard
+                          title={stepForm.label.trim() || "Primeira mensagem"}
+                          preview={
+                            stepForm.message_template.trim()
+                              ? getMessagePreview(stepForm.message_template, 120)
+                              : "Clique para escrever a primeira mensagem."
+                          }
+                          timingLabel={formatTimingSummary(currentStepDelayMinutes, journeyForm.anchor_event)}
+                          leadCount={null}
+                          isInactive={!stepForm.is_active}
+                          isHighlighted={false}
+                          isDraft
+                          onClick={() => setStepEditorOpen(true)}
+                        />
+                      </div>
+                    ) : orderedSteps.length === 0 ? (
+                      <button
+                        type="button"
+                        onClick={openNewStepEditor}
+                        className="flex h-[180px] w-full items-center justify-center rounded-[28px] border border-dashed border-border bg-background/30 px-6 text-sm text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
+                      >
+                        Criar a primeira mensagem do fluxo
+                      </button>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-3">
+                        {orderedSteps.map((step, index) => {
+                          const leadCount = messageFlow.stepCounts[step.id] ?? 0;
+                          const isHighlighted = messageFlow.highlightedStepIds.includes(step.id);
+
+                          return (
+                            <div key={step.id} className="flex items-center gap-3">
+                              <AutomationMessageStepCard
+                                title={step.label.trim() || `Mensagem ${index + 1}`}
+                                preview={getMessagePreview(step.message_template, 120)}
+                                timingLabel={formatDelayLabel(step.delay_minutes, journeyForm.anchor_event)}
+                                leadCount={leadCount}
+                                isInactive={!step.is_active}
+                                isHighlighted={isHighlighted}
+                                onClick={() => handleEditStep(step)}
+                              />
+
+                              {index < orderedSteps.length - 1 ? (
+                                <div className="hidden xl:block">
+                                  <div className="h-px w-7 bg-[var(--color-accent)]/45" />
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+
+                        <div className="flex items-center gap-3">
+                          {orderedSteps.length > 0 ? (
+                            <div className="hidden xl:block">
+                              <div className="h-px w-7 bg-[var(--color-accent)]/45" />
+                            </div>
+                          ) : null}
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={openNewStepEditor}
+                              className={cn(
+                                "group flex h-14 w-14 items-center justify-center rounded-full border border-[var(--color-accent)]/45 bg-[rgba(10,10,10,0.86)] text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--color-accent)] hover:shadow-[0_0_18px_rgba(229,57,58,0.18)]",
+                                messageFlow.parkedCount > 0 && "shadow-[0_0_14px_rgba(229,57,58,0.14)]",
+                              )}
+                              title="Criar nova mensagem"
+                            >
+                              {messageFlow.parkedCount}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={openNewStepEditor}
+                              className="text-left transition-opacity hover:opacity-100"
+                            >
+                              <span className="block text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">
+                                No fim
+                              </span>
+                              <span className="block text-xs text-white/72">Nova mensagem</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
+
+                  <AutomationMessageEditorDialog
+                    open={stepEditorOpen}
+                    onOpenChange={setStepEditorOpen}
+                    stepForm={stepForm}
+                    currentStepDelayMinutes={currentStepDelayMinutes}
+                    journeyAnchorEvent={journeyForm.anchor_event}
+                    journeySaved={Boolean(journeyForm.id)}
+                    savingStep={savingStep}
+                    onStepFormChange={handleStepFormChange}
+                    onSave={handleSaveStep}
+                    onCancelEdit={handleCancelStepEdit}
+                    onDelete={editingStep ? () => handleDeleteStep(editingStep) : null}
+                    stages={stages}
+                    tags={tags}
+                    instances={instances}
+                    leadSources={leadSources}
+                  />
                 </TabsContent>
 
                 {showDebugTools ? (

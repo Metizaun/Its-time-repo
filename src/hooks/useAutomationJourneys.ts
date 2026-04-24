@@ -136,8 +136,8 @@ export function useAutomationJourneys(enabled = true) {
     );
   }, [stepsByJourney]);
 
-  const invalidateJourneys = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["automation", "journeys"] });
+  const invalidateAutomationData = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["automation"] });
   };
 
   const syncJourneyMutation = useMutation({
@@ -282,7 +282,7 @@ export function useAutomationJourneys(enabled = true) {
     refetchJourneys: journeysQuery.refetch,
     syncJourney: async (funnelId: string) => {
       const result = await syncJourneyMutation.mutateAsync(funnelId);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       return result;
     },
     createJourney: async (payload: AutomationJourneyPayload, initialStepPayload?: AutomationStepPayload | null) => {
@@ -297,46 +297,46 @@ export function useAutomationJourneys(enabled = true) {
       }
 
       await syncJourneyRpc(journey.id);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success(initialStepPayload ? "Automacao criada com mensagem inicial" : "Automacao criada com sucesso");
       return journey;
     },
     updateJourney: async (journeyId: string, payload: AutomationJourneyPayload) => {
       const journey = await updateJourneyMutation.mutateAsync({ journeyId, payload });
       await syncJourneyRpc(journey.id);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success("Automacao atualizada com sucesso");
       return journey;
     },
     deleteJourney: async (journeyId: string) => {
       await deleteJourneyMutation.mutateAsync(journeyId);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success("Automacao removida com sucesso");
     },
     createStep: async (funnelId: string, payload: AutomationStepPayload) => {
       const step = await createStepMutation.mutateAsync({ funnelId, payload });
       await syncJourneyRpc(step.funnel_id);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success("Mensagem adicionada com sucesso");
       return step;
     },
     updateStep: async (stepId: string, funnelId: string, payload: AutomationStepPayload) => {
       const result = await updateStepMutation.mutateAsync({ stepId, funnelId, payload });
       await syncJourneyRpc(result.funnelId);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success("Mensagem atualizada com sucesso");
       return result;
     },
     deleteStep: async (stepId: string, funnelId: string) => {
       await deleteStepMutation.mutateAsync({ stepId, funnelId });
       await syncJourneyRpc(funnelId);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success("Mensagem removida com sucesso");
     },
     reorderSteps: async (funnelId: string, reorderedSteps: AutomationStep[]) => {
       await reorderStepsMutation.mutateAsync({ funnelId, reorderedSteps });
       await syncJourneyRpc(funnelId);
-      await invalidateJourneys();
+      await invalidateAutomationData();
       toast.success("Ordem das mensagens atualizada");
     },
   };

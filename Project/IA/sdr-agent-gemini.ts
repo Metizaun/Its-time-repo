@@ -2,7 +2,12 @@ import axios from "axios";
 import Redis from "ioredis";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import crypto from "node:crypto";
+
+import {
+  matchOutboundEcho,
+  registerOutboundEcho,
+  type OutboundEchoOrigin,
+} from "./outbound-echo-registry.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
@@ -31,6 +36,9 @@ type AgentRow = {
   buffer_wait_ms: number;
   human_pause_minutes: number;
   auto_apply_threshold: number;
+  handoff_enabled: boolean;
+  handoff_prompt: string | null;
+  handoff_target_phone: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -130,6 +138,9 @@ type LeadAiStateRow = {
   agent_id: string;
   lead_id: string;
   freeze_until: string | null;
+  pause_origin: string | null;
+  pause_reference: string | null;
+  paused_at: string | null;
   last_processed_message_at: string | null;
   last_inbound_at: string | null;
   last_ai_reply_at: string | null;
@@ -183,6 +194,9 @@ type CreateAgentInput = {
   humanPauseMinutes?: number;
   autoApplyThreshold?: number;
   isActive?: boolean;
+  handoffEnabled?: boolean;
+  handoffPrompt?: string;
+  handoffTargetPhone?: string;
 };
 
 type UpdateAgentInput = Partial<CreateAgentInput>;
@@ -201,6 +215,13 @@ type SendManualMessageInput = {
   leadId: string;
   content: string;
   instanceName?: string | null;
+};
+
+type TestHandoffInput = {
+  instanceName: string;
+  targetPhone: string;
+  agentName?: string;
+  handoffPrompt?: string;
 };
 
 type CreateInstanceInput = {
@@ -227,6 +248,15 @@ type StructuredModelResponse = {
   reason: string;
   should_apply_stage: boolean;
   should_pause: boolean;
+  should_handoff: boolean;
+  handoff_reason: string;
+};
+
+type HandoffExecutionResult = {
+  triggered: boolean;
+  targetPhone: string | null;
+  reason: string;
+  notification: string | null;
 };
 
 type ServiceConfig = {
@@ -302,6 +332,22 @@ function normalizePhone(phone: string): string {
   return clean;
 }
 
+function resolveWhatsappRecipient(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) {
+    throw new HttpError(400, "Numero de WhatsApp invalido");
+  }
+
+  const normalized = normalizePhone(digits);
+  const finalNumber = normalized.length <= 11 ? `55${normalized}` : normalized;
+
+  return {
+    normalized,
+    finalNumber,
+    jid: `${finalNumber}@s.whatsapp.net`,
+  };
+}
+
 function phoneVariants(phone: string): string[] {
   const normalized = normalizePhone(phone);
   const variants = new Set<string>([normalized]);
@@ -319,10 +365,6 @@ function phoneVariants(phone: string): string[] {
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function hashFingerprint(parts: string[]): string {
-  return crypto.createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
 function addHours(date: Date, hours: number) {
@@ -348,6 +390,8 @@ function parseStructuredJson(text: string): StructuredModelResponse {
     reason: parsed.reason ? String(parsed.reason) : "",
     should_apply_stage: Boolean(parsed.should_apply_stage),
     should_pause: Boolean(parsed.should_pause),
+    should_handoff: Boolean(parsed.should_handoff),
+    handoff_reason: parsed.handoff_reason ? String(parsed.handoff_reason) : "",
   };
 }
 
@@ -973,6 +1017,9 @@ export class AgentManager {
       buffer_wait_ms: input.bufferWaitMs ?? 15000,
       human_pause_minutes: input.humanPauseMinutes ?? 60,
       auto_apply_threshold: input.autoApplyThreshold ?? 0.85,
+      handoff_enabled: input.handoffEnabled ?? false,
+      handoff_prompt: input.handoffPrompt?.trim() || null,
+      handoff_target_phone: input.handoffTargetPhone?.trim() || null,
       created_by: context.crmUserId,
     };
 
@@ -1005,6 +1052,9 @@ export class AgentManager {
     if (input.bufferWaitMs !== undefined) payload.buffer_wait_ms = input.bufferWaitMs;
     if (input.humanPauseMinutes !== undefined) payload.human_pause_minutes = input.humanPauseMinutes;
     if (input.autoApplyThreshold !== undefined) payload.auto_apply_threshold = input.autoApplyThreshold;
+    if (input.handoffEnabled !== undefined) payload.handoff_enabled = input.handoffEnabled;
+    if (input.handoffPrompt !== undefined) payload.handoff_prompt = input.handoffPrompt.trim() || null;
+    if (input.handoffTargetPhone !== undefined) payload.handoff_target_phone = input.handoffTargetPhone.trim() || null;
 
     const { data, error } = await this.serviceClient
       .from("ai_agents")
@@ -1168,6 +1218,9 @@ export class AgentManager {
         lead_id: leadId,
         freeze_until: null,
         status: "active",
+        pause_origin: null,
+        pause_reference: null,
+        paused_at: null,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "agent_id,lead_id" }
@@ -1211,11 +1264,17 @@ export class AgentManager {
           manual_ai_enabled: agent.is_active ? null : true,
           freeze_until: null,
           status: "active",
+          pause_origin: null,
+          pause_reference: null,
+          paused_at: null,
         }
       : {
           manual_ai_enabled: false,
           freeze_until: null,
           status: "paused",
+          pause_origin: "manual_override",
+          pause_reference: context.crmUserId,
+          paused_at: new Date().toISOString(),
         });
 
     return this.resolveLeadAiState(lead.id, agent, instanceName);
@@ -1606,22 +1665,47 @@ export class AgentManager {
     });
   }
 
-  private async rememberOutbound(instanceName: string, phone: string, content: string) {
-    const key = `crm-ai:outbound:${hashFingerprint([instanceName, normalizePhone(phone), content.trim()])}`;
-    if (this.redis) {
-      await this.redis.set(key, "1", "EX", 180);
-      return;
-    }
+  private async registerOutboundEcho(params: {
+    acesId: number;
+    leadId: string;
+    origin: OutboundEchoOrigin;
+    referenceId?: string | null;
+    conversationId?: string | null;
+    instanceName: string;
+    phone: string;
+    content: string;
+    sentAt?: string;
+  }) {
+    return registerOutboundEcho({
+      client: this.serviceClient,
+      redis: this.redis,
+      ...params,
+    });
   }
 
-  private async matchesRecentOutbound(instanceName: string, phone: string, content: string) {
-    const key = `crm-ai:outbound:${hashFingerprint([instanceName, normalizePhone(phone), content.trim()])}`;
-    if (!this.redis) {
-      return false;
+  private async matchOutboundEcho(instanceName: string, phone: string, content: string) {
+    return matchOutboundEcho({
+      client: this.serviceClient,
+      redis: this.redis,
+      instanceName,
+      phone,
+      content,
+    });
+  }
+
+  private async repairAutomationFreezeForLead(leadId: string | null, reference: string) {
+    if (!leadId) {
+      return;
     }
 
-    const value = await this.redis.get(key);
-    return value === "1";
+    const { error } = await this.serviceClient.rpc("rpc_repair_automation_ai_freezes", {
+      p_lead_id: leadId,
+      p_reference: reference,
+    });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel reparar o freeze da IA", error);
+    }
   }
 
   private async dedupeIncomingMessage(messageId: string | null) {
@@ -1887,11 +1971,19 @@ export class AgentManager {
     }
   }
 
-  private async freezeLead(agent: AgentRow, leadId: string) {
+  private async freezeLead(
+    agent: AgentRow,
+    leadId: string,
+    pauseOrigin: "manual_send" | "human_webhook" | "ai_policy" | "manual_override",
+    pauseReference?: string | null,
+  ) {
     const freezeUntil = new Date(Date.now() + agent.human_pause_minutes * 60_000).toISOString();
     await this.upsertLeadState(agent.id, leadId, {
       freeze_until: freezeUntil,
       status: "paused",
+      pause_origin: pauseOrigin,
+      pause_reference: pauseReference ?? null,
+      paused_at: new Date().toISOString(),
     });
     return freezeUntil;
   }
@@ -1905,7 +1997,7 @@ export class AgentManager {
     suggestedStageId?: string | null;
     appliedStageId?: string | null;
     confidence?: number | null;
-    actionTaken?: "none" | "reply_only" | "stage_applied" | "manual_pause" | "failed";
+    actionTaken?: "none" | "reply_only" | "stage_applied" | "manual_pause" | "failed" | "freeze_repair";
     error?: string | null;
     tokensIn?: number | null;
     tokensOut?: number | null;
@@ -2066,14 +2158,13 @@ export class AgentManager {
   }
 
   private async sendWhatsAppMessage(instanceName: string, phone: string, content: string) {
-    const cleanPhone = normalizePhone(phone);
-    const number = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
+    const recipient = resolveWhatsappRecipient(phone);
 
     try {
       await axios.post(
         `${this.config.evolutionApiUrl}/message/sendText/${instanceName}`,
         {
-          number: `${number}@s.whatsapp.net`,
+          number: recipient.jid,
           text: content,
           delay: 1000,
         },
@@ -2084,7 +2175,7 @@ export class AgentManager {
     } catch (error) {
       console.error("[crm-ai] Falha ao enviar mensagem na Evolution:", {
         instanceName,
-        phone: `${number}@s.whatsapp.net`,
+        phone: recipient.jid,
         error: axios.isAxiosError(error) ? error.response?.data ?? error.message : error,
       });
       throw buildExternalRequestError(error, "Falha ao enviar mensagem na Evolution");
@@ -2106,10 +2197,25 @@ export class AgentManager {
     const instanceName = params.agent.instance_name || params.lead.instancia;
     const phone = requireValue(params.lead.contact_phone, "Lead sem telefone para envio");
     const resolvedInstance = requireValue(instanceName, "Instancia de envio nao definida");
+    const outboundOrigin: OutboundEchoOrigin = params.sourceType === "human" ? "manual" : "ai";
 
     for (const [index, block] of blocks.entries()) {
+      const sentAt = new Date().toISOString();
+      const conversationId = `${params.sourceType}:${Date.now()}:${index}`;
+
+      await this.registerOutboundEcho({
+        acesId: params.lead.aces_id,
+        leadId: params.lead.id,
+        origin: outboundOrigin,
+        conversationId,
+        referenceId: conversationId,
+        instanceName: resolvedInstance,
+        phone,
+        content: block,
+        sentAt,
+      });
+
       await this.sendWhatsAppMessage(resolvedInstance, phone, block);
-      await this.rememberOutbound(resolvedInstance, phone, block);
 
       await this.saveMessage({
         leadId: params.lead.id,
@@ -2119,7 +2225,8 @@ export class AgentManager {
         sourceType: params.sourceType,
         instanceName: resolvedInstance,
         createdBy: params.createdBy ?? null,
-        conversationId: `${params.sourceType}:${Date.now()}:${index}`,
+        conversationId,
+        sentAt,
       });
 
       if (index < blocks.length - 1) {
@@ -2128,8 +2235,82 @@ export class AgentManager {
     }
   }
 
+  private getHandoffConfig(agent: AgentRow) {
+    const instruction = asString(agent.handoff_prompt);
+    const targetPhone = asString(agent.handoff_target_phone);
+
+    return {
+      enabled: Boolean(agent.handoff_enabled && instruction && targetPhone),
+      instruction,
+      targetPhone,
+    };
+  }
+
+  private buildHandoffNotification(
+    agent: AgentRow,
+    lead: LeadRow,
+    response: StructuredModelResponse,
+    messages: MessageRow[]
+  ) {
+    const latestLeadMessage = [...messages]
+      .reverse()
+      .find((message) => message.source_type === "lead")?.content;
+
+    const reason =
+      response.handoff_reason.trim() ||
+      response.reason.trim() ||
+      "Condicao de handoff atendida pela IA.";
+
+    return [
+      "[Handoff IA]",
+      `Agente: ${agent.name}`,
+      `Instancia: ${agent.instance_name}`,
+      `Lead: ${lead.name?.trim() || "Sem nome"}`,
+      `Telefone: ${lead.contact_phone || "Nao informado"}`,
+      lead.last_city ? `Cidade: ${lead.last_city}` : null,
+      `Motivo: ${reason}`,
+      latestLeadMessage
+        ? `Ultima mensagem do lead: ${truncateText(latestLeadMessage, 500)}`
+        : null,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+  }
+
+  private async triggerHandoff(
+    agent: AgentRow,
+    lead: LeadRow,
+    response: StructuredModelResponse,
+    messages: MessageRow[]
+  ): Promise<HandoffExecutionResult> {
+    const config = this.getHandoffConfig(agent);
+
+    if (!config.enabled || !config.targetPhone || !response.should_handoff) {
+      return {
+        triggered: false,
+        targetPhone: null,
+        reason: response.handoff_reason.trim(),
+        notification: null,
+      };
+    }
+
+    const notification = this.buildHandoffNotification(agent, lead, response, messages);
+    await this.sendWhatsAppMessage(agent.instance_name, config.targetPhone, notification);
+
+    return {
+      triggered: true,
+      targetPhone: config.targetPhone,
+      reason:
+        response.handoff_reason.trim() ||
+        response.reason.trim() ||
+        "Condicao de handoff atendida pela IA.",
+      notification,
+    };
+  }
+
   private async classifyConversation(agent: AgentRow, lead: LeadRow, rules: Array<{ stage: StageRow; rule: StageRuleRow }>, messages: MessageRow[]) {
     const model = this.getModel(agent.model);
+    const handoffConfig = this.getHandoffConfig(agent);
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
       .join("\n");
@@ -2149,10 +2330,12 @@ export class AgentManager {
     const prompt = [
       agent.system_prompt,
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, confidence, reason, should_apply_stage, should_pause.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
       "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas de WhatsApp.",
       "stage_decision deve conter stage_id e reason.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
+      "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
+      "handoff_reason deve explicar objetivamente por que o handoff foi acionado. Se nao houver handoff, deixe handoff_reason vazio.",
       "",
       `Lead atual: ${JSON.stringify({
         id: lead.id,
@@ -2164,6 +2347,12 @@ export class AgentManager {
       })}`,
       "",
       `Etapas disponiveis: ${JSON.stringify(stages)}`,
+      "",
+      `Configuracao de handoff: ${JSON.stringify({
+        enabled: handoffConfig.enabled,
+        instruction: handoffConfig.instruction ?? null,
+        target_phone_configured: Boolean(handoffConfig.targetPhone),
+      })}`,
       "",
       `Historico recente:\n${conversation}`,
     ].join("\n");
@@ -2281,6 +2470,9 @@ export class AgentManager {
     try {
       const result = await this.classifyConversation(agent, lead, rules, conversation);
       const appliedStageId = await this.applyStageDecision(agent, lead, result.parsed);
+      const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
+      const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
+      let freezeUntil: string | null = null;
 
       if (result.parsed.reply_blocks.length > 0) {
         await this.sendReplyBlocks({
@@ -2291,8 +2483,13 @@ export class AgentManager {
         });
       }
 
-      if (result.parsed.should_pause) {
-        await this.freezeLead(agent, lead.id);
+      if (shouldFreezeLead) {
+        freezeUntil = await this.freezeLead(
+          agent,
+          lead.id,
+          "ai_policy",
+          bufferedEntries[bufferedEntries.length - 1]?.messageId ?? null,
+        );
       } else {
         await this.upsertLeadState(agent.id, lead.id, {
           last_processed_message_at: bufferedEntries[bufferedEntries.length - 1]?.sentAt ?? new Date().toISOString(),
@@ -2316,11 +2513,19 @@ export class AgentManager {
         outputSnapshot: {
           raw_model_response: result.rawText,
           structured: result.parsed,
+          handoff: handoffResult,
+          freeze_until: freezeUntil,
         },
         suggestedStageId: result.parsed.stage_decision.stage_id,
         appliedStageId,
         confidence: result.parsed.confidence,
-        actionTaken: appliedStageId ? "stage_applied" : result.parsed.reply_blocks.length > 0 ? "reply_only" : "none",
+        actionTaken: appliedStageId
+          ? "stage_applied"
+          : result.parsed.reply_blocks.length > 0
+            ? "reply_only"
+            : handoffResult.triggered
+              ? "manual_pause"
+              : "none",
         tokensIn: result.tokensIn,
         tokensOut: result.tokensOut,
       });
@@ -2370,9 +2575,28 @@ export class AgentManager {
     }
 
     if (message.fromMe) {
-      const isKnownOutbound = await this.matchesRecentOutbound(message.instanceName, message.phone, normalizedContent);
-      if (isKnownOutbound) {
-        return { ignored: true, reason: "Echo de mensagem ja enviada pelo backend" };
+      const matchedOutbound = await this.matchOutboundEcho(
+        message.instanceName,
+        message.phone,
+        normalizedContent,
+      );
+      if (matchedOutbound) {
+        if (matchedOutbound.origin !== "manual") {
+          await this.repairAutomationFreezeForLead(
+            matchedOutbound.leadId,
+            `echo:${matchedOutbound.origin}:${matchedOutbound.referenceId ?? matchedOutbound.conversationId ?? message.messageId ?? "unknown"}`,
+          );
+        }
+
+        return {
+          ignored: true,
+          reason:
+            matchedOutbound.origin === "manual"
+              ? "Echo de mensagem manual do backend"
+              : matchedOutbound.origin === "automation"
+                ? "Echo de mensagem da automacao ignorado"
+                : "Echo de mensagem da IA ignorado",
+        };
       }
 
       const lead = await this.findOrCreateLead(
@@ -2396,7 +2620,12 @@ export class AgentManager {
       const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
       let freezeUntil: string | null = null;
       if (agent && aiState.reason !== "manual_off") {
-        freezeUntil = await this.freezeLead(agent, lead.id);
+        freezeUntil = await this.freezeLead(
+          agent,
+          lead.id,
+          "human_webhook",
+          message.messageId ?? message.conversationId ?? null,
+        );
         await this.createRun({
           agentId: agent.id,
           leadId: lead.id,
@@ -2519,6 +2748,9 @@ export class AgentManager {
           buffer_wait_ms: 15000,
           human_pause_minutes: 60,
           auto_apply_threshold: 0.85,
+          handoff_enabled: false,
+          handoff_prompt: null,
+          handoff_target_phone: null,
           created_by: context.crmUserId,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -2530,7 +2762,12 @@ export class AgentManager {
     });
 
     if (configuredAgent && aiState?.reason !== "manual_off") {
-      const freezeUntil = await this.freezeLead(configuredAgent, lead.id);
+      const freezeUntil = await this.freezeLead(
+        configuredAgent,
+        lead.id,
+        "manual_send",
+        context.crmUserId,
+      );
       await this.createRun({
         agentId: configuredAgent.id,
         leadId: lead.id,
@@ -2546,6 +2783,37 @@ export class AgentManager {
     }
 
     return { success: true };
+  }
+
+  async testHandoff(context: AuthContext, input: TestHandoffInput) {
+    this.ensureAdmin(context);
+
+    const instanceName = this.sanitizeInstanceName(input.instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName);
+
+    if (!input.targetPhone?.trim()) {
+      throw new HttpError(400, "Numero do handoff e obrigatorio");
+    }
+
+    const recipient = resolveWhatsappRecipient(input.targetPhone);
+    const message = [
+      "Teste de handoff da IA",
+      `Agente: ${input.agentName?.trim() || "Agente IA"}`,
+      `Instancia: ${instanceName}`,
+      input.handoffPrompt?.trim()
+        ? `Regra configurada: ${truncateText(input.handoffPrompt.trim(), 280)}`
+        : null,
+      "Se voce recebeu esta mensagem, o envio do handoff esta funcionando.",
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+
+    await this.sendWhatsAppMessage(instanceName, input.targetPhone, message);
+
+    return {
+      success: true,
+      normalizedNumber: recipient.finalNumber,
+    };
   }
 
   validateWebhookSecret(headerValue?: string | null) {

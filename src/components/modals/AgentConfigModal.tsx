@@ -1,52 +1,62 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { X, GripVertical, Maximize2, Minimize2, ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { X, GripVertical, Maximize2, Minimize2, ChevronRight, Loader2 } from "lucide-react";
+
+import { useAuth } from "@/contexts/AuthContext";
 import { useAgents } from "@/hooks/useAgents";
 import { useInstances } from "@/hooks/useInstances";
-import { AIAgent } from "@/types";
 import { PROMPT_GUIDANCE_SECTIONS } from "@/lib/aiPrompt";
+import { cn } from "@/lib/utils";
+import { testAgentHandoff } from "@/services/agentService";
+import { AIAgent } from "@/types";
+import { Switch } from "@/components/ui/switch";
 
-// ─── Personality / Temperature Configuration ─────────────────────────────────
-// 5 levels mapped to Temperature + Behavioral Description injected into prompt.
+import { toast } from "sonner";
+
 const PERSONALITY_LEVELS = [
   {
-    label: "Cirúrgico",
+    label: "Cirurgico",
     description: "Seco, direto e objetivo. Respostas curtas sem rodeios.",
-    temperature: 0.10,
+    temperature: 0.1,
     promptSuffix:
-      "Mantenha um estilo de comunicação seco, objetivo e extremamente direto. Sem saudações excessivas, sem elogios e sem rodeios. Foco total na informação.",
+      "Mantenha um estilo de comunicacao seco, objetivo e extremamente direto. Sem saudacoes excessivas, sem elogios e sem rodeios. Foco total na informacao.",
   },
   {
     label: "Consultivo",
-    description: "Profissional e embasado. Transmite confiança e expertise.",
+    description: "Profissional e embasado. Transmite confianca e expertise.",
     temperature: 0.25,
     promptSuffix:
-      "Mantenha postura consultiva e profissional. Seja claro e embasado, transmitindo confiança e expertise sem excesso de informalidade.",
+      "Mantenha postura consultiva e profissional. Seja claro e embasado, transmitindo confianca e expertise sem excesso de informalidade.",
   },
   {
     label: "Equilibrado",
-    description: "Tom neutro. Amigável sem exageros.",
-    temperature: 0.40,
+    description: "Tom neutro. Amigavel sem exageros.",
+    temperature: 0.4,
     promptSuffix:
-      "Use tom equilibrado e amigável. Seja cordial e acessível, mas sem excesso de entusiasmo ou informalidade.",
+      "Use tom equilibrado e amigavel. Seja cordial e acessivel, mas sem excesso de entusiasmo ou informalidade.",
   },
   {
-    label: "Dinâmico",
-    description: "Energético e persuasivo. Cria rapport com facilidade.",
-    temperature: 0.60,
+    label: "Dinamico",
+    description: "Energetico e persuasivo. Cria rapport com facilidade.",
+    temperature: 0.6,
     promptSuffix:
-      "Seja energético, descontraído e persuasivo. Crie rapport de forma espontânea, use uma linguagem mais próxima e envolvente para engajar o lead.",
+      "Seja energetico, descontraido e persuasivo. Crie rapport de forma espontanea, use uma linguagem mais proxima e envolvente para engajar o lead.",
   },
   {
     label: "Entusiasta",
     description: "Alta energia e impacto emocional. Ideal para vendas ativas.",
     temperature: 0.75,
     promptSuffix:
-      "Seja altamente entusiasta e empático. Use linguagem animada, valorize o lead, crie alto impacto emocional e urgência positiva para conduzir à conversão.",
+      "Seja altamente entusiasta e empatico. Use linguagem animada, valorize o lead, crie alto impacto emocional e urgencia positiva para conduzir a conversao.",
   },
-];
+] as const;
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
+const PERSONALITY_SECTION_TITLE = "## Estilo de Comunicacao";
+const PERSONALITY_SECTION_PATTERN = /\n*## Estilo de Comunica(?:cao|\u00e7\u00e3o)\n[\s\S]*$/u;
+
+function stripPersonalityInstructions(prompt: string) {
+  return prompt.trim().replace(PERSONALITY_SECTION_PATTERN, "").trimEnd();
+}
 
 interface AgentConfigModalProps {
   open: boolean;
@@ -55,20 +65,25 @@ interface AgentConfigModalProps {
 }
 
 export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps) {
+  const { session } = useAuth();
   const { agents, upsertAgent, saving } = useAgents();
   const { instances } = useInstances();
 
-  // ── Form state ──────────────────────────────────────────────────────────────
   const [name, setName] = useState("");
   const [instanceName, setInstanceName] = useState("");
-  const [personalityLevel, setPersonalityLevel] = useState(2); // índice 0-4
+  const [personalityLevel, setPersonalityLevel] = useState(2);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [model] = useState(DEFAULT_MODEL);
+  const [handoffEnabled, setHandoffEnabled] = useState(false);
+  const [handoffPrompt, setHandoffPrompt] = useState("");
+  const [handoffTargetPhone, setHandoffTargetPhone] = useState("");
+  const [handoffEditorOpen, setHandoffEditorOpen] = useState(false);
+  const [testingHandoff, setTestingHandoff] = useState(false);
 
-  // ── Prompt Studio ─────────────────────────────────────────────────────────
   const [studioExpanded, setStudioExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragBlockRef = useRef<string | null>(null);
+
   const availableInstances = useMemo(() => {
     const blockedInstances = new Set(
       agents
@@ -82,33 +97,45 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
     );
   }, [agent?.id, agent?.instance_name, agents, instances]);
 
-  // Populate on edit
   useEffect(() => {
-    if (open) {
-      if (agent) {
-        setName(agent.name);
-        setInstanceName(agent.instance_name);
-        setSystemPrompt(agent.system_prompt);
-        // Approximate the level from the stored temperature
-        const idx = PERSONALITY_LEVELS.reduce((best, lvl, i) => {
-          return Math.abs(lvl.temperature - agent.temperature) <
-            Math.abs(PERSONALITY_LEVELS[best].temperature - agent.temperature)
-            ? i
-            : best;
-        }, 2);
-        setPersonalityLevel(idx);
-      } else {
-        setName("");
-        setInstanceName("");
-        setSystemPrompt("");
-        setPersonalityLevel(2);
-      }
-      setStudioExpanded(false);
+    if (!open) {
+      return;
     }
+
+    if (agent) {
+      setName(agent.name);
+      setInstanceName(agent.instance_name);
+      setSystemPrompt(stripPersonalityInstructions(agent.system_prompt));
+      setHandoffEnabled(Boolean(agent.handoff_enabled));
+      setHandoffPrompt(agent.handoff_prompt ?? "");
+      setHandoffTargetPhone(agent.handoff_target_phone ?? "");
+      setHandoffEditorOpen(Boolean(agent.handoff_enabled));
+
+      const idx = PERSONALITY_LEVELS.reduce((best, level, index) => {
+        return Math.abs(level.temperature - agent.temperature) <
+          Math.abs(PERSONALITY_LEVELS[best].temperature - agent.temperature)
+          ? index
+          : best;
+      }, 2);
+      setPersonalityLevel(idx);
+    } else {
+      setName("");
+      setInstanceName("");
+      setSystemPrompt("");
+      setPersonalityLevel(2);
+      setHandoffEnabled(false);
+      setHandoffPrompt("");
+      setHandoffTargetPhone("");
+      setHandoffEditorOpen(false);
+    }
+
+    setStudioExpanded(false);
   }, [open, agent]);
 
   useEffect(() => {
-    if (!open || agent) return;
+    if (!open || agent) {
+      return;
+    }
 
     setInstanceName((current) => {
       if (availableInstances.some((instance) => instance.instancia === current)) {
@@ -119,47 +146,63 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
     });
   }, [agent, availableInstances, open]);
 
-  // ── DnD Handlers ─────────────────────────────────────────────────────────
   const handleDragStart = useCallback((content: string) => {
     dragBlockRef.current = content;
   }, []);
 
   const handleDropOnTextarea = useCallback(
-    (e: React.DragEvent<HTMLTextAreaElement>) => {
-      e.preventDefault();
+    (event: React.DragEvent<HTMLTextAreaElement>) => {
+      event.preventDefault();
       const content = dragBlockRef.current;
-      if (!content || !textareaRef.current) return;
+      if (!content || !textareaRef.current) {
+        return;
+      }
 
       const textarea = textareaRef.current;
       const start = textarea.selectionStart ?? systemPrompt.length;
       const before = systemPrompt.slice(0, start);
       const after = systemPrompt.slice(start);
       const separator = before.length > 0 && !before.endsWith("\n\n") ? "\n\n" : "";
-      const next = `${before}${separator}${content}\n\n${after}`;
-      setSystemPrompt(next);
+      const nextPrompt = `${before}${separator}${content}\n\n${after}`;
+
+      setSystemPrompt(nextPrompt);
       dragBlockRef.current = null;
 
-      // Reposicionar cursor após o bloco inserido
       requestAnimationFrame(() => {
-        const pos = (before + separator + content + "\n\n").length;
-        textarea.setSelectionRange(pos, pos);
+        const position = (before + separator + content + "\n\n").length;
+        textarea.setSelectionRange(position, position);
         textarea.focus();
       });
     },
     [systemPrompt]
   );
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLTextAreaElement>) => {
-    e.preventDefault();
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLTextAreaElement>) => {
+    event.preventDefault();
   }, []);
 
-  // ── Submit ────────────────────────────────────────────────────────────────
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim() || !instanceName || !systemPrompt.trim()) return;
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (!name.trim() || !instanceName || !systemPrompt.trim()) {
+      return;
+    }
+
+    if (handoffEnabled && !handoffPrompt.trim()) {
+      setHandoffEditorOpen(true);
+      toast.error("Defina quando a IA deve fazer o handoff.");
+      return;
+    }
+
+    if (handoffEnabled && !handoffTargetPhone.trim()) {
+      setHandoffEditorOpen(true);
+      toast.error("Informe o numero que vai receber o handoff.");
+      return;
+    }
 
     const personality = PERSONALITY_LEVELS[personalityLevel];
-    const finalPrompt = `${systemPrompt.trim()}\n\n## Estilo de Comunicação\n${personality.promptSuffix}`;
+    const basePrompt = stripPersonalityInstructions(systemPrompt);
+    const finalPrompt = `${basePrompt}\n\n${PERSONALITY_SECTION_TITLE}\n${personality.promptSuffix}`;
 
     await upsertAgent(
       {
@@ -171,61 +214,99 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
         temperature: personality.temperature,
         buffer_wait_ms: 15000,
         human_pause_minutes: 60,
+        handoff_enabled: handoffEnabled,
+        handoff_prompt: handoffPrompt.trim() || null,
+        handoff_target_phone: handoffTargetPhone.trim() || null,
       },
       agent?.id
     );
+
     onClose();
   }
 
-  if (!open) return null;
+  async function handleTestHandoff() {
+    if (!instanceName) {
+      toast.error("Selecione a instancia antes de testar.");
+      return;
+    }
+
+    if (!handoffTargetPhone.trim()) {
+      toast.error("Informe o numero de destino do handoff.");
+      return;
+    }
+
+    if (!session?.access_token) {
+      toast.error("Sessao expirada. Entre novamente para testar.");
+      return;
+    }
+
+    try {
+      setTestingHandoff(true);
+      const result = await testAgentHandoff({
+        accessToken: session.access_token,
+        instanceName,
+        targetPhone: handoffTargetPhone.trim(),
+        agentName: name.trim() || agent?.name || "Agente IA",
+        handoffPrompt: handoffPrompt.trim() || undefined,
+      });
+
+      toast.success("Teste de handoff enviado.", {
+        description: `Destino validado: ${result.normalizedNumber}`,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Nao foi possivel validar o envio.";
+      toast.error("Falha ao testar handoff.", {
+        description: message,
+      });
+    } finally {
+      setTestingHandoff(false);
+    }
+  }
+
+  if (!open) {
+    return null;
+  }
 
   const currentPersonality = PERSONALITY_LEVELS[personalityLevel];
+  const handoffReady = Boolean(handoffPrompt.trim() && handoffTargetPhone.trim());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
 
-      {/* Modal */}
       <div
         className={cn(
-          "relative bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)]",
-          "shadow-[0_24px_64px_rgba(0,0,0,0.3)] rounded-[24px] flex flex-col transition-all duration-300",
-          studioExpanded
-            ? "w-[95vw] h-[90vh] max-w-none"
-            : "w-full max-w-xl max-h-[90vh]"
+          "relative flex flex-col rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-[var(--color-bg-elevated)] shadow-[0_24px_64px_rgba(0,0,0,0.3)] transition-all duration-300",
+          studioExpanded ? "h-[90vh] w-[95vw] max-w-none" : "max-h-[90vh] w-full max-w-xl"
         )}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border-subtle)] flex-shrink-0">
+        <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-6 py-4">
           <div>
             <h2 className="text-base font-bold text-foreground">
               {agent ? "Editar Agente" : "Novo Agente"}
             </h2>
-            <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
+            <p className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
               {agent ? `Editando: ${agent.name}` : "Configure seu novo Agente de IA"}
             </p>
           </div>
+
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full border border-[var(--color-border-medium)] flex items-center justify-center hover:bg-[var(--color-border-subtle)] transition-colors"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-border-medium)] transition-colors hover:bg-[var(--color-border-subtle)]"
           >
-            <X className="w-4 h-4 text-[var(--color-text-secondary)]" />
+            <X className="h-4 w-4 text-[var(--color-text-secondary)]" />
           </button>
         </div>
 
-        {/* Body */}
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+        <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
           <div className="flex flex-1 overflow-hidden">
-
-            {/* Main Form Area */}
-            <div className={cn("flex flex-col overflow-y-auto p-6 gap-5", studioExpanded ? "w-3/4 border-r border-[var(--color-border-subtle)]" : "w-full")}>
-
-              {/* Nome */}
+            <div
+              className={cn(
+                "flex flex-col gap-5 overflow-y-auto p-6",
+                studioExpanded ? "w-3/4 border-r border-[var(--color-border-subtle)]" : "w-full"
+              )}
+            >
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                   Nome do Agente
@@ -233,70 +314,69 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                 <input
                   type="text"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(event) => setName(event.target.value)}
                   placeholder="Ex: Agente Vendas WhatsApp"
                   required
-                  className="w-full bg-transparent border border-[var(--color-border-medium)] rounded-xl px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
+                  className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
                 />
               </div>
 
-              {/* Instância */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                  Instância Vinculada
+                  Instancia Vinculada
                 </label>
                 <select
                   value={instanceName}
-                  onChange={(e) => setInstanceName(e.target.value)}
+                  onChange={(event) => setInstanceName(event.target.value)}
                   required
                   disabled={!agent && availableInstances.length === 0}
-                  className="w-full bg-[var(--color-bg-surface)] border border-[var(--color-border-medium)] rounded-xl px-4 py-2.5 text-sm text-foreground focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
+                  className="w-full rounded-xl border border-[var(--color-border-medium)] bg-[var(--color-bg-surface)] px-4 py-2.5 text-sm text-foreground transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
                 >
-                  <option value="" disabled>Selecione uma instância</option>
-                  {availableInstances.map((inst) => (
-                    <option key={inst.instancia} value={inst.instancia}>
-                      {inst.instancia}
+                  <option value="" disabled>
+                    Selecione uma instancia
+                  </option>
+                  {availableInstances.map((instance) => (
+                    <option key={instance.instancia} value={instance.instancia}>
+                      {instance.instancia}
                     </option>
                   ))}
                 </select>
-                {!agent && availableInstances.length === 0 && (
+                {!agent && availableInstances.length === 0 ? (
                   <p className="text-[11px] text-[var(--color-text-secondary)]">
-                    Todas as instâncias disponíveis desta conta já possuem um agente vinculado. Abra um agente existente para editar a configuração.
+                    Todas as instancias disponiveis desta conta ja possuem um agente vinculado.
+                    Abra um agente existente para editar a configuracao.
                   </p>
-                )}
+                ) : null}
               </div>
 
-              {/* Personalidade / Estilo */}
               <div className="flex flex-col gap-3">
                 <div>
                   <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                     Estilo de Abordagem
                   </label>
-                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-1">
-                    Define como o agente interage — afeta diretamente o comportamento e a precisão das respostas.
+                  <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
+                    Define como o agente interage e afeta diretamente o comportamento das respostas.
                   </p>
                 </div>
 
-                {/* Level Labels */}
                 <div className="flex justify-between px-0.5">
-                  {PERSONALITY_LEVELS.map((lvl, i) => (
+                  {PERSONALITY_LEVELS.map((level, index) => (
                     <button
-                      key={i}
+                      key={level.label}
                       type="button"
-                      onClick={() => setPersonalityLevel(i)}
+                      onClick={() => setPersonalityLevel(index)}
                       className={cn(
                         "text-[10px] font-semibold transition-colors duration-150",
-                        personalityLevel === i
+                        personalityLevel === index
                           ? "text-[var(--color-accent)]"
                           : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                       )}
                     >
-                      {lvl.label}
+                      {level.label}
                     </button>
                   ))}
                 </div>
 
-                {/* Slider */}
                 <div className="relative">
                   <input
                     type="range"
@@ -304,117 +384,215 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                     max={4}
                     step={1}
                     value={personalityLevel}
-                    onChange={(e) => setPersonalityLevel(Number(e.target.value))}
-                    className="w-full accent-[var(--color-accent)] h-1 bg-[var(--color-border-medium)] rounded-full cursor-pointer"
+                    onChange={(event) => setPersonalityLevel(Number(event.target.value))}
+                    className="h-1 w-full cursor-pointer rounded-full bg-[var(--color-border-medium)] accent-[var(--color-accent)]"
                   />
                 </div>
 
-                {/* Active description */}
-                <div className="rounded-xl border border-[var(--color-border-subtle)] border-t-[var(--color-accent)] border-t-2 bg-transparent px-4 py-3 shadow-[0_4px_16px_rgba(229,57,58,0.04)]">
+                <div className="rounded-xl border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-transparent px-4 py-3 shadow-[0_4px_16px_rgba(229,57,58,0.04)]">
                   <p className="text-xs font-semibold text-foreground">{currentPersonality.label}</p>
-                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">{currentPersonality.description}</p>
-                  <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+                  <p className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
+                    {currentPersonality.description}
+                  </p>
+                  <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
                     Temperatura: {currentPersonality.temperature}
                   </p>
                 </div>
               </div>
 
-              {/* Prompt / Studio */}
-              <div className="flex flex-col gap-1.5 flex-1 min-h-0">
+              <div className="flex flex-col gap-3 rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]/60 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                      Handoff Humano
+                    </label>
+                    <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
+                      Liga um disparo interno no WhatsApp quando a IA identificar a condicao
+                      definida por voce.
+                    </p>
+                    <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
+                      {handoffEnabled
+                        ? handoffReady
+                          ? `Ativo para enviar ao numero ${handoffTargetPhone}`
+                          : "Handoff ligado, mas ainda falta definir o prompt ou o numero."
+                        : handoffReady
+                          ? "Configurado, mas desligado no toggle."
+                          : "Desativado."}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-shrink-0 items-center gap-3">
+                    <Switch
+                      checked={handoffEnabled}
+                      onCheckedChange={(checked) => {
+                        setHandoffEnabled(checked);
+                        if (checked) {
+                          setHandoffEditorOpen(true);
+                        }
+                      }}
+                      aria-label="Ativar handoff humano"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setHandoffEditorOpen((current) => !current)}
+                      className="rounded-xl border border-[var(--color-border-medium)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-border-subtle)] hover:text-foreground"
+                    >
+                      {handoffEditorOpen ? "Fechar" : "Editar"}
+                    </button>
+                  </div>
+                </div>
+
+                {handoffEditorOpen ? (
+                  <div className="grid gap-3 border-t border-[var(--color-border-subtle)] pt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                        Quando a IA Deve Fazer o Handoff
+                      </label>
+                      <textarea
+                        value={handoffPrompt}
+                        onChange={(event) => setHandoffPrompt(event.target.value)}
+                        placeholder="Ex: Acione o handoff quando o lead pedir atendimento humano, reclamar, pedir desconto fora da politica ou demonstrar urgencia alta."
+                        className="min-h-[110px] w-full resize-y rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
+                      />
+                      <p className="text-[10px] text-[var(--color-text-muted)]">
+                        Escreva em linguagem natural as situacoes que exigem transferencia para uma pessoa.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                        Numero para Receber o Handoff
+                      </label>
+                      <input
+                        type="text"
+                        value={handoffTargetPhone}
+                        onChange={(event) => setHandoffTargetPhone(event.target.value)}
+                        placeholder="Ex: 5511999999999"
+                        className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
+                      />
+                      <p className="text-[10px] text-[var(--color-text-muted)]">
+                        Esse numero recebe o alerta interno disparado pela Evolution.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)]/60 px-4 py-3">
+                      <div>
+                        <p className="text-xs font-semibold text-foreground">Teste de envio</p>
+                        <p className="text-[11px] text-[var(--color-text-secondary)]">
+                          Valida a instancia, o numero informado e o disparo real do handoff.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleTestHandoff}
+                        disabled={testingHandoff || !instanceName || !handoffTargetPhone.trim()}
+                        className="inline-flex items-center gap-2 rounded-xl border border-[var(--color-border-medium)] px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-[var(--color-border-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {testingHandoff ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        {testingHandoff ? "Testando..." : "Testar envio"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col gap-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                    Instruções do Agente
+                    Instrucoes do Agente
                   </label>
                   <button
                     type="button"
-                    onClick={() => setStudioExpanded(!studioExpanded)}
-                    className="flex items-center gap-1 text-[10px] text-[var(--color-text-secondary)] hover:text-foreground transition-colors"
+                    onClick={() => setStudioExpanded((current) => !current)}
+                    className="flex items-center gap-1 text-[10px] text-[var(--color-text-secondary)] transition-colors hover:text-foreground"
                   >
                     {studioExpanded ? (
-                      <><Minimize2 className="w-3 h-3" /> Recolher</>
+                      <>
+                        <Minimize2 className="h-3 w-3" />
+                        Recolher
+                      </>
                     ) : (
-                      <><Maximize2 className="w-3 h-3" /> Expandir Studio</>
+                      <>
+                        <Maximize2 className="h-3 w-3" />
+                        Expandir Studio
+                      </>
                     )}
                   </button>
                 </div>
+
                 <textarea
                   ref={textareaRef}
                   value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  onChange={(event) => setSystemPrompt(event.target.value)}
                   onDrop={handleDropOnTextarea}
                   onDragOver={handleDragOver}
-                  placeholder="Descreva como o agente deve se comportar, quais são suas regras, script de abertura, etc."
+                  placeholder="Descreva como o agente deve se comportar, quais sao suas regras, script de abertura, etc."
                   required
                   className={cn(
-                    "w-full bg-transparent border border-[var(--color-border-medium)] rounded-xl px-4 py-3 text-sm text-foreground placeholder-[var(--color-text-muted)]",
-                    "focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors resize-none leading-relaxed",
-                    studioExpanded ? "flex-1 h-full" : "h-48"
+                    "w-full resize-none rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm leading-relaxed text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none",
+                    studioExpanded ? "h-full flex-1" : "h-48"
                   )}
                 />
               </div>
             </div>
 
-            {/* Prompt Studio Sidebar */}
-            {studioExpanded && (
-              <div className="w-1/4 flex flex-col overflow-hidden bg-[var(--color-bg-surface)]">
-                <div className="px-4 py-3 border-b border-[var(--color-border-subtle)] flex-shrink-0">
+            {studioExpanded ? (
+              <div className="flex w-1/4 flex-col overflow-hidden bg-[var(--color-bg-surface)]">
+                <div className="border-b border-[var(--color-border-subtle)] px-4 py-3">
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                    Blocos de Instrução
+                    Blocos de Instrucao
                   </p>
-                  <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                  <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
                     Arraste para o editor
                   </p>
                 </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+
+                <div className="flex-1 space-y-2 overflow-y-auto p-3">
                   {PROMPT_GUIDANCE_SECTIONS.map((section) => (
                     <div
                       key={section.title}
                       draggable
                       onDragStart={() =>
                         handleDragStart(
-                          `## ${section.title}\n${section.description}\n\n[Preencha aqui suas instruções específicas para esta seção]`
+                          `## ${section.title}\n${section.description}\n\n[Preencha aqui suas instrucoes especificas para esta secao]`
                         )
                       }
                       className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-grab active:cursor-grabbing",
-                        "bg-transparent border border-[var(--color-border-subtle)] border-t-2",
+                        "flex cursor-grab items-center gap-3 rounded-xl border border-[var(--color-border-subtle)] border-t-2 bg-transparent px-3 py-2.5 shadow-[0_4px_12px_rgba(229,57,58,0.03)] transition-all duration-150 hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-border-subtle)] active:cursor-grabbing",
                         section.required
                           ? "border-t-[var(--color-accent)]/60"
-                          : "border-t-[var(--color-border-medium)]",
-                        "hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-border-subtle)] transition-all duration-150",
-                        "shadow-[0_4px_12px_rgba(229,57,58,0.03)]"
+                          : "border-t-[var(--color-border-medium)]"
                       )}
                     >
-                      {/* Grip icon — visual affordance only */}
-                      <GripVertical className="w-4 h-4 text-[var(--color-text-muted)] flex-shrink-0" />
-                      <span className="text-xs font-medium text-[var(--color-text-secondary)] select-none leading-tight">
+                      <GripVertical className="h-4 w-4 flex-shrink-0 text-[var(--color-text-muted)]" />
+                      <span className="select-none text-xs font-medium leading-tight text-[var(--color-text-secondary)]">
                         {section.title}
                       </span>
-                      {section.required && (
-                        <ChevronRight className="w-3 h-3 text-[var(--color-accent)]/40 ml-auto flex-shrink-0" />
-                      )}
+                      {section.required ? (
+                        <ChevronRight className="ml-auto h-3 w-3 flex-shrink-0 text-[var(--color-accent)]/40" />
+                      ) : null}
                     </div>
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
 
-          {/* Footer */}
-          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--color-border-subtle)] flex-shrink-0">
+          <div className="flex items-center justify-end gap-3 border-t border-[var(--color-border-subtle)] px-6 py-4">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-foreground rounded-xl hover:bg-[var(--color-border-subtle)] transition-colors"
+              className="rounded-xl px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-border-subtle)] hover:text-foreground"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="px-5 py-2 text-sm font-semibold bg-[var(--color-accent)] hover:brightness-110 disabled:opacity-50 text-white rounded-xl transition-all shadow-[0_4px_16px_rgba(229,57,58,0.3)]"
+              className="rounded-xl bg-[var(--color-accent)] px-5 py-2 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(229,57,58,0.3)] transition-all hover:brightness-110 disabled:opacity-50"
             >
-              {saving ? "Salvando..." : agent ? "Salvar Alterações" : "Criar Agente"}
+              {saving ? "Salvando..." : agent ? "Salvar Alteracoes" : "Criar Agente"}
             </button>
           </div>
         </form>

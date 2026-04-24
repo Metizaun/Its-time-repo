@@ -165,6 +165,13 @@ export interface AutomationPreviewResult {
   }>;
 }
 
+export interface AutomationMessageFlowSnapshot {
+  stepCounts: Record<string, number>;
+  parkedCount: number;
+  highlightedStepIds: string[];
+  activeLeadsCount: number;
+}
+
 export interface AutomationOwnerOption {
   id: string;
   name: string;

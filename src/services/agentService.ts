@@ -86,6 +86,35 @@ export async function updateAgentPrompt({
   };
 }
 
+export async function testAgentHandoff({
+  accessToken,
+  instanceName,
+  targetPhone,
+  agentName,
+  handoffPrompt,
+}: AuthHeadersInput & {
+  instanceName: string;
+  targetPhone: string;
+  agentName?: string;
+  handoffPrompt?: string;
+}) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/ai-agents/handoff/test`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({
+      instanceName,
+      targetPhone,
+      agentName,
+      handoffPrompt,
+    }),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    normalizedNumber: string;
+  }>(response);
+}
+
 export async function createAgent({
   accessToken,
   name,

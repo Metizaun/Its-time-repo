@@ -158,6 +158,22 @@ app.put(
 );
 
 app.post(
+  "/api/ai-agents/handoff/test",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.testHandoff(req.authContext!, {
+      instanceName: String(req.body.instanceName ?? ""),
+      targetPhone: String(req.body.targetPhone ?? ""),
+      agentName: typeof req.body.agentName === "string" ? req.body.agentName : undefined,
+      handoffPrompt:
+        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+    });
+
+    res.json(result);
+  })
+);
+
+app.post(
   "/api/instances",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -272,6 +288,14 @@ app.post(
         typeof req.body.autoApplyThreshold === "number"
           ? req.body.autoApplyThreshold
           : undefined,
+      handoffEnabled:
+        typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+      handoffPrompt:
+        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+      handoffTargetPhone:
+        typeof req.body.handoffTargetPhone === "string"
+          ? req.body.handoffTargetPhone
+          : undefined,
     });
 
     res.status(201).json({ success: true, agent });
@@ -301,6 +325,14 @@ app.patch(
       autoApplyThreshold:
         typeof req.body.autoApplyThreshold === "number"
           ? req.body.autoApplyThreshold
+          : undefined,
+      handoffEnabled:
+        typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+      handoffPrompt:
+        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+      handoffTargetPhone:
+        typeof req.body.handoffTargetPhone === "string"
+          ? req.body.handoffTargetPhone
           : undefined,
     });
 
@@ -374,6 +406,14 @@ app.post("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRe
     model: typeof req.body.model === "string" ? req.body.model : undefined,
     bufferWaitMs:
       typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
+    handoffEnabled:
+      typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+    handoffPrompt:
+      typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+    handoffTargetPhone:
+      typeof req.body.handoffTargetPhone === "string"
+        ? req.body.handoffTargetPhone
+        : undefined,
   });
 
   res.status(201).json({ success: true, agent });
@@ -402,6 +442,14 @@ app.patch(
       model: typeof req.body.model === "string" ? req.body.model : undefined,
       bufferWaitMs:
         typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
+      handoffEnabled:
+        typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+      handoffPrompt:
+        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+      handoffTargetPhone:
+        typeof req.body.handoffTargetPhone === "string"
+          ? req.body.handoffTargetPhone
+          : undefined,
     });
 
     res.json({ success: true, agent });

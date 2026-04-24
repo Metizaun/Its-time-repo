@@ -12,6 +12,9 @@ interface AgentPayload {
   temperature: number;
   buffer_wait_ms?: number;
   human_pause_minutes?: number;
+  handoff_enabled?: boolean;
+  handoff_prompt?: string | null;
+  handoff_target_phone?: string | null;
 }
 
 function buildAgentSaveError(err: any, instanceName?: string) {

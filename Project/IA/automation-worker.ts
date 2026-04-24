@@ -3,6 +3,8 @@ import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
 
+import { registerOutboundEcho } from "./outbound-echo-registry.js";
+
 type ClaimedExecution = {
   execution_id: string;
   enrollment_id?: string | null;
@@ -238,6 +240,7 @@ export function startAutomationWorker() {
 
   let running = false;
   const holidayCacheYears = new Set<number>();
+  let lastFreezeRepairAt = 0;
 
   function getFallbackNationalHolidays(year: number): BrasilApiHoliday[] {
     const easter = getEasterDate(year);
@@ -360,7 +363,7 @@ export function startAutomationWorker() {
       aces_id: execution.aces_id,
       content,
       direction: "outbound",
-      source_type: "automation",
+      source_type: "ai",
       conversation_id: `automation:${execution.execution_id}`,
       instance: execution.instance_name,
       sent_at: sentAt,
@@ -369,6 +372,25 @@ export function startAutomationWorker() {
     if (error) {
       throw error;
     }
+  }
+
+  async function registerAutomationOutboundEcho(execution: ClaimedExecution, content: string, sentAt: string) {
+    if (!execution.instance_name || !execution.phone) {
+      return;
+    }
+
+    await registerOutboundEcho({
+      client: supabase as any,
+      acesId: execution.aces_id,
+      leadId: execution.lead_id,
+      origin: "automation",
+      referenceId: execution.execution_id,
+      conversationId: `automation:${execution.execution_id}`,
+      instanceName: execution.instance_name,
+      phone: execution.phone,
+      content,
+      sentAt,
+    });
   }
 
   async function deferExecution(
@@ -442,6 +464,17 @@ export function startAutomationWorker() {
     }
   }
 
+  async function repairAutomationAiFreezes(leadId?: string | null, reference?: string | null) {
+    const { error } = await supabase.rpc("rpc_repair_automation_ai_freezes", {
+      p_lead_id: leadId ?? null,
+      p_reference: reference ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
   async function processDueExecutions() {
     if (running) {
       return;
@@ -451,6 +484,14 @@ export function startAutomationWorker() {
 
     try {
       await ensureHolidayCacheForDispatch();
+      if (Date.now() - lastFreezeRepairAt > 5 * 60_000) {
+        try {
+          await repairAutomationAiFreezes(null, "worker_cycle");
+        } catch (error) {
+          console.warn("[automation-worker] Falha ao rodar reparo global de freeze:", error);
+        }
+        lastFreezeRepairAt = Date.now();
+      }
 
       while (true) {
         const { data, error } = await supabase.rpc("rpc_claim_due_automation_executions_v2", {
@@ -491,6 +532,8 @@ export function startAutomationWorker() {
               continue;
             }
 
+            const sentAt = new Date().toISOString();
+            await registerAutomationOutboundEcho(execution, renderedMessage, sentAt);
             await sendWhatsAppMessage(
               evolutionApiUrl,
               evolutionApiKey,
@@ -498,9 +541,18 @@ export function startAutomationWorker() {
               execution.phone,
               renderedMessage
             );
-
-            const sentAt = new Date().toISOString();
             await saveOutboundMessage(execution, renderedMessage, sentAt);
+            try {
+              await repairAutomationAiFreezes(
+                execution.lead_id,
+                `automation_execution:${execution.execution_id}`
+              );
+            } catch (error) {
+              console.warn(
+                `[automation-worker] Falha ao reparar freeze do lead ${execution.lead_id}:`,
+                error
+              );
+            }
             await markDispatchSent(execution.execution_id, sentAt);
             await completeExecution(execution.execution_id, renderedMessage);
           } catch (error: any) {
