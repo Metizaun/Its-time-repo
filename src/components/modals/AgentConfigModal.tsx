@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { X, GripVertical, Maximize2, Minimize2, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAgents } from "@/hooks/useAgents";
@@ -55,7 +55,7 @@ interface AgentConfigModalProps {
 }
 
 export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps) {
-  const { upsertAgent, saving } = useAgents();
+  const { agents, upsertAgent, saving } = useAgents();
   const { instances } = useInstances();
 
   // ── Form state ──────────────────────────────────────────────────────────────
@@ -69,6 +69,18 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
   const [studioExpanded, setStudioExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragBlockRef = useRef<string | null>(null);
+  const availableInstances = useMemo(() => {
+    const blockedInstances = new Set(
+      agents
+        .filter((existingAgent) => existingAgent.id !== agent?.id)
+        .map((existingAgent) => existingAgent.instance_name)
+    );
+
+    return instances.filter(
+      (instance) =>
+        instance.instancia === agent?.instance_name || !blockedInstances.has(instance.instancia)
+    );
+  }, [agent?.id, agent?.instance_name, agents, instances]);
 
   // Populate on edit
   useEffect(() => {
@@ -94,6 +106,18 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
       setStudioExpanded(false);
     }
   }, [open, agent]);
+
+  useEffect(() => {
+    if (!open || agent) return;
+
+    setInstanceName((current) => {
+      if (availableInstances.some((instance) => instance.instancia === current)) {
+        return current;
+      }
+
+      return availableInstances[0]?.instancia ?? "";
+    });
+  }, [agent, availableInstances, open]);
 
   // ── DnD Handlers ─────────────────────────────────────────────────────────
   const handleDragStart = useCallback((content: string) => {
@@ -225,15 +249,21 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   value={instanceName}
                   onChange={(e) => setInstanceName(e.target.value)}
                   required
+                  disabled={!agent && availableInstances.length === 0}
                   className="w-full bg-[var(--color-bg-surface)] border border-[var(--color-border-medium)] rounded-xl px-4 py-2.5 text-sm text-foreground focus:outline-none focus:border-[var(--color-accent)]/60 transition-colors"
                 >
                   <option value="" disabled>Selecione uma instância</option>
-                  {instances.map((inst) => (
+                  {availableInstances.map((inst) => (
                     <option key={inst.instancia} value={inst.instancia}>
                       {inst.instancia}
                     </option>
                   ))}
                 </select>
+                {!agent && availableInstances.length === 0 && (
+                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                    Todas as instâncias disponíveis desta conta já possuem um agente vinculado. Abra um agente existente para editar a configuração.
+                  </p>
+                )}
               </div>
 
               {/* Personalidade / Estilo */}

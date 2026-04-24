@@ -1,14 +1,26 @@
-import { useState } from "react";
-import { Bot, Plus, Edit2, Power, PowerOff } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Bot, Plus, Edit2, Loader2, Power, PowerOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAgents } from "@/hooks/useAgents";
 import { AIAgent } from "@/types";
 import { AgentConfigModal } from "@/components/modals/AgentConfigModal";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export default function Agentes() {
-  const { agents, loading, toggleAgentStatus } = useAgents();
+  const { agents, loading, toggleAgentStatus, deleteAgent, statusAgentId, deletingAgentId } = useAgents();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AIAgent | null>(null);
+  const [agentToDelete, setAgentToDelete] = useState<AIAgent | null>(null);
+  const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
 
   function openCreate() {
     setEditingAgent(null);
@@ -23,6 +35,40 @@ export default function Agentes() {
   function handleClose() {
     setModalOpen(false);
     setEditingAgent(null);
+  }
+
+  function openDelete(agent: AIAgent) {
+    setAgentToDelete(agent);
+    setDeleteConfirmationName("");
+  }
+
+  function closeDeleteModal() {
+    if (deletingAgentId) return;
+
+    setAgentToDelete(null);
+    setDeleteConfirmationName("");
+  }
+
+  const isDeleteConfirmationValid = useMemo(() => {
+    return deleteConfirmationName.trim() === (agentToDelete?.name ?? "");
+  }, [agentToDelete?.name, deleteConfirmationName]);
+
+  useEffect(() => {
+    if (!agentToDelete || deletingAgentId) return;
+
+    const stillExists = agents.some((agent) => agent.id === agentToDelete.id);
+    if (!stillExists) {
+      setAgentToDelete(null);
+      setDeleteConfirmationName("");
+    }
+  }, [agentToDelete, agents, deletingAgentId]);
+
+  async function handleDeleteAgent() {
+    if (!agentToDelete || !isDeleteConfirmationValid) return;
+
+    await deleteAgent(agentToDelete.id, agentToDelete.name);
+    setAgentToDelete(null);
+    setDeleteConfirmationName("");
   }
 
   if (loading) {
@@ -103,20 +149,27 @@ export default function Agentes() {
                 </div>
 
                 {/* Status indicator */}
-                <div
+                <button
+                  type="button"
+                  onClick={() => toggleAgentStatus(agent.id, !agent.is_active)}
+                  disabled={statusAgentId === agent.id || deletingAgentId === agent.id}
+                  title={agent.is_active ? "Clique para pausar o agente" : "Clique para ativar o agente"}
                   className={cn(
                     "flex items-center justify-center w-8 h-8 rounded-full border flex-shrink-0 transition-colors duration-200",
+                    "hover:scale-105 disabled:cursor-not-allowed disabled:opacity-60",
                     agent.is_active
                       ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30"
                       : "bg-[var(--color-border-subtle)] border-[var(--color-border-medium)]"
                   )}
                 >
-                  {agent.is_active ? (
+                  {statusAgentId === agent.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-secondary)]" />
+                  ) : agent.is_active ? (
                     <Power className="w-4 h-4 text-[var(--color-success)]" />
                   ) : (
                     <PowerOff className="w-4 h-4 text-[var(--color-text-secondary)]" />
                   )}
-                </div>
+                </button>
               </div>
 
               {/* Footer actions */}
@@ -132,17 +185,27 @@ export default function Agentes() {
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => toggleAgentStatus(agent.id, !agent.is_active)}
-                    className="text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-secondary)] hover:text-foreground transition-colors px-2 py-1 rounded-lg hover:bg-[var(--color-border-subtle)]"
-                  >
-                    {agent.is_active ? "Pausar" : "Ativar"}
-                  </button>
-                  <button
+                    type="button"
                     onClick={() => openEdit(agent)}
+                    disabled={deletingAgentId === agent.id}
                     className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-secondary)] hover:text-foreground transition-colors px-2 py-1 rounded-lg hover:bg-[var(--color-border-subtle)]"
                   >
                     <Edit2 className="w-3 h-3" />
                     Editar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openDelete(agent)}
+                    disabled={statusAgentId === agent.id || deletingAgentId === agent.id}
+                    aria-label={`Apagar agente ${agent.name}`}
+                    title={`Apagar agente ${agent.name}`}
+                    className="flex items-center justify-center w-9 h-9 rounded-full text-destructive hover:text-destructive hover:bg-destructive/10 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {deletingAgentId === agent.id ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-5 h-5" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -157,6 +220,52 @@ export default function Agentes() {
         agent={editingAgent}
         onClose={handleClose}
       />
+
+      <Dialog open={Boolean(agentToDelete)} onOpenChange={(open) => (!open ? closeDeleteModal() : undefined)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apagar agente</DialogTitle>
+            <DialogDescription>
+              Essa ação não pode ser desfeita. Para confirmar, digite exatamente o nome do agente abaixo.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+              <p className="text-sm font-medium text-foreground">{agentToDelete?.name}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Instância vinculada: {agentToDelete?.instance_name ?? "N/A"}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                Digite <span className="font-semibold">{agentToDelete?.name ?? ""}</span> para continuar
+              </p>
+              <Input
+                value={deleteConfirmationName}
+                onChange={(event) => setDeleteConfirmationName(event.target.value)}
+                placeholder={agentToDelete?.name ?? "Nome do agente"}
+                disabled={Boolean(deletingAgentId)}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDeleteModal} disabled={Boolean(deletingAgentId)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteAgent}
+              disabled={!isDeleteConfirmationValid || Boolean(deletingAgentId)}
+            >
+              {deletingAgentId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+              Apagar agente
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

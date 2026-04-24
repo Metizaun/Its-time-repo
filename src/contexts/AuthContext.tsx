@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, ReactNode, useRef } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -19,28 +19,54 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function parseAcesId(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const claimsRefreshAttemptRef = useRef<string | null>(null);
 
-  const fetchUserProfileBackground = async (userId: string) => {
+  const fetchUserProfileBackground = async (userId: string, currentSession?: Session | null) => {
     try {
       const { data, error } = await supabase
         .from("users")
-        .select("role, name")
+        .select("id, aces_id, role, name")
         .eq("auth_user_id", userId)
         .maybeSingle();
 
       if (!error && data) {
         setUserRole(data.role as UserRole);
         setProfileName(data.name ?? null);
+
+        const appMetadata = currentSession?.user?.app_metadata ?? {};
+        const tokenAcesId = parseAcesId(appMetadata.aces_id);
+        const claimsOutOfSync =
+          appMetadata.crm_user_id !== data.id ||
+          appMetadata.crm_role !== data.role ||
+          tokenAcesId !== data.aces_id;
+
+        if (!claimsOutOfSync) {
+          claimsRefreshAttemptRef.current = null;
+          return;
+        }
+
+        const refreshKey = `${userId}:${data.id}:${data.aces_id}:${data.role}`;
+        if (currentSession?.refresh_token && claimsRefreshAttemptRef.current !== refreshKey) {
+          claimsRefreshAttemptRef.current = refreshKey;
+          await supabase.auth.refreshSession();
+        }
+
         return;
       }
 
       if (!error && !data) {
+        claimsRefreshAttemptRef.current = null;
         setUserRole(null);
       }
     } catch (error) {
@@ -64,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setLoading(false);
 
           if (currentSession?.user) {
-            fetchUserProfileBackground(currentSession.user.id);
+            fetchUserProfileBackground(currentSession.user.id, currentSession);
           }
         }
       } catch (error) {
@@ -86,8 +112,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
 
       if (currentSession?.user) {
-        fetchUserProfileBackground(currentSession.user.id);
+        fetchUserProfileBackground(currentSession.user.id, currentSession);
       } else {
+        claimsRefreshAttemptRef.current = null;
         setUserRole(null);
         setProfileName(null);
       }
@@ -119,6 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    claimsRefreshAttemptRef.current = null;
     setUser(null);
     setSession(null);
     setUserRole(null);
