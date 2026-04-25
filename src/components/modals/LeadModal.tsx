@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -25,8 +26,8 @@ interface LeadModalProps {
 export function LeadModal({ isOpen, onClose }: LeadModalProps) {
   const { createLead } = useLeadOperations();
   const { user } = useAuth();
-  const { users } = useCrmUsers();
-  const { stages } = usePipelineStages();
+  const { users, loading: usersLoading } = useCrmUsers();
+  const { stages, loading: stagesLoading } = usePipelineStages();
   const { instances, loading: instancesLoading } = useInstances();
   const currentCrmUser = users.find((crmUser) => crmUser.auth_user_id === user?.id) ?? null;
 
@@ -40,7 +41,6 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
     instancia: "",
     value: "",
     connection_level: "",
-    owner_id: "",
     notes: "",
   });
 
@@ -65,16 +65,36 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
         instancia: "",
         value: "",
         connection_level: "",
-        owner_id: "",
         notes: "",
       });
     }
   }, [isOpen, stages]);
 
+  useEffect(() => {
+    if (!isOpen || formData.instancia || instances.length === 0) {
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      instancia: instances[0].instancia,
+    }));
+  }, [formData.instancia, instances, isOpen]);
+
+  const dependenciesLoading = usersLoading || stagesLoading || instancesLoading;
+  const canSubmit =
+    !dependenciesLoading &&
+    !!currentCrmUser &&
+    stages.length > 0 &&
+    instances.length > 0 &&
+    !!formData.instancia;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const selectedStage = stages.find((s) => s.id === formData.stage_id);
-    const derivedStatus = selectedStage?.category || "Aberto";
+
+    if (!currentCrmUser) {
+      return;
+    }
 
     const { error } = await createLead({
       name: formData.name,
@@ -82,12 +102,10 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
       contact_phone: formData.contact_phone,
       source: formData.source,
       last_city: formData.last_city,
-      status: derivedStatus,
       stage_id: formData.stage_id,
       instancia: formData.instancia,
       value: formData.value ? parseFloat(formData.value) : undefined,
       connection_level: formData.connection_level || undefined,
-      owner_id: currentCrmUser?.id || undefined,
       notes: formData.notes || undefined,
     });
 
@@ -101,6 +119,9 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" aria-modal="true">
         <DialogHeader>
           <DialogTitle>Novo Lead</DialogTitle>
+          <DialogDescription>
+            A criacao manual usa a instancia e o responsavel do usuario atual. Aguarde o carregamento completo antes de salvar.
+          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -172,9 +193,18 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
                 onValueChange={(value) => {
                   setFormData({ ...formData, stage_id: value });
                 }}
+                disabled={stagesLoading || stages.length === 0}
               >
                 <SelectTrigger id="stage_id">
-                  <SelectValue placeholder="Selecione a etapa" />
+                  <SelectValue
+                    placeholder={
+                      stagesLoading
+                        ? "Carregando etapas"
+                        : stages.length === 0
+                          ? "Cadastre uma etapa"
+                          : "Selecione a etapa"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {stages.map((stage) => (
@@ -216,6 +246,11 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
               {!instancesLoading && instances.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Cadastre uma instancia antes de criar leads que precisam de comunicacao.
+                </p>
+              ) : null}
+              {!instancesLoading && !currentCrmUser ? (
+                <p className="text-xs text-destructive">
+                  Nao foi possivel identificar o usuario CRM atual. Recarregue a pagina antes de criar um lead.
                 </p>
               ) : null}
             </div>
@@ -270,7 +305,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
             <Button type="button" variant="outline" onClick={onClose}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={instancesLoading || instances.length === 0 || !formData.instancia}>
+            <Button type="submit" disabled={!canSubmit}>
               Criar Lead
             </Button>
           </DialogFooter>
