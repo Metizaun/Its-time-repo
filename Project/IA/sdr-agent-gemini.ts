@@ -98,6 +98,7 @@ type InstanceListItem = {
 type LeadRow = {
   id: string;
   aces_id: number;
+  owner_id: string | null;
   name: string | null;
   contact_phone: string | null;
   status: string | null;
@@ -864,13 +865,18 @@ export class AgentManager {
     );
   }
 
-  private async getAgentForAccount(agentId: string, acesId: number) {
-    const { data, error } = await this.serviceClient
+  private async getAgentForAccount(agentId: string, acesId: number, ownerId?: string | null) {
+    let query = this.serviceClient
       .from("ai_agents")
       .select("*")
       .eq("id", agentId)
-      .eq("aces_id", acesId)
-      .maybeSingle();
+      .eq("aces_id", acesId);
+
+    if (ownerId) {
+      query = query.eq("created_by", ownerId);
+    }
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel carregar o agente", error);
@@ -901,7 +907,7 @@ export class AgentManager {
     return data as AgentRow;
   }
 
-  private async getAnyAgentByInstance(instanceName: string, acesId?: number) {
+  private async getAnyAgentByInstance(instanceName: string, acesId?: number, ownerId?: string | null) {
     let query = this.serviceClient
       .from("ai_agents")
       .select("*")
@@ -909,6 +915,10 @@ export class AgentManager {
 
     if (typeof acesId === "number") {
       query = query.eq("aces_id", acesId);
+    }
+
+    if (ownerId) {
+      query = query.eq("created_by", ownerId);
     }
 
     const { data, error } = await query
@@ -980,6 +990,7 @@ export class AgentManager {
       .from("ai_agents")
       .select("*")
       .eq("aces_id", context.acesId)
+      .eq("created_by", context.crmUserId)
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -1049,7 +1060,7 @@ export class AgentManager {
 
   async updateAgent(context: AuthContext, agentId: string, input: UpdateAgentInput) {
     this.ensureAdmin(context);
-    await this.getAgentForAccount(agentId, context.acesId);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
 
     const payload: JsonRecord = {};
     if (input.name !== undefined) payload.name = input.name.trim();
@@ -1070,6 +1081,7 @@ export class AgentManager {
       .update(payload)
       .eq("id", agentId)
       .eq("aces_id", context.acesId)
+      .eq("created_by", context.crmUserId)
       .select("*")
       .single();
 
@@ -1084,7 +1096,7 @@ export class AgentManager {
 
   async getStageRules(context: AuthContext, agentId: string) {
     this.ensureAdmin(context);
-    const agent = await this.getAgentForAccount(agentId, context.acesId);
+    const agent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
     await this.syncMissingStageRules(agent);
 
     const stages = await this.getStagesForAccount(context.acesId);
@@ -1122,7 +1134,7 @@ export class AgentManager {
 
   async saveStageRules(context: AuthContext, agentId: string, rules: StageRuleInput[]) {
     this.ensureAdmin(context);
-    const agent = await this.getAgentForAccount(agentId, context.acesId);
+    const agent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
     await this.syncMissingStageRules(agent);
 
     const stages = await this.getStagesForAccount(context.acesId);
@@ -1196,12 +1208,32 @@ export class AgentManager {
 
   async listRuns(context: AuthContext, agentId: string, leadId?: string) {
     this.ensureAdmin(context);
-    await this.getAgentForAccount(agentId, context.acesId);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { data: ownedLeads, error: ownedLeadsError } = await this.serviceClient
+      .from("leads")
+      .select("id")
+      .eq("aces_id", context.acesId)
+      .eq("owner_id", context.crmUserId);
+
+    if (ownedLeadsError) {
+      throw new HttpError(500, "Nao foi possivel validar os leads do usuario", ownedLeadsError);
+    }
+
+    const ownedLeadIds = (ownedLeads ?? []).map((lead) => String(lead.id));
+    if (leadId && !ownedLeadIds.includes(leadId)) {
+      throw new HttpError(404, "Lead nao encontrado para o usuario atual");
+    }
+
+    if (ownedLeadIds.length === 0) {
+      return [];
+    }
 
     let query = this.serviceClient
       .from("ai_runs")
       .select("*")
       .eq("agent_id", agentId)
+      .in("lead_id", ownedLeadIds)
       .order("created_at", { ascending: false })
       .limit(100);
 
@@ -1219,7 +1251,8 @@ export class AgentManager {
 
   async resumeLead(context: AuthContext, agentId: string, leadId: string) {
     this.ensureAdmin(context);
-    await this.getAgentForAccount(agentId, context.acesId);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    await this.loadLeadById(leadId, context.acesId, context.crmUserId);
 
     const { error } = await this.serviceClient.from("ai_lead_state").upsert(
       {
@@ -1243,27 +1276,23 @@ export class AgentManager {
   }
 
   async getLeadAiState(context: AuthContext, leadId: string) {
-    this.ensureAdmin(context);
-
-    const lead = await this.loadLeadById(leadId, context.acesId);
+    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId);
     const agent =
       lead.instancia?.trim()
-        ? await this.getAnyAgentByInstance(lead.instancia, context.acesId)
+        ? await this.getAnyAgentByInstance(lead.instancia, context.acesId, context.crmUserId)
         : null;
 
     return this.resolveLeadAiState(lead.id, agent, lead.instancia);
   }
 
   async updateLeadAiState(context: AuthContext, leadId: string, enabled: boolean) {
-    this.ensureAdmin(context);
-
-    const lead = await this.loadLeadById(leadId, context.acesId);
+    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId);
     const instanceName = lead.instancia?.trim() ?? "";
     if (!instanceName) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
 
-    const agent = await this.getAnyAgentByInstance(instanceName, context.acesId);
+    const agent = await this.getAnyAgentByInstance(instanceName, context.acesId, context.crmUserId);
     if (!agent) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
@@ -1773,12 +1802,18 @@ export class AgentManager {
     return data as MessageRow;
   }
 
-  private async loadLeadById(leadId: string, acesId: number) {
-    const { data, error } = await this.serviceClient
+  private async loadLeadById(leadId: string, acesId: number, ownerId?: string | null) {
+    let query = this.serviceClient
       .from("leads")
-      .select("id, aces_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
       .eq("id", leadId)
-      .eq("aces_id", acesId)
+      .eq("aces_id", acesId);
+
+    if (ownerId) {
+      query = query.eq("owner_id", ownerId);
+    }
+
+    const { data, error } = await query
       .maybeSingle();
 
     if (error) {
@@ -1796,7 +1831,7 @@ export class AgentManager {
     const variants = phoneVariants(phone);
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
       .eq("aces_id", acesId)
       .in("contact_phone", variants)
       .order("updated_at", { ascending: false })
@@ -1810,9 +1845,36 @@ export class AgentManager {
     return (data as LeadRow | null) ?? null;
   }
 
-  private async findOrCreateLead(acesId: number, phone: string, instanceName: string, pushName?: string | null) {
+  private async getDefaultLeadOwnerId(acesId: number) {
+    const { data, error } = await this.serviceClient
+      .from("users")
+      .select("id")
+      .eq("aces_id", acesId)
+      .neq("role", "NENHUM")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel definir o responsavel padrao do lead", error);
+    }
+
+    return data?.id ? String(data.id) : null;
+  }
+
+  private async findOrCreateLead(
+    acesId: number,
+    phone: string,
+    instanceName: string,
+    pushName?: string | null,
+    ownerId?: string | null
+  ) {
     const found = await this.findLeadByPhone(acesId, phone);
     if (found) {
+      if (ownerId && found.owner_id !== ownerId) {
+        throw new HttpError(403, "Lead pertence a outro responsavel");
+      }
+
       return found;
     }
 
@@ -1820,6 +1882,7 @@ export class AgentManager {
     const defaultStage = stages.find((stage) => stage.category === "Aberto") ?? stages[0] ?? null;
     const preferredPhone = normalizePhone(phone);
     const name = pushName?.trim() || `Lead ${preferredPhone}`;
+    const resolvedOwnerId = ownerId ?? await this.getDefaultLeadOwnerId(acesId);
 
     const { data, error } = await this.serviceClient
       .from("leads")
@@ -1830,9 +1893,10 @@ export class AgentManager {
         status: defaultStage?.name ?? "Novo",
         stage_id: defaultStage?.id ?? null,
         instancia: instanceName,
+        owner_id: resolvedOwnerId,
         view: true,
       })
-      .select("id, aces_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
       .single();
 
     if (error) {
@@ -2493,7 +2557,7 @@ export class AgentManager {
       return;
     }
 
-    const lead = await this.loadLeadById(leadId, agent.aces_id);
+    const lead = await this.loadLeadById(leadId, agent.aces_id, agent.created_by);
     const aiState = await this.resolveLeadAiState(lead.id, agent, lead.instancia);
     if (!aiState.enabled) {
       return;
@@ -2639,7 +2703,8 @@ export class AgentManager {
         instance.aces_id,
         message.phone,
         message.instanceName,
-        message.pushName
+        message.pushName,
+        agent?.created_by ?? null
       );
 
       await this.saveMessage({
@@ -2699,7 +2764,8 @@ export class AgentManager {
       instance.aces_id,
       message.phone,
       message.instanceName,
-      message.pushName
+      message.pushName,
+      agent?.created_by ?? null
     );
     const savedMessage = await this.saveMessage({
       leadId: lead.id,
@@ -2757,7 +2823,7 @@ export class AgentManager {
       throw new HttpError(400, "Mensagem vazia");
     }
 
-    const lead = await this.loadLeadById(input.leadId, context.acesId);
+    const lead = await this.loadLeadById(input.leadId, context.acesId, context.crmUserId);
     const instanceName = input.instanceName?.trim() || lead.instancia;
 
     if (!instanceName) {
@@ -2766,7 +2832,7 @@ export class AgentManager {
 
     await this.ensureInstanceOwnership(context.acesId, instanceName);
 
-    const configuredAgent = await this.getAnyAgentByInstance(instanceName, context.acesId);
+    const configuredAgent = await this.getAnyAgentByInstance(instanceName, context.acesId, context.crmUserId);
     const aiState = configuredAgent
       ? await this.resolveLeadAiState(lead.id, configuredAgent, instanceName)
       : null;
