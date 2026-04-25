@@ -393,7 +393,7 @@ function filterPlacesByMinimumStars(places: PlaceResult[], minimumStars: number)
 
 async function importLeads(params: {
   adminClient: ReturnType<typeof createClient>;
-  crmUser: { aces_id: number };
+  crmUser: { id: string; aces_id: number };
   payload: BuscarLeadsStartPayload;
   places: PlaceResult[];
 }) {
@@ -411,6 +411,7 @@ async function importLeads(params: {
     Fonte: "Apify",
     Plataform: "Google Maps",
     instancia: payload.instancia,
+    owner_id: crmUser.id,
     aces_id: crmUser.aces_id,
     view: true,
   }));
@@ -440,7 +441,7 @@ async function importLeads(params: {
   };
 }
 
-async function handleCounter(adminClient: ReturnType<typeof createClient>, acesId: number, origin: string | null) {
+async function handleCounter(adminClient: ReturnType<typeof createClient>, crmUser: { id: string; aces_id: number }, origin: string | null) {
   const startOfMonth = new Date();
   startOfMonth.setUTCDate(1);
   startOfMonth.setUTCHours(0, 0, 0, 0);
@@ -450,7 +451,8 @@ async function handleCounter(adminClient: ReturnType<typeof createClient>, acesI
     .from("leads")
     .select("id", { count: "exact", head: true })
     .eq("Fonte", "Apify")
-    .eq("aces_id", acesId)
+    .eq("aces_id", crmUser.aces_id)
+    .eq("owner_id", crmUser.id)
     .gte("created_at", startOfMonth.toISOString());
 
   if (error) {
@@ -486,7 +488,7 @@ Deno.serve(async (req) => {
 
   try {
     if ((req.method === "GET" || req.method === "POST") && action === "counter") {
-      return await handleCounter(adminClient, crmUser.aces_id, origin);
+      return await handleCounter(adminClient, crmUser, origin);
     }
 
     if (req.method === "POST" && action === "start") {

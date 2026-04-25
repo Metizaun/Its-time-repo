@@ -10,6 +10,7 @@ import { useLeadCsvImport } from "@/hooks/useLeadCsvImport";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
 import { useInstances } from "@/hooks/useInstances";
+import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -62,6 +63,7 @@ function getStatusLabel(status: "valid" | "invalid" | "duplicate") {
 }
 
 export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
+  const { user } = useAuth();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [stageId, setStageId] = useState("");
@@ -71,6 +73,7 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
   const { stages, loading: loadingStages } = usePipelineStages();
   const { users, loading: loadingUsers } = useCrmUsers();
   const { instances, loading: loadingInstances } = useInstances();
+  const currentCrmUser = useMemo(() => users.find((crmUser) => crmUser.auth_user_id === user?.id) ?? null, [user?.id, users]);
   const {
     selectedFile,
     summary,
@@ -84,7 +87,6 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
     reset,
   } = useLeadCsvImport();
 
-  const confirmedUsers = useMemo(() => users.filter((user) => !!user.id), [users]);
   const hasImportDependencies =
     stageId.length > 0 && ownerId.length > 0 && instanceName.length > 0 && source.trim().length > 0;
 
@@ -103,14 +105,14 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
       setStageId(stages[0].id);
     }
 
-    if (!ownerId && confirmedUsers.length > 0) {
-      setOwnerId(confirmedUsers[0].id);
+    if (!ownerId && currentCrmUser) {
+      setOwnerId(currentCrmUser.id);
     }
 
     if (!instanceName && instances.length > 0) {
       setInstanceName(instances[0].instancia);
     }
-  }, [confirmedUsers, instanceName, instances, open, ownerId, reset, stageId, stages]);
+  }, [currentCrmUser, instanceName, instances, open, ownerId, reset, stageId, stages]);
 
   const handleSelectFile = async (file: File | null) => {
     if (!file) return;
@@ -195,18 +197,7 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
 
             <div className="space-y-2">
               <Label htmlFor="csv-owner">Responsavel</Label>
-              <Select value={ownerId} onValueChange={setOwnerId} disabled={loadingUsers || importing}>
-                <SelectTrigger id="csv-owner">
-                  <SelectValue placeholder={loadingUsers ? "Carregando usuarios..." : "Selecione o responsavel"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {confirmedUsers.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {user.name || user.email}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input id="csv-owner" value={currentCrmUser?.name || currentCrmUser?.email || ""} disabled />
             </div>
 
             <div className="space-y-2">

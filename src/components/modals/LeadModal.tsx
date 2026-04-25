@@ -3,6 +3,7 @@ import { useLeadOperations } from "@/hooks/useLeadOperations";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { useInstances } from "@/hooks/useInstances";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Dialog,
   DialogContent,
@@ -23,9 +24,11 @@ interface LeadModalProps {
 
 export function LeadModal({ isOpen, onClose }: LeadModalProps) {
   const { createLead } = useLeadOperations();
+  const { user } = useAuth();
   const { users } = useCrmUsers();
   const { stages } = usePipelineStages();
   const { instances, loading: instancesLoading } = useInstances();
+  const currentCrmUser = users.find((crmUser) => crmUser.auth_user_id === user?.id) ?? null;
 
   const [formData, setFormData] = useState({
     name: "",
@@ -84,7 +87,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
       instancia: formData.instancia,
       value: formData.value ? parseFloat(formData.value) : undefined,
       connection_level: formData.connection_level || undefined,
-      owner_id: formData.owner_id || undefined,
+      owner_id: currentCrmUser?.id || undefined,
       notes: formData.notes || undefined,
     });
 
@@ -248,21 +251,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
 
             <div className="space-y-2">
               <Label htmlFor="owner_id">Responsavel</Label>
-              <Select
-                value={formData.owner_id}
-                onValueChange={(value) => setFormData({ ...formData, owner_id: value })}
-              >
-                <SelectTrigger id="owner_id">
-                  <SelectValue placeholder="Selecione" />
-                </SelectTrigger>
-                <SelectContent>
-                  {users.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {user.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input id="owner_id" value={currentCrmUser?.name || currentCrmUser?.email || ""} disabled />
             </div>
           </div>
 

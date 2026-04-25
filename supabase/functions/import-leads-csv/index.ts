@@ -199,9 +199,15 @@ function sanitizeRows(rows: ImportLeadCsvRow[]) {
 
 async function ensureImportOptionsAccess(
   adminClient: ReturnType<typeof createClient>,
-  acesId: number,
+  crmUser: { id: string; aces_id: number },
   importOptions: { stageId: string; source: string; ownerId: string; instanceName: string }
 ) {
+  const acesId = crmUser.aces_id;
+
+  if (importOptions.ownerId !== crmUser.id) {
+    throw new Error("O responsavel da importacao deve ser o usuario logado.");
+  }
+
   const { data: stage, error: stageError } = await adminClient
     .schema("crm")
     .from("pipeline_stages")
@@ -308,7 +314,7 @@ Deno.serve(async (req) => {
 
     const { rows, importOptions } = validatePayload(body);
     const { validRows, invalidRows } = sanitizeRows(rows);
-    await ensureImportOptionsAccess(context.adminClient, context.crmUser.aces_id, importOptions);
+    await ensureImportOptionsAccess(context.adminClient, context.crmUser, importOptions);
 
     const inserted = await insertRowsInChunks(
       context.adminClient,

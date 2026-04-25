@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
+import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Dialog,
@@ -36,8 +37,10 @@ interface EditLeadModalProps {
 const CONNECTION_LEVELS = ["Baixa", "Média", "Alta"];
 
 export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLeadModalProps) {
+  const { user } = useAuth();
   const { users } = useCrmUsers();
   const { stages } = usePipelineStages();
+  const currentCrmUser = users.find((crmUser) => crmUser.auth_user_id === user?.id) ?? null;
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
@@ -120,7 +123,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
           "Fonte": formData.source,
           status: derivedStatus,
           stage_id: formData.stage_id || null,
-          owner_id: formData.owner_id || null,
+          owner_id: currentCrmUser?.id || formData.owner_id || null,
           notes: formData.notes || null,
         })
         .eq("id", lead.id);
@@ -273,21 +276,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
 
             <div className="space-y-2">
               <Label htmlFor="owner">Responsável</Label>
-              <Select
-                value={formData.owner_id}
-                onValueChange={(value) => setFormData({ ...formData, owner_id: value })}
-              >
-                <SelectTrigger id="owner">
-                  <SelectValue placeholder="Selecione o responsável" />
-                </SelectTrigger>
-                <SelectContent>
-                  {users.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {user.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input id="owner" value={currentCrmUser?.name || currentCrmUser?.email || lead?.owner_name || ""} disabled />
             </div>
 
             <div className="space-y-2">
