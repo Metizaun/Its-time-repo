@@ -338,6 +338,25 @@ async function startRun(payload: BuscarLeadsStartPayload, origin: string | null)
   );
 }
 
+async function ensureInstanceAccess(
+  adminClient: ReturnType<typeof createClient>,
+  crmUser: { id: string; aces_id: number },
+  instanceName: string
+) {
+  const { data: instance, error } = await adminClient
+    .schema("crm")
+    .from("instance")
+    .select("instancia")
+    .eq("aces_id", crmUser.aces_id)
+    .eq("created_by", crmUser.id)
+    .eq("instancia", instanceName)
+    .maybeSingle();
+
+  if (error || !instance) {
+    throw new Error("Instancia invalida para o usuario atual.");
+  }
+}
+
 async function fetchApifyRun(runId: string) {
   const token = Deno.env.get("APIFY_API_TOKEN");
   const response = await fetch(`${APIFY_BASE_URL}/actor-runs/${runId}?token=${token}`);
@@ -511,6 +530,8 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "Selecione uma instância" }, { status: 400 }, origin);
       }
 
+      await ensureInstanceAccess(adminClient, crmUser, normalizedPayload.instancia);
+
       return await startRun(normalizedPayload, origin);
     }
 
@@ -528,6 +549,8 @@ Deno.serve(async (req) => {
         bodyPayload && "payload" in bodyPayload
           ? normalizeStartPayload(bodyPayload.payload)
           : normalizeStartPayload(JSON.parse(rawPayload as string) as BuscarLeadsStartPayload);
+      await ensureInstanceAccess(adminClient, crmUser, payload.instancia);
+
       const run = await fetchApifyRun(runId);
       const mappedStatus = mapApifyStatus(run?.status);
       const center = await geocodeLocation(payload.locationQuery, payload.country);

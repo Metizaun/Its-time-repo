@@ -238,10 +238,11 @@ async function ensureImportOptionsAccess(
     .select("instancia")
     .eq("instancia", importOptions.instanceName)
     .eq("aces_id", acesId)
+    .eq("created_by", crmUser.id)
     .maybeSingle();
 
   if (instanceError || !instance) {
-    throw new Error("Instancia invalida para a conta atual.");
+    throw new Error("Instancia invalida para o usuario atual.");
   }
 }
 

@@ -72,6 +72,7 @@ type InstanceAction = "continue_setup" | "reconnect" | "sync_status" | "disconne
 type InstanceRow = {
   instancia: string;
   aces_id: number;
+  created_by: string | null;
   color: string | null;
   token: string | null;
   status: string | null;
@@ -825,7 +826,7 @@ export class AgentManager {
     const { data, error } = await this.serviceClient
       .from("instance")
       .select(
-        "instancia, aces_id, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error"
+        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error"
       )
       .eq("instancia", instanceName)
       .maybeSingle();
@@ -837,7 +838,7 @@ export class AgentManager {
     return (data as InstanceRow | null) ?? null;
   }
 
-  private async ensureInstanceOwnership(acesId: number, instanceName: string) {
+  private async ensureInstanceOwnership(acesId: number, instanceName: string, ownerId?: string | null) {
     const existing = await this.findInstanceByName(instanceName);
     if (!existing) {
       throw new HttpError(404, "Instancia nao encontrada");
@@ -845,6 +846,10 @@ export class AgentManager {
 
     if (existing.aces_id !== acesId) {
       throw new HttpError(403, "Instancia nao pertence a sua conta");
+    }
+
+    if (ownerId && existing.created_by !== ownerId) {
+      throw new HttpError(403, "Instancia nao pertence ao usuario atual");
     }
 
     return existing;
@@ -1015,6 +1020,7 @@ export class AgentManager {
       .from("instance")
       .select("instancia")
       .eq("aces_id", context.acesId)
+      .eq("created_by", context.crmUserId)
       .eq("instancia", input.instanceName.trim())
       .maybeSingle();
 
@@ -1325,9 +1331,10 @@ export class AgentManager {
     const { data, error } = await this.serviceClient
       .from("instance")
       .select(
-        "instancia, aces_id, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error"
+        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error"
       )
       .eq("aces_id", context.acesId)
+      .eq("created_by", context.crmUserId)
       .or("setup_status.is.null,setup_status.neq.cancelled")
       .order("created_at", { ascending: false });
 
@@ -1360,6 +1367,10 @@ export class AgentManager {
     const existingRow = await this.findInstanceByName(instanceName);
     if (existingRow && existingRow.aces_id !== context.acesId) {
       throw new HttpError(409, "Nome de instancia indisponivel");
+    }
+
+    if (existingRow && existingRow.created_by !== context.crmUserId) {
+      throw new HttpError(403, "Instancia nao pertence ao usuario atual");
     }
 
     let existing = existingRow;
@@ -1397,6 +1408,7 @@ export class AgentManager {
       const { error: insertError } = await this.serviceClient.from("instance").insert({
         instancia: instanceName,
         aces_id: context.acesId,
+        created_by: context.crmUserId,
         token,
         status: "disconnected",
         setup_status: "pending_qr",
@@ -1473,7 +1485,7 @@ export class AgentManager {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
     await this.markExpiredPendingInstances(context.acesId);
-    await this.ensureInstanceOwnership(context.acesId, instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
       const now = new Date();
@@ -1536,7 +1548,7 @@ export class AgentManager {
   async getInstanceQrCode(context: AuthContext, instanceNameRaw: string) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    await this.ensureInstanceOwnership(context.acesId, instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
     try {
       const qrCodeBase64 = await this.fetchQrCodeFromEvolution(instanceName);
@@ -1569,7 +1581,7 @@ export class AgentManager {
   async getInstanceStatus(context: AuthContext, instanceNameRaw: string) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    const instance = await this.ensureInstanceOwnership(context.acesId, instanceName);
+    const instance = await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
     try {
       const { state, status } = await this.fetchEvolutionConnectionState(instanceName);
@@ -1623,7 +1635,7 @@ export class AgentManager {
   async disconnectInstance(context: AuthContext, instanceNameRaw: string) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    await this.ensureInstanceOwnership(context.acesId, instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
       const evolutionResult = await this.disconnectOnEvolution(instanceName);
@@ -1649,7 +1661,7 @@ export class AgentManager {
   async deleteInstance(context: AuthContext, instanceNameRaw: string, options?: { hardDelete?: boolean }) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    await this.ensureInstanceOwnership(context.acesId, instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
     const hardDelete = options?.hardDelete ?? false;
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
@@ -1661,7 +1673,8 @@ export class AgentManager {
           .from("instance")
           .delete()
           .eq("instancia", instanceName)
-          .eq("aces_id", context.acesId);
+          .eq("aces_id", context.acesId)
+          .eq("created_by", context.crmUserId);
 
         if (error) {
           throw new HttpError(500, "Nao foi possivel remover a instancia do CRM", error);
@@ -2830,7 +2843,7 @@ export class AgentManager {
       throw new HttpError(400, "Nenhuma instancia de envio foi definida para este lead");
     }
 
-    await this.ensureInstanceOwnership(context.acesId, instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
     const configuredAgent = await this.getAnyAgentByInstance(instanceName, context.acesId, context.crmUserId);
     const aiState = configuredAgent
@@ -2893,7 +2906,7 @@ export class AgentManager {
     this.ensureAdmin(context);
 
     const instanceName = this.sanitizeInstanceName(input.instanceName);
-    await this.ensureInstanceOwnership(context.acesId, instanceName);
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
     if (!input.targetPhone?.trim()) {
       throw new HttpError(400, "Numero do handoff e obrigatorio");
