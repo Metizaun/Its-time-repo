@@ -34,6 +34,12 @@ const manager = new AgentManager({
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   geminiApiKey: process.env.GEMINI_API_KEY,
+  geminiFallbackModels: (process.env.GEMINI_FALLBACK_MODELS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean),
+  geminiMaxRetries: Number(process.env.GEMINI_MAX_RETRIES ?? 3),
+  geminiRetryBaseDelayMs: Number(process.env.GEMINI_RETRY_BASE_DELAY_MS ?? 1000),
   redisUrl: process.env.REDIS_URL,
   evolutionApiUrl: requireEnv("EVOLUTION_API_URL"),
   evolutionApiKey: requireEnv("EVOLUTION_API_KEY"),

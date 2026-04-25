@@ -69,6 +69,12 @@ npm install
 npm run dev
 ```
 
+### Padrao de Desenvolvimento para Migrations
+
+- Toda nova feature que depender de schema deve ter migration aplicada no ambiente antes de validar o backend.
+- A migration `supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql` passa a ser obrigatoria como padrao deste projeto.
+- Se o backend falhar no `schema-preflight`, aplique as migrations pendentes no Supabase antes de continuar o desenvolvimento ou redeploy.
+
 ### Build
 
 ```bash

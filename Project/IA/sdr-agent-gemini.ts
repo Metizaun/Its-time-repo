@@ -266,6 +266,9 @@ type ServiceConfig = {
   supabaseAnonKey: string;
   supabaseServiceRoleKey: string;
   geminiApiKey?: string;
+  geminiFallbackModels?: string[];
+  geminiMaxRetries?: number;
+  geminiRetryBaseDelayMs?: number;
   redisUrl?: string;
   evolutionApiUrl: string;
   evolutionApiKey: string;
@@ -493,9 +496,20 @@ function buildExternalRequestError(error: unknown, fallbackMessage: string) {
   return new HttpError(resolvedStatus, message, responsePayload ?? error.message);
 }
 
+function isTransientGeminiError(error: unknown) {
+  const message = extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : "");
+  return /\b(429|500|503|504)\b/i.test(message) || /high demand|temporar|try again later|unavailable|timeout/i.test(message);
+}
+
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
+  private static readonly DEFAULT_GEMINI_FALLBACK_MODELS = [
+    "gemini-2.5-flash-lite",
+  ];
+  private static readonly DEFAULT_GEMINI_MAX_RETRIES = 3;
+  private static readonly DEFAULT_GEMINI_RETRY_BASE_DELAY_MS = 1000;
+  private static readonly FROM_ME_ECHO_LOOKBACK_MINUTES = 15;
 
   private readonly authClient: SupabaseClient<any, any, any>;
   private readonly serviceClient: SupabaseClient<any, any, any>;
@@ -503,6 +517,9 @@ export class AgentManager {
   private readonly memoryBuffers = new Map<string, ParsedWebhookMessage[]>();
   private readonly memoryTimers = new Map<string, NodeJS.Timeout>();
   private readonly gemini: GoogleGenerativeAI | null;
+  private readonly geminiFallbackModels: string[];
+  private readonly geminiMaxRetries: number;
+  private readonly geminiRetryBaseDelayMs: number;
 
   constructor(private readonly config: ServiceConfig) {
     this.authClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -517,6 +534,12 @@ export class AgentManager {
 
     this.redis = config.redisUrl ? new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 }) : null;
     this.gemini = config.geminiApiKey ? new GoogleGenerativeAI(config.geminiApiKey) : null;
+    this.geminiFallbackModels = config.geminiFallbackModels?.filter(Boolean) ?? AgentManager.DEFAULT_GEMINI_FALLBACK_MODELS;
+    this.geminiMaxRetries = Math.max(1, config.geminiMaxRetries ?? AgentManager.DEFAULT_GEMINI_MAX_RETRIES);
+    this.geminiRetryBaseDelayMs = Math.max(
+      250,
+      config.geminiRetryBaseDelayMs ?? AgentManager.DEFAULT_GEMINI_RETRY_BASE_DELAY_MS
+    );
   }
 
   async authenticate(authHeader?: string): Promise<AuthContext> {
@@ -1734,6 +1757,59 @@ export class AgentManager {
     });
   }
 
+  private getGeminiModelCandidates(primaryModelName: string) {
+    const candidates = [primaryModelName.trim(), ...this.geminiFallbackModels]
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    return Array.from(new Set(candidates));
+  }
+
+  private async generateGeminiContent(
+    primaryModelName: string,
+    prompt: string | Array<string | { inlineData: { mimeType: string; data: string } }>
+  ) {
+    const models = this.getGeminiModelCandidates(primaryModelName);
+    let lastError: unknown = null;
+
+    for (const [modelIndex, modelName] of models.entries()) {
+      const model = this.getModel(modelName);
+
+      for (let attempt = 1; attempt <= this.geminiMaxRetries; attempt += 1) {
+        try {
+          const result = await model.generateContent(prompt);
+          return {
+            result,
+            modelName,
+            usedFallback: modelIndex > 0,
+            attempt,
+          };
+        } catch (error) {
+          lastError = error;
+          const canRetry = isTransientGeminiError(error) && attempt < this.geminiMaxRetries;
+          const canFallback = isTransientGeminiError(error) && modelIndex < models.length - 1;
+
+          console.warn("[crm-ai] Falha ao gerar conteudo com Gemini:", {
+            model: modelName,
+            attempt,
+            canRetry,
+            canFallback,
+            error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : error),
+          });
+
+          if (canRetry) {
+            await wait(this.geminiRetryBaseDelayMs * 2 ** (attempt - 1));
+            continue;
+          }
+
+          break;
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Falha ao gerar conteudo com Gemini");
+  }
+
   private async matchOutboundEcho(instanceName: string, phone: string, content: string) {
     return matchOutboundEcho({
       client: this.serviceClient,
@@ -1742,6 +1818,65 @@ export class AgentManager {
       phone,
       content,
     });
+  }
+
+  private async matchRecentOutboundMessageFallback(
+    leadId: string,
+    instanceName: string,
+    content: string
+  ): Promise<{
+    sourceType: "ai" | "automation" | "manual";
+    messageId: string | null;
+    conversationId: string | null;
+  } | null> {
+    const since = new Date(
+      Date.now() - AgentManager.FROM_ME_ECHO_LOOKBACK_MINUTES * 60_000
+    ).toISOString();
+
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("id, source_type, created_by, conversation_id, sent_at")
+      .eq("lead_id", leadId)
+      .eq("direction", "outbound")
+      .eq("instance", instanceName)
+      .eq("content", content)
+      .gte("sent_at", since)
+      .order("sent_at", { ascending: false })
+      .limit(5);
+
+    if (error) {
+      console.warn("[crm-ai] Falha ao consultar fallback de echo outbound:", {
+        leadId,
+        instanceName,
+        error: extractSupabaseErrorMessage(error),
+      });
+      return null;
+    }
+
+    for (const row of (data ?? []) as Array<{
+      id: string;
+      source_type: string;
+      created_by: string | null;
+      conversation_id: string | null;
+    }>) {
+      if (row.source_type === "ai" || row.source_type === "automation") {
+        return {
+          sourceType: row.source_type,
+          messageId: row.id,
+          conversationId: row.conversation_id,
+        };
+      }
+
+      if (row.source_type === "human" && row.created_by) {
+        return {
+          sourceType: "manual",
+          messageId: row.id,
+          conversationId: row.conversation_id,
+        };
+      }
+    }
+
+    return null;
   }
 
   private async repairAutomationFreezeForLead(leadId: string | null, reference: string) {
@@ -2207,13 +2342,13 @@ export class AgentManager {
       return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
     }
 
-    const model = this.getModel(agent?.model?.trim() || "gemini-2.5-flash");
+    const modelName = agent?.model?.trim() || "gemini-2.5-flash";
     const prompt =
       message.mediaKind === "audio"
         ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
         : "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.";
 
-    const result = await model.generateContent([prompt, mediaPart]);
+    const { result } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
     return result.response.text().trim() || (message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]");
   }
 
@@ -2422,7 +2557,6 @@ export class AgentManager {
   }
 
   private async classifyConversation(agent: AgentRow, lead: LeadRow, rules: Array<{ stage: StageRow; rule: StageRuleRow }>, messages: MessageRow[]) {
-    const model = this.getModel(agent.model);
     const handoffConfig = this.getHandoffConfig(agent);
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
@@ -2470,7 +2604,7 @@ export class AgentManager {
       `Historico recente:\n${conversation}`,
     ].join("\n");
 
-    const result = await model.generateContent(prompt);
+    const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(agent.model, prompt);
     const text = result.response.text();
     const parsed = parseStructuredJson(text);
     const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
@@ -2478,6 +2612,9 @@ export class AgentManager {
     return {
       parsed,
       rawText: text,
+      modelName,
+      usedFallback,
+      attempt,
       tokensIn: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : null,
       tokensOut: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
     };
@@ -2625,6 +2762,9 @@ export class AgentManager {
         },
         outputSnapshot: {
           raw_model_response: result.rawText,
+          model_name: result.modelName,
+          used_fallback_model: result.usedFallback,
+          generation_attempt: result.attempt,
           structured: result.parsed,
           handoff: handoffResult,
           freeze_until: freezeUntil,
@@ -2719,6 +2859,38 @@ export class AgentManager {
         message.pushName,
         agent?.created_by ?? null
       );
+
+      const fallbackMatch = await this.matchRecentOutboundMessageFallback(
+        lead.id,
+        message.instanceName,
+        normalizedContent,
+      );
+      if (fallbackMatch) {
+        if (fallbackMatch.sourceType !== "manual") {
+          await this.repairAutomationFreezeForLead(
+            lead.id,
+            `fallback_echo:${fallbackMatch.sourceType}:${fallbackMatch.conversationId ?? fallbackMatch.messageId ?? message.messageId ?? "unknown"}`,
+          );
+        }
+
+        console.warn("[crm-ai] Echo outbound reconhecido via fallback local:", {
+          leadId: lead.id,
+          instanceName: message.instanceName,
+          sourceType: fallbackMatch.sourceType,
+          messageId: message.messageId,
+          conversationId: fallbackMatch.conversationId,
+        });
+
+        return {
+          ignored: true,
+          reason:
+            fallbackMatch.sourceType === "manual"
+              ? "Echo de mensagem manual reconhecido por fallback"
+              : fallbackMatch.sourceType === "automation"
+                ? "Echo de mensagem da automacao reconhecido por fallback"
+                : "Echo de mensagem da IA reconhecido por fallback",
+        };
+      }
 
       await this.saveMessage({
         leadId: lead.id,

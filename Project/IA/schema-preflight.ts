@@ -148,6 +148,21 @@ async function validateHumanizedWindowRpc(serviceClient: SupabaseClient<any, any
     : null;
 }
 
+async function validateAutomationFreezeRepairRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_repair_automation_ai_freezes", {
+    p_lead_id: NIL_UUID,
+    p_reference: "schema_preflight",
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.rpc_repair_automation_ai_freezes",
+        "supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql",
+        error
+      )
+    : null;
+}
+
 export async function assertRuntimeSchemaCompatibility(
   config: SchemaPreflightConfig = {}
 ) {
@@ -174,6 +189,13 @@ export async function assertRuntimeSchemaCompatibility(
       ["agent_id", "lead_id", "manual_ai_enabled"],
       "crm.ai_lead_state.manual_ai_enabled",
       "supabase/migrations/20260420110000_add_manual_ai_override_to_lead_state.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "ai_lead_state",
+      ["agent_id", "lead_id", "pause_origin", "pause_reference", "paused_at"],
+      "crm.ai_lead_state (pause metadata)",
+      "supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql"
     ),
     validateSelectedColumns(
       serviceClient,
@@ -211,9 +233,17 @@ export async function assertRuntimeSchemaCompatibility(
       "crm.automation_holidays",
       "supabase/migrations/20260421160000_fix_automation_humanized_instance_holidays.sql"
     ),
+    validateSelectedColumns(
+      serviceClient,
+      "outbound_echo_registry",
+      ["id", "origin", "instance_name", "phone", "fingerprint", "expires_at"],
+      "crm.outbound_echo_registry",
+      "supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql"
+    ),
     validateHumanizedPlanRpc(serviceClient),
     validateHumanizedMarkRpc(serviceClient),
     validateHumanizedWindowRpc(serviceClient),
+    validateAutomationFreezeRepairRpc(serviceClient),
   ]);
 
   const failures = checks.filter((check): check is SchemaFailure => check !== null);

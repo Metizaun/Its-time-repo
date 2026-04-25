@@ -29,12 +29,14 @@ Arquivos de migracao relevantes para o backend atual:
 - `supabase/migrations/20260418090000_add_automation_logic_engine_v2.sql`
 - `supabase/migrations/20260420110000_add_manual_ai_override_to_lead_state.sql`
 - `supabase/migrations/20260420130000_add_humanized_automation_dispatch.sql`
+- `supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql`
 
 Importante:
 - o deploy da VPS nao aplica migrations do Supabase
 - o banco do Supabase e externo ao Docker Swarm
 - o script de deploy agora valida o schema esperado antes de publicar a stack
 - se a validacao falhar, primeiro aplique as migrations pendentes no Supabase e so depois rode o deploy novamente
+- se faltar a migration `20260423113000`, o backend pode pausar a IA por falso `human_webhook` e perder o reparo de echo
 
 ## 3. O que precisa existir na VPS
 
@@ -63,6 +65,9 @@ SUPABASE_ANON_KEY=...
 SUPABASE_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 GEMINI_API_KEY=...
+GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
+GEMINI_MAX_RETRIES=3
+GEMINI_RETRY_BASE_DELAY_MS=1000
 REDIS_URL=redis://evolution_redis:6379
 EVOLUTION_API_URL=http://72.60.251.89:64970
 EVOLUTION_API_KEY=ivXKb3NJ7dw3t4CGWcZ4qjjW43yRjkR8
@@ -79,6 +84,8 @@ AUTOMATION_WORKER_BATCH_SIZE=50
 Observacoes:
 - `EVOLUTION_API_URL` fica sem `/manager`
 - `EVOLUTION_WEBHOOK_SECRET` pode ficar vazio
+- `GEMINI_FALLBACK_MODELS` define os modelos de fallback quando o primario retornar `429/500/503/504`
+- `GEMINI_MAX_RETRIES` e `GEMINI_RETRY_BASE_DELAY_MS` controlam retry com backoff para falhas transitórias do Gemini
 - `REDIS_URL` precisa apontar para o Redis do Docker, nao para `localhost`
 - no seu servidor, o valor detectado foi `redis://evolution_redis:6379`
 - se preferir, voce pode manter `REDIS_URL` na env local de desenvolvimento e usar `REDIS_URL_FOR_CONTAINER=redis://seu-redis:6379` so na VPS
@@ -118,6 +125,7 @@ Esse comando faz:
 
 Se o schema estiver atrasado, o deploy vai parar antes de publicar a stack. Nesse caso:
 1. abra o SQL Editor do Supabase
+2. aplique obrigatoriamente a migration `supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql`
 2. aplique, nesta ordem:
    - `20260418090000_add_automation_logic_engine_v2.sql`
    - `20260420110000_add_manual_ai_override_to_lead_state.sql`
