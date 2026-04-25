@@ -120,7 +120,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
         <DialogHeader>
           <DialogTitle>Novo Lead</DialogTitle>
           <DialogDescription>
-            A criacao manual usa a instancia e o responsavel do usuario atual. Aguarde o carregamento completo antes de salvar.
+            A instância escolhida define automaticamente o responsável do lead no banco. Aguarde o carregamento completo antes de salvar.
           </DialogDescription>
         </DialogHeader>
 
@@ -286,7 +286,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
 
             <div className="space-y-2">
               <Label htmlFor="owner_id">Responsavel</Label>
-              <Input id="owner_id" value={currentCrmUser?.name || currentCrmUser?.email || ""} disabled />
+              <Input id="owner_id" value={formData.instancia ? `Definido pela instância: ${formData.instancia}` : ""} disabled />
             </div>
           </div>
 

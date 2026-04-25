@@ -238,12 +238,33 @@ async function ensureImportOptionsAccess(
     .select("instancia")
     .eq("instancia", importOptions.instanceName)
     .eq("aces_id", acesId)
-    .eq("created_by", crmUser.id)
+    .or(`created_by.eq.${crmUser.id},instancia.ilike.prospect`)
     .maybeSingle();
 
   if (instanceError || !instance) {
     throw new Error("Instancia invalida para o usuario atual.");
   }
+}
+
+async function resolveLeadOwnerId(
+  adminClient: ReturnType<typeof createClient>,
+  acesId: number,
+  instanceName: string
+) {
+  const { data: instance, error } = await adminClient
+    .schema("crm")
+    .from("instance")
+    .select("created_by")
+    .eq("instancia", instanceName)
+    .eq("aces_id", acesId)
+    .or("setup_status.is.null,setup_status.neq.cancelled")
+    .maybeSingle();
+
+  if (error || !instance?.created_by) {
+    throw new Error("Nao foi possivel identificar o responsavel da instancia selecionada.");
+  }
+
+  return instance.created_by;
 }
 
 async function insertRowsInChunks(
@@ -260,12 +281,13 @@ async function insertRowsInChunks(
 ) {
   const CHUNK_SIZE = 500;
   let inserted = 0;
+  const resolvedOwnerId = await resolveLeadOwnerId(adminClient, acesId, importOptions.instanceName);
 
   for (let index = 0; index < rows.length; index += CHUNK_SIZE) {
     const chunk = rows.slice(index, index + CHUNK_SIZE).map((row) => ({
       ...row,
       stage_id: importOptions.stageId,
-      owner_id: importOptions.ownerId,
+      owner_id: resolvedOwnerId,
       instancia: importOptions.instanceName,
       Fonte: importOptions.source,
       aces_id: acesId,

@@ -8,6 +8,7 @@ export interface Instance {
   aces_id: number;
   status?: string | null;
   setup_status?: "pending_qr" | "connected" | "expired" | "cancelled" | null;
+  created_by?: string | null;
 }
 
 export function useInstances() {
@@ -30,7 +31,7 @@ export function useInstances() {
 
       const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('aces_id, role')
+        .select('id, aces_id, role')
         .eq('auth_user_id', user.id)
         .maybeSingle();
 
@@ -50,7 +51,7 @@ export function useInstances() {
 
       const { data: instanceData, error: instanceError } = await supabase
         .from('instance')
-        .select('instancia, color, aces_id, status, setup_status')
+        .select('instancia, color, aces_id, status, setup_status, created_by')
         .eq('aces_id', userData.aces_id)
         .or('setup_status.is.null,setup_status.neq.cancelled')
         .order('instancia');
@@ -60,7 +61,16 @@ export function useInstances() {
         throw instanceError;
       }
 
-      setInstances((instanceData || []).filter((instance) => instance.setup_status !== "cancelled"));
+      const normalizedInstances = (instanceData || []).filter((instance) => {
+        if (instance.setup_status === "cancelled") {
+          return false;
+        }
+
+        const instanceName = instance.instancia.trim().toLowerCase();
+        return instance.created_by === userData.id || instanceName === "prospect";
+      });
+
+      setInstances(normalizedInstances);
     } catch (error: any) {
       console.error("Erro ao carregar instâncias:", error);
       setError(error.message);

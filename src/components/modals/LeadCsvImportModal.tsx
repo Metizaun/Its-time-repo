@@ -197,7 +197,11 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
 
             <div className="space-y-2">
               <Label htmlFor="csv-owner">Responsavel</Label>
-              <Input id="csv-owner" value={currentCrmUser?.name || currentCrmUser?.email || ""} disabled />
+              <Input
+                id="csv-owner"
+                value={instanceName ? `Definido pela instância: ${instanceName}` : ""}
+                disabled
+              />
             </div>
 
             <div className="space-y-2">
