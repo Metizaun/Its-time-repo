@@ -66,8 +66,7 @@ export function useInstances() {
           return false;
         }
 
-        const instanceName = instance.instancia.trim().toLowerCase();
-        return instance.created_by === userData.id || instanceName === "prospect";
+        return instance.created_by === userData.id;
       });
 
       setInstances(normalizedInstances);

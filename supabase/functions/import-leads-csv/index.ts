@@ -238,7 +238,7 @@ async function ensureImportOptionsAccess(
     .select("instancia")
     .eq("instancia", importOptions.instanceName)
     .eq("aces_id", acesId)
-    .or(`created_by.eq.${crmUser.id},instancia.ilike.prospect`)
+    .eq("created_by", crmUser.id)
     .maybeSingle();
 
   if (instanceError || !instance) {
