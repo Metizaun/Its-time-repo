@@ -35,9 +35,38 @@ type HumanizedDispatchPlan = {
   dispatch_meta: Record<string, unknown> | null;
 };
 
+type DispatchFailureKind = "transient" | "permanent";
+
+class AutomationDispatchError extends Error {
+  kind: DispatchFailureKind;
+  statusCode: number | null;
+  errorCode: string | null;
+
+  constructor(
+    message: string,
+    options: {
+      kind: DispatchFailureKind;
+      statusCode?: number | null;
+      errorCode?: string | null;
+    }
+  ) {
+    super(message);
+    this.name = "AutomationDispatchError";
+    this.kind = options.kind;
+    this.statusCode = options.statusCode ?? null;
+    this.errorCode = options.errorCode?.toUpperCase() ?? null;
+  }
+}
+
 const HOLIDAY_COUNTRY_CODE = "BR";
 const PLACEHOLDER_PATTERN = /(\{|\[)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(\}|\])/g;
 const UNRESOLVED_PLACEHOLDER_PATTERN = /[\{\[]\s*[a-zA-Z_][a-zA-Z0-9_]*\s*[\}\]]/;
+const TRANSIENT_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const PERMANENT_HTTP_STATUS_CODES = new Set([400]);
+const TRANSIENT_NETWORK_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"]);
+const MAX_TRANSIENT_RETRIES = 5;
+const RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RETRY_DELAYS_MS = [5, 15, 30, 60, 120].map((minutes) => minutes * 60 * 1000);
 const GENERIC_NAME_PATTERNS = [
   /^clinica de estetica$/i,
   /^clinica odontologica$/i,
@@ -145,13 +174,17 @@ function renderTemplate(template: string, vars: Record<string, string>) {
 function assertNoUnresolvedPlaceholders(message: string) {
   const unresolved = message.match(UNRESOLVED_PLACEHOLDER_PATTERN)?.[0];
   if (unresolved) {
-    throw new Error(`Mensagem contem variavel nao resolvida: ${unresolved}`);
+    throw new AutomationDispatchError(`Mensagem contem variavel nao resolvida: ${unresolved}`, {
+      kind: "permanent",
+    });
   }
 }
 
 function renderExecutionMessage(execution: ClaimedExecution) {
   if (!execution.template) {
-    throw new Error("Template do disparo nao encontrado");
+    throw new AutomationDispatchError("Template do disparo nao encontrado", {
+      kind: "permanent",
+    });
   }
 
   const renderedMessage = renderTemplate(execution.template, {
@@ -164,6 +197,34 @@ function renderExecutionMessage(execution: ClaimedExecution) {
 
   assertNoUnresolvedPlaceholders(renderedMessage);
   return renderedMessage;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseNumericValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function parseDateValue(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function extractExternalErrorMessage(value: unknown): string | null {
@@ -194,6 +255,129 @@ function extractExternalErrorMessage(value: unknown): string | null {
   return null;
 }
 
+function extractErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return extractExternalErrorMessage(error) ?? "Falha no disparo automatizado";
+}
+
+function classifyTransportFailure(
+  statusCode: number | null,
+  errorCode: string | null,
+  message: string
+): DispatchFailureKind {
+  const normalizedMessage = normalizeTextForComparison(message);
+  const normalizedCode = errorCode?.toUpperCase() ?? null;
+
+  if (statusCode !== null && PERMANENT_HTTP_STATUS_CODES.has(statusCode)) {
+    return "permanent";
+  }
+
+  if (
+    (statusCode !== null && TRANSIENT_HTTP_STATUS_CODES.has(statusCode)) ||
+    (normalizedCode !== null && TRANSIENT_NETWORK_ERROR_CODES.has(normalizedCode))
+  ) {
+    return "transient";
+  }
+
+  if (
+    normalizedMessage.includes("internal server error") ||
+    normalizedMessage.includes("too many requests") ||
+    normalizedMessage.includes("econnrefused") ||
+    normalizedMessage.includes("econnreset") ||
+    normalizedMessage.includes("etimedout") ||
+    normalizedMessage.includes("gateway timeout") ||
+    normalizedMessage.includes("service unavailable") ||
+    normalizedMessage.includes("bad gateway")
+  ) {
+    return "transient";
+  }
+
+  if (
+    normalizedMessage.includes("bad request") ||
+    normalizedMessage.includes("payload invalido") ||
+    normalizedMessage.includes("invalid payload")
+  ) {
+    return "permanent";
+  }
+
+  return "permanent";
+}
+
+function classifyExecutionFailure(error: unknown) {
+  if (error instanceof AutomationDispatchError) {
+    return error;
+  }
+
+  const message = extractErrorMessage(error);
+  const normalizedMessage = normalizeTextForComparison(message);
+  const kind =
+    normalizedMessage.includes("internal server error") ||
+    normalizedMessage.includes("too many requests") ||
+    normalizedMessage.includes("econnrefused") ||
+    normalizedMessage.includes("econnreset") ||
+    normalizedMessage.includes("etimedout") ||
+    normalizedMessage.includes("bad gateway") ||
+    normalizedMessage.includes("service unavailable") ||
+    normalizedMessage.includes("gateway timeout")
+      ? "transient"
+      : "permanent";
+
+  return new AutomationDispatchError(message, { kind });
+}
+
+function getDispatchMetaRecord(dispatchMeta: Record<string, unknown> | null | undefined) {
+  return isRecord(dispatchMeta) ? { ...dispatchMeta } : {};
+}
+
+function getRetryState(dispatchMeta: Record<string, unknown> | null | undefined, now: Date) {
+  const meta = getDispatchMetaRecord(dispatchMeta);
+  const retryCount = Math.max(parseNumericValue(meta.retry_count) ?? 0, 0);
+  const firstRetryAt = parseDateValue(meta.first_retry_at);
+  const withinWindow =
+    firstRetryAt !== null && now.getTime() - firstRetryAt.getTime() <= RETRY_WINDOW_MS;
+  const nextRetryCount = withinWindow ? retryCount + 1 : 1;
+
+  return {
+    retryCount: nextRetryCount,
+    firstRetryAt: withinWindow && firstRetryAt ? firstRetryAt.toISOString() : now.toISOString(),
+    exceeded: nextRetryCount > MAX_TRANSIENT_RETRIES,
+  };
+}
+
+function computeRetryBackoffMs(retryCount: number) {
+  const safeRetryCount = Math.max(retryCount, 1);
+  return RETRY_DELAYS_MS[Math.min(safeRetryCount - 1, RETRY_DELAYS_MS.length - 1)];
+}
+
+function resolveRetryDispatchAt(dispatchPlan: HumanizedDispatchPlan, retryCount: number) {
+  const backoffAt = Date.now() + computeRetryBackoffMs(retryCount);
+  const plannedAt = Date.parse(dispatchPlan.dispatch_at);
+  const targetAt =
+    dispatchPlan.action === "defer" && Number.isFinite(plannedAt)
+      ? Math.max(plannedAt, backoffAt)
+      : backoffAt;
+
+  return new Date(targetAt).toISOString();
+}
+
+function buildFailureDispatchMeta(
+  dispatchMeta: Record<string, unknown> | null | undefined,
+  kind: DispatchFailureKind,
+  message: string,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    ...getDispatchMetaRecord(dispatchMeta),
+    last_failure_at: new Date().toISOString(),
+    last_failure_kind: kind,
+    last_failure_message: message,
+    ...overrides,
+  };
+}
+
 async function sendWhatsAppMessage(
   evolutionApiUrl: string,
   evolutionApiKey: string,
@@ -217,11 +401,21 @@ async function sendWhatsAppMessage(
       }
     );
   } catch (error) {
+    const statusCode = axios.isAxiosError(error) ? error.response?.status ?? null : null;
+    const errorCode =
+      axios.isAxiosError(error) && typeof error.code === "string" ? error.code.toUpperCase() : null;
     const payload = axios.isAxiosError(error) ? error.response?.data ?? error.message : error;
     const payloadMessage = extractExternalErrorMessage(payload);
     const messagePrefix = "Falha ao enviar mensagem na Evolution";
 
-    throw new Error(payloadMessage ? `${messagePrefix}: ${payloadMessage}` : messagePrefix);
+    throw new AutomationDispatchError(
+      payloadMessage ? `${messagePrefix}: ${payloadMessage}` : messagePrefix,
+      {
+        kind: classifyTransportFailure(statusCode, errorCode, payloadMessage ?? messagePrefix),
+        statusCode,
+        errorCode,
+      }
+    );
   }
 }
 
@@ -396,15 +590,47 @@ export function startAutomationWorker() {
   async function deferExecution(
     executionId: string,
     dispatchAt: string,
+    dispatchMeta: Record<string, unknown> | null,
+    options: {
+      attemptCount?: number;
+      lastError?: string | null;
+    } = {}
+  ) {
+    const payload: Record<string, unknown> = {
+      status: "pending",
+      scheduled_at: dispatchAt,
+      dispatch_meta: dispatchMeta,
+      claimed_by: null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (typeof options.attemptCount === "number") {
+      payload.attempt_count = options.attemptCount;
+    }
+
+    if (options.lastError !== undefined) {
+      payload.last_error = options.lastError;
+    }
+
+    const { error } = await supabase
+      .from("automation_executions")
+      .update(payload)
+      .eq("id", executionId)
+      .eq("status", "processing");
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function updateExecutionDispatchMeta(
+    executionId: string,
     dispatchMeta: Record<string, unknown> | null
   ) {
     const { error } = await supabase
       .from("automation_executions")
       .update({
-        status: "pending",
-        scheduled_at: dispatchAt,
         dispatch_meta: dispatchMeta,
-        claimed_by: null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", executionId)
@@ -413,6 +639,20 @@ export function startAutomationWorker() {
     if (error) {
       throw error;
     }
+  }
+
+  async function fetchExecutionDispatchMeta(executionId: string) {
+    const { data, error } = await supabase
+      .from("automation_executions")
+      .select("dispatch_meta")
+      .eq("id", executionId)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return isRecord(data?.dispatch_meta) ? (data.dispatch_meta as Record<string, unknown>) : null;
   }
 
   async function planHumanizedDispatch(
@@ -508,16 +748,22 @@ export function startAutomationWorker() {
         }
 
         for (const execution of executions) {
+          let renderedMessage: string | null = null;
+
           try {
             if (!execution.instance_name) {
-              throw new Error("Instancia de envio nao definida");
+              throw new AutomationDispatchError("Instancia de envio nao definida", {
+                kind: "permanent",
+              });
             }
 
             if (!execution.phone) {
-              throw new Error("Lead sem telefone para disparo");
+              throw new AutomationDispatchError("Lead sem telefone para disparo", {
+                kind: "permanent",
+              });
             }
 
-            const renderedMessage = renderExecutionMessage(execution);
+            renderedMessage = renderExecutionMessage(execution);
             const dispatchPlan = await planHumanizedDispatch(
               execution.execution_id,
               renderedMessage.length
@@ -556,18 +802,74 @@ export function startAutomationWorker() {
             await markDispatchSent(execution.execution_id, sentAt);
             await completeExecution(execution.execution_id, renderedMessage);
           } catch (error: any) {
-            console.error(`[automation-worker] Falha ao processar execucao ${execution.execution_id}:`, error);
+            const failure = classifyExecutionFailure(error);
+
+            console.error(
+              `[automation-worker] Falha ${failure.kind} ao processar execucao ${execution.execution_id}:`,
+              error
+            );
 
             try {
-              await failExecution(
-                execution.execution_id,
-                error instanceof Error ? error.message : "Falha no disparo automatizado"
-              );
-            } catch (failError) {
+              if (failure.kind === "transient") {
+                const messageLength = renderedMessage?.length ?? execution.template?.length ?? 0;
+                const dispatchPlan = await planHumanizedDispatch(execution.execution_id, messageLength);
+                const retryState = getRetryState(dispatchPlan.dispatch_meta, new Date());
+                const retryDispatchAt = resolveRetryDispatchAt(dispatchPlan, retryState.retryCount);
+                const retryMeta = buildFailureDispatchMeta(
+                  dispatchPlan.dispatch_meta,
+                  "transient",
+                  failure.message,
+                  {
+                    retry_count: retryState.retryCount,
+                    first_retry_at: retryState.firstRetryAt,
+                  }
+                );
+
+                if (dispatchPlan.humanized || "planned_dispatch_at" in retryMeta) {
+                  retryMeta.planned_dispatch_at = retryDispatchAt;
+                  retryMeta.planned_at = new Date().toISOString();
+                }
+
+                if (retryState.exceeded) {
+                  const terminalMessage = `Falha transitoria recorrente apos ${MAX_TRANSIENT_RETRIES} tentativas em 24h: ${failure.message}`;
+                  const terminalMeta = buildFailureDispatchMeta(
+                    retryMeta,
+                    "permanent",
+                    terminalMessage
+                  );
+
+                  await updateExecutionDispatchMeta(execution.execution_id, terminalMeta);
+                  await failExecution(execution.execution_id, terminalMessage);
+                } else {
+                  await deferExecution(execution.execution_id, retryDispatchAt, retryMeta, {
+                    attemptCount: execution.attempt_count + 1,
+                    lastError: failure.message,
+                  });
+                }
+              } else {
+                const currentDispatchMeta = await fetchExecutionDispatchMeta(execution.execution_id);
+                const failureMeta = buildFailureDispatchMeta(
+                  currentDispatchMeta,
+                  "permanent",
+                  failure.message
+                );
+                await updateExecutionDispatchMeta(execution.execution_id, failureMeta);
+                await failExecution(execution.execution_id, failure.message);
+              }
+            } catch (recoveryError) {
               console.error(
-                `[automation-worker] Falha adicional ao marcar execucao ${execution.execution_id} como erro:`,
-                failError
+                `[automation-worker] Falha adicional ao tratar execucao ${execution.execution_id}:`,
+                recoveryError
               );
+
+              try {
+                await failExecution(execution.execution_id, failure.message);
+              } catch (failError) {
+                console.error(
+                  `[automation-worker] Falha adicional ao marcar execucao ${execution.execution_id} como erro:`,
+                  failError
+                );
+              }
             }
           }
         }
