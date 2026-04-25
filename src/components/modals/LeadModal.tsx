@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useLeadOperations } from "@/hooks/useLeadOperations";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
+import { useInstances } from "@/hooks/useInstances";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
   const { createLead } = useLeadOperations();
   const { users } = useCrmUsers();
   const { stages } = usePipelineStages();
+  const { instances, loading: instancesLoading } = useInstances();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -32,6 +34,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
     source: "WhatsApp",
     last_city: "",
     stage_id: "",
+    instancia: "",
     value: "",
     connection_level: "",
     owner_id: "",
@@ -56,6 +59,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
         source: "WhatsApp",
         last_city: "",
         stage_id: stages.length > 0 ? stages[0].id : "",
+        instancia: "",
         value: "",
         connection_level: "",
         owner_id: "",
@@ -77,6 +81,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
       last_city: formData.last_city,
       status: derivedStatus,
       stage_id: formData.stage_id,
+      instancia: formData.instancia,
       value: formData.value ? parseFloat(formData.value) : undefined,
       connection_level: formData.connection_level || undefined,
       owner_id: formData.owner_id || undefined,
@@ -179,6 +184,40 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="instancia">Instancia *</Label>
+              <Select
+                value={formData.instancia}
+                onValueChange={(value) => setFormData({ ...formData, instancia: value })}
+                disabled={instancesLoading || instances.length === 0}
+                required
+              >
+                <SelectTrigger id="instancia">
+                  <SelectValue
+                    placeholder={
+                      instancesLoading
+                        ? "Carregando instancias"
+                        : instances.length === 0
+                          ? "Cadastre uma instancia"
+                          : "Selecione a instancia"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {instances.map((instance) => (
+                    <SelectItem key={instance.instancia} value={instance.instancia}>
+                      {instance.instancia}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!instancesLoading && instances.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Cadastre uma instancia antes de criar leads que precisam de comunicacao.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="value">Valor (R$)</Label>
               <Input
                 id="value"
@@ -242,7 +281,9 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
             <Button type="button" variant="outline" onClick={onClose}>
               Cancelar
             </Button>
-            <Button type="submit">Criar Lead</Button>
+            <Button type="submit" disabled={instancesLoading || instances.length === 0 || !formData.instancia}>
+              Criar Lead
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -15,8 +15,13 @@ export function useLeadOperations() {
     owner_id?: string;
     notes?: string;
     stage_id?: string;
+    instancia: string;
   }) => {
     try {
+      if (!leadData.instancia?.trim()) {
+        throw new Error("Selecione uma instancia para criar o lead.");
+      }
+
       // Criar lead
       const { data: newLead, error: leadError } = await supabase
         .from('leads')
@@ -28,6 +33,7 @@ export function useLeadOperations() {
           last_city: leadData.last_city || null,
           status: leadData.status || 'Aberto',
           stage_id: leadData.stage_id || null,
+          instancia: leadData.instancia.trim(),
           owner_id: leadData.owner_id || null,
           notes: leadData.notes || null,
         })

@@ -473,9 +473,18 @@ function buildExternalRequestError(error: unknown, fallbackMessage: string) {
   }
 
   const statusCode = error.response?.status;
+  const statusText = error.response?.statusText;
   const responsePayload = error.response?.data ?? null;
   const payloadMessage = extractExternalErrorMessage(responsePayload);
-  const message = payloadMessage ? `${fallbackMessage}: ${payloadMessage}` : fallbackMessage;
+  const statusMessage =
+    typeof statusCode === "number"
+      ? [statusCode, statusText].filter(Boolean).join(" ")
+      : null;
+  const message = payloadMessage
+    ? `${fallbackMessage}: ${payloadMessage}`
+    : statusMessage
+      ? `${fallbackMessage}: ${statusMessage}`
+      : fallbackMessage;
   const resolvedStatus =
     typeof statusCode === "number" && statusCode >= 400 && statusCode < 500 ? statusCode : 502;
 
@@ -2157,7 +2166,17 @@ export class AgentManager {
     return null;
   }
 
-  private async sendWhatsAppMessage(instanceName: string, phone: string, content: string) {
+  private async sendWhatsAppMessage(
+    instanceName: string,
+    phone: string,
+    content: string,
+    context?: {
+      acesId?: number;
+      leadId?: string | null;
+      agentId?: string | null;
+      sourceType?: string;
+    }
+  ) {
     const recipient = resolveWhatsappRecipient(phone);
 
     try {
@@ -2174,7 +2193,14 @@ export class AgentManager {
       );
     } catch (error) {
       console.error("[crm-ai] Falha ao enviar mensagem na Evolution:", {
+        acesId: context?.acesId ?? null,
+        leadId: context?.leadId ?? null,
+        agentId: context?.agentId ?? null,
+        sourceType: context?.sourceType ?? null,
         instanceName,
+        phoneRaw: phone,
+        phoneNormalized: recipient.normalized,
+        phoneFinal: recipient.finalNumber,
         phone: recipient.jid,
         error: axios.isAxiosError(error) ? error.response?.data ?? error.message : error,
       });
@@ -2215,7 +2241,12 @@ export class AgentManager {
         sentAt,
       });
 
-      await this.sendWhatsAppMessage(resolvedInstance, phone, block);
+      await this.sendWhatsAppMessage(resolvedInstance, phone, block, {
+        acesId: params.lead.aces_id,
+        leadId: params.lead.id,
+        agentId: params.agent.id,
+        sourceType: params.sourceType,
+      });
 
       await this.saveMessage({
         leadId: params.lead.id,
@@ -2295,7 +2326,12 @@ export class AgentManager {
     }
 
     const notification = this.buildHandoffNotification(agent, lead, response, messages);
-    await this.sendWhatsAppMessage(agent.instance_name, config.targetPhone, notification);
+    await this.sendWhatsAppMessage(agent.instance_name, config.targetPhone, notification, {
+      acesId: agent.aces_id,
+      leadId: lead.id,
+      agentId: agent.id,
+      sourceType: "handoff",
+    });
 
     return {
       triggered: true,
@@ -2728,6 +2764,8 @@ export class AgentManager {
       throw new HttpError(400, "Nenhuma instancia de envio foi definida para este lead");
     }
 
+    await this.ensureInstanceOwnership(context.acesId, instanceName);
+
     const configuredAgent = await this.getAnyAgentByInstance(instanceName, context.acesId);
     const aiState = configuredAgent
       ? await this.resolveLeadAiState(lead.id, configuredAgent, instanceName)
@@ -2808,7 +2846,10 @@ export class AgentManager {
       .filter((line): line is string => Boolean(line))
       .join("\n");
 
-    await this.sendWhatsAppMessage(instanceName, input.targetPhone, message);
+    await this.sendWhatsAppMessage(instanceName, input.targetPhone, message, {
+      acesId: context.acesId,
+      sourceType: "handoff_test",
+    });
 
     return {
       success: true,
