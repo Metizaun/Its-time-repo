@@ -778,6 +778,75 @@ export class AgentManager {
     }
   }
 
+  private createScopedCrmClient(accessToken: string) {
+    return createClient(this.config.supabaseUrl, this.config.supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      db: { schema: "crm" },
+      global: {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    });
+  }
+
+  private async resyncAutomationFunnelsForConnectedInstance(context: AuthContext, instanceName: string) {
+    const { data: funnels, error } = await this.serviceClient
+      .from("automation_funnels")
+      .select("id, humanized_dispatch_enabled")
+      .eq("aces_id", context.acesId)
+      .eq("instance_name", instanceName)
+      .eq("created_by", context.crmUserId)
+      .eq("is_active", true);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel localizar automacoes da instancia conectada", error);
+    }
+
+    const scopedClient = this.createScopedCrmClient(context.accessToken);
+    let syncedFunnels = 0;
+    let replannedExecutions = 0;
+    const failures: Array<{ funnelId: string; reason: string }> = [];
+
+    for (const funnel of (funnels ?? []) as Array<{ id: string; humanized_dispatch_enabled: boolean | null }>) {
+      try {
+        await scopedClient.rpc("rpc_sync_automation_funnel_v2", {
+          p_funnel_id: funnel.id,
+        });
+        syncedFunnels += 1;
+
+        if (funnel.humanized_dispatch_enabled) {
+          const { data: replanned, error: replanError } = await this.serviceClient.rpc(
+            "replan_pending_humanized_funnel_dispatches",
+            {
+              p_funnel_id: funnel.id,
+            }
+          );
+
+          if (replanError) {
+            throw replanError;
+          }
+
+          replannedExecutions += Number(replanned ?? 0);
+        }
+      } catch (syncError) {
+        failures.push({
+          funnelId: funnel.id,
+          reason:
+            extractSupabaseErrorMessage(syncError) ??
+            (syncError instanceof Error ? syncError.message : "Falha desconhecida ao replanejar automacao"),
+        });
+      }
+    }
+
+    return {
+      foundFunnels: (funnels ?? []).length,
+      syncedFunnels,
+      replannedExecutions,
+      failures,
+    };
+  }
+
   private async fetchEvolutionConnectionState(instanceName: string) {
     const { data } = await axios.get(
       `${this.config.evolutionApiUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`,
@@ -1608,6 +1677,8 @@ export class AgentManager {
 
     try {
       const { state, status } = await this.fetchEvolutionConnectionState(instanceName);
+      const previousStatus = this.normalizeInstanceStatus(instance.status);
+      const justConnected = previousStatus !== "connected" && status === "connected";
       const setupStatus =
         status === "connected"
           ? "connected"
@@ -1626,7 +1697,32 @@ export class AgentManager {
       }
 
       if (status === "connected") {
-        await this.logInstanceEvent(context.acesId, instanceName, "connected");
+        let automationSyncPayload: JsonRecord = {
+          previous_status: previousStatus,
+          reconnect_resync_triggered: justConnected,
+        };
+
+        if (justConnected) {
+          try {
+            const syncSummary = await this.resyncAutomationFunnelsForConnectedInstance(context, instanceName);
+            automationSyncPayload = {
+              ...automationSyncPayload,
+              automation_sync: syncSummary,
+            };
+          } catch (syncError) {
+            automationSyncPayload = {
+              ...automationSyncPayload,
+              automation_sync: {
+                failed: true,
+                reason:
+                  extractSupabaseErrorMessage(syncError) ??
+                  (syncError instanceof Error ? syncError.message : "Falha desconhecida ao sincronizar automacoes"),
+              },
+            };
+          }
+        }
+
+        await this.logInstanceEvent(context.acesId, instanceName, "connected", automationSyncPayload);
       }
 
       return {
