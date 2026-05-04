@@ -9,6 +9,7 @@ APP_DIR="${APP_DIR:-$REPO_ROOT}"
 API_DIR="${API_DIR:-$APP_DIR/Project/IA}"
 STACK_FILE="${STACK_FILE:-$APP_DIR/docker-stack.backend.yml}"
 STACK_NAME="${STACK_NAME:-itstime-api}"
+ENV_FILE="${ENV_FILE:-$APP_DIR/.env.local}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
@@ -38,13 +39,13 @@ require_command() {
 require_env_value() {
   local var_name="$1"
   local value="${!var_name:-}"
-  [[ -n "$value" ]] || fail "Variavel obrigatoria ausente em $APP_DIR/.env.local: $var_name"
+  [[ -n "$value" ]] || fail "Variavel obrigatoria ausente em $ENV_FILE: $var_name"
 }
 
 load_env_file() {
   set -a
   # shellcheck disable=SC1090
-  source "$APP_DIR/.env.local"
+  source "$ENV_FILE"
   set +a
 }
 
@@ -90,7 +91,7 @@ require_command curl
 
 [[ -d "$API_DIR" ]] || fail "Pasta do backend nao encontrada em $API_DIR"
 [[ -f "$STACK_FILE" ]] || fail "Stack file nao encontrado em $STACK_FILE"
-[[ -f "$APP_DIR/.env.local" ]] || fail "Arquivo $APP_DIR/.env.local nao encontrado."
+[[ -f "$ENV_FILE" ]] || fail "Arquivo de ambiente nao encontrado em $ENV_FILE."
 
 if [[ "$SKIP_GIT_PULL" != "true" && -d "$APP_DIR/.git" ]]; then
   require_command git
@@ -106,7 +107,7 @@ fi
 load_env_file
 
 if [[ -z "${SUPABASE_ANON_KEY:-}" && -z "${SUPABASE_KEY:-}" ]]; then
-  fail "Defina SUPABASE_ANON_KEY ou SUPABASE_KEY em $APP_DIR/.env.local"
+  fail "Defina SUPABASE_ANON_KEY ou SUPABASE_KEY em $ENV_FILE"
 fi
 
 SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-$SUPABASE_KEY}"
@@ -170,6 +171,7 @@ export TRAEFIK_ROUTER_NAME
 export TRAEFIK_SERVICE_NAME
 export SWARM_NODE_HOSTNAME
 
+log "Usando arquivo de ambiente $ENV_FILE"
 log "Gerando imagem Docker $BACKEND_IMAGE"
 docker build -f "$API_DIR/Dockerfile" -t "$BACKEND_IMAGE" "$APP_DIR"
 

@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:evolution": "node scripts/verify-evolution-env.mjs --expect-instance prospect --expect-instance Juan --expect-instance Lucas"
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^7.1.0",

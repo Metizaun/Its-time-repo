@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 APP_DIR="${APP_DIR:-$REPO_ROOT}"
+ENV_FILE="${ENV_FILE:-$APP_DIR/.env.local}"
 API_DOMAIN="${API_DOMAIN:-api.itstime.pro}"
 TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-lukas_net}"
 TRAEFIK_CERT_RESOLVER="${TRAEFIK_CERT_RESOLVER:-letsencryptresolver}"
@@ -29,7 +30,7 @@ require_command docker
 
 [[ -d "$APP_DIR" ]] || fail "Repositorio nao encontrado em $APP_DIR"
 [[ -f "$APP_DIR/scripts/deploy-backend-vps.sh" ]] || fail "Script de deploy nao encontrado em $APP_DIR/scripts"
-[[ -f "$APP_DIR/.env.local" ]] || fail "Arquivo $APP_DIR/.env.local nao encontrado."
+[[ -f "$ENV_FILE" ]] || fail "Arquivo de ambiente nao encontrado em $ENV_FILE."
 
 SWARM_STATE="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
 [[ "$SWARM_STATE" == "active" ]] || fail "Docker Swarm nao esta ativo nesta VPS."
@@ -47,6 +48,7 @@ log "Traefik detectado na rede ${TRAEFIK_NETWORK}"
 log "Usando cert resolver ${TRAEFIK_CERT_RESOLVER}"
 
 APP_DIR="$APP_DIR" \
+ENV_FILE="$ENV_FILE" \
 API_DOMAIN="$API_DOMAIN" \
 TRAEFIK_NETWORK="$TRAEFIK_NETWORK" \
 TRAEFIK_CERT_RESOLVER="$TRAEFIK_CERT_RESOLVER" \
