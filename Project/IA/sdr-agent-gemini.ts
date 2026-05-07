@@ -1,6 +1,7 @@
 import axios from "axios";
 import Redis from "ioredis";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
+import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import {
@@ -181,6 +182,7 @@ type ParsedWebhookMessage = {
   mediaMimeType: string | null;
   mediaBase64: string | null;
   mediaUrl: string | null;
+  messageType: string | null;
   raw: JsonRecord;
 };
 
@@ -269,6 +271,9 @@ type ServiceConfig = {
   geminiFallbackModels?: string[];
   geminiMaxRetries?: number;
   geminiRetryBaseDelayMs?: number;
+  openaiApiKey?: string;
+  openaiTranscriptionModel?: string;
+  openaiVisionModel?: string;
   redisUrl?: string;
   evolutionApiUrl: string;
   evolutionApiKey: string;
@@ -327,6 +332,11 @@ function asBoolean(value: unknown): boolean | null {
   }
 
   return null;
+}
+
+function decodeBase64Payload(value: string) {
+  const normalized = value.includes(",") ? value.split(",").pop() ?? value : value;
+  return Buffer.from(normalized, "base64");
 }
 
 function normalizePhone(phone: string): string {
@@ -520,6 +530,9 @@ export class AgentManager {
   private readonly geminiFallbackModels: string[];
   private readonly geminiMaxRetries: number;
   private readonly geminiRetryBaseDelayMs: number;
+  private readonly openai: OpenAI | null;
+  private readonly openaiTranscriptionModel: string;
+  private readonly openaiVisionModel: string;
 
   constructor(private readonly config: ServiceConfig) {
     this.authClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -540,6 +553,9 @@ export class AgentManager {
       250,
       config.geminiRetryBaseDelayMs ?? AgentManager.DEFAULT_GEMINI_RETRY_BASE_DELAY_MS
     );
+    this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
+    this.openaiTranscriptionModel = config.openaiTranscriptionModel?.trim() || "gpt-4o-mini-transcribe";
+    this.openaiVisionModel = config.openaiVisionModel?.trim() || "gpt-4.1-mini";
   }
 
   async authenticate(authHeader?: string): Promise<AuthContext> {
@@ -625,6 +641,8 @@ export class AgentManager {
           webhook: {
             enabled: true,
             url: webhookUrl,
+            byEvents: false,
+            base64: true,
             events: ["MESSAGES_UPSERT"],
           },
         },
@@ -2345,6 +2363,10 @@ export class AgentManager {
     const key = asRecord(data.key);
     const message = asRecord(data.message);
     const messageContext = asRecord(root.message ?? data.messageData ?? data);
+    const messageType =
+      asString(data.messageType) ??
+      asString(root.messageType) ??
+      asString(messageContext.messageType);
 
     const instanceName =
       asString(root.instance) ??
@@ -2385,11 +2407,49 @@ export class AgentManager {
     const imageMessage = asRecord(message.imageMessage);
     const audioMessage = asRecord(message.audioMessage);
     const documentMessage = asRecord(message.documentMessage);
-    const imageUrl = asString(imageMessage.url) ?? asString(asRecord(root.image).url);
-    const imageBase64 = asString(imageMessage.base64) ?? asString(asRecord(root.image).base64);
-    const audioUrl = asString(audioMessage.url) ?? asString(asRecord(root.audio).url) ?? asString(documentMessage.url);
+    const sharedMediaBase64 =
+      asString(message.base64) ??
+      asString(messageContext.base64) ??
+      asString(data.base64) ??
+      asString(root.base64);
+    const imageUrl =
+      asString(imageMessage.url) ??
+      asString(imageMessage.mediaUrl) ??
+      asString(asRecord(root.image).url);
+    const audioUrl =
+      asString(audioMessage.url) ??
+      asString(audioMessage.mediaUrl) ??
+      asString(asRecord(root.audio).url) ??
+      asString(documentMessage.url);
+    const inferredAudio =
+      messageType === "audioMessage" ||
+      Object.keys(audioMessage).length > 0 ||
+      (Object.keys(documentMessage).length > 0 &&
+        ((asString(documentMessage.mimetype) ?? asString(documentMessage.mime_type) ?? "").startsWith("audio/")));
+    const inferredImage = messageType === "imageMessage" || Object.keys(imageMessage).length > 0;
+    const imageBase64 =
+      asString(imageMessage.base64) ??
+      asString(asRecord(root.image).base64) ??
+      (inferredImage ? sharedMediaBase64 : null);
     const audioBase64 =
-      asString(audioMessage.base64) ?? asString(asRecord(root.audio).base64) ?? asString(documentMessage.base64);
+      asString(audioMessage.base64) ??
+      asString(asRecord(root.audio).base64) ??
+      asString(documentMessage.base64) ??
+      (inferredAudio ? sharedMediaBase64 : null);
+    const mediaKind =
+      inferredAudio || audioBase64 || audioUrl
+        ? "audio"
+        : inferredImage || imageBase64 || imageUrl
+          ? "image"
+          : null;
+    const mediaMimeType =
+      asString(audioMessage.mimetype) ??
+      asString(audioMessage.mime_type) ??
+      asString(imageMessage.mimetype) ??
+      asString(imageMessage.mime_type) ??
+      asString(documentMessage.mimetype) ??
+      asString(documentMessage.mime_type) ??
+      (mediaKind === "audio" ? "audio/ogg" : mediaKind === "image" ? "image/jpeg" : null);
 
     if (!instanceName) {
       throw new HttpError(400, "Webhook sem instancia identificavel");
@@ -2408,14 +2468,11 @@ export class AgentManager {
       conversationId: remoteJid ?? phoneCandidate,
       sentAt,
       pushName,
-      mediaKind: audioBase64 || audioUrl ? "audio" : imageBase64 || imageUrl ? "image" : null,
-      mediaMimeType:
-        asString(audioMessage.mimetype) ??
-        asString(imageMessage.mimetype) ??
-        asString(documentMessage.mimetype) ??
-        null,
+      mediaKind,
+      mediaMimeType,
       mediaBase64: audioBase64 ?? imageBase64 ?? null,
       mediaUrl: audioUrl ?? imageUrl ?? null,
+      messageType,
       raw: root,
     };
   }
@@ -2427,6 +2484,17 @@ export class AgentManager {
 
     if (!message.mediaKind) {
       return "[mensagem sem texto]";
+    }
+
+    if (this.openai) {
+      try {
+        const normalized = await this.normalizeMediaWithOpenAi(message);
+        if (normalized) {
+          return normalized;
+        }
+      } catch (error) {
+        console.warn("[crm-ai] Falha ao normalizar midia com OpenAI, usando fallback:", error);
+      }
     }
 
     if (!this.gemini) {
@@ -2446,6 +2514,62 @@ export class AgentManager {
 
     const { result } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
     return result.response.text().trim() || (message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]");
+  }
+
+  private async normalizeMediaWithOpenAi(message: ParsedWebhookMessage) {
+    if (!this.openai) {
+      return null;
+    }
+
+    if (message.mediaKind === "audio") {
+      const media = await this.resolveMediaBytes(message);
+      if (!media) {
+        return null;
+      }
+
+      const extension = this.getFileExtensionFromMimeType(media.mimeType, "ogg");
+      const file = await toFile(media.buffer, `whatsapp-audio.${extension}`, {
+        type: media.mimeType,
+      });
+      const transcription = await this.openai.audio.transcriptions.create({
+        file,
+        model: this.openaiTranscriptionModel,
+        language: "pt",
+      });
+
+      return transcription.text.trim() || "[audio recebido]";
+    }
+
+    if (message.mediaKind === "image") {
+      const media = await this.resolveMediaBytes(message);
+      if (!media) {
+        return null;
+      }
+
+      const response = await this.openai.responses.create({
+        model: this.openaiVisionModel,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.",
+              },
+              {
+                type: "input_image",
+                image_url: `data:${media.mimeType};base64,${media.buffer.toString("base64")}`,
+                detail: "auto",
+              },
+            ],
+          },
+        ],
+      });
+
+      return response.output_text.trim() || "[imagem recebida]";
+    }
+
+    return null;
   }
 
   private async buildMediaPart(message: ParsedWebhookMessage) {
@@ -2472,6 +2596,46 @@ export class AgentManager {
     }
 
     return null;
+  }
+
+  private async resolveMediaBytes(message: ParsedWebhookMessage) {
+    const mimeType =
+      message.mediaMimeType ??
+      (message.mediaKind === "audio" ? "audio/ogg" : message.mediaKind === "image" ? "image/jpeg" : "application/octet-stream");
+
+    if (message.mediaBase64) {
+      return {
+        mimeType,
+        buffer: decodeBase64Payload(message.mediaBase64),
+      };
+    }
+
+    if (message.mediaUrl) {
+      const response = await axios.get<ArrayBuffer>(message.mediaUrl, {
+        responseType: "arraybuffer",
+      });
+
+      return {
+        mimeType,
+        buffer: Buffer.from(response.data),
+      };
+    }
+
+    return null;
+  }
+
+  private getFileExtensionFromMimeType(mimeType: string, fallback: string) {
+    const normalized = mimeType.toLowerCase();
+    if (normalized.includes("ogg")) return "ogg";
+    if (normalized.includes("mpeg")) return "mpeg";
+    if (normalized.includes("mp3")) return "mp3";
+    if (normalized.includes("mp4")) return "mp4";
+    if (normalized.includes("wav")) return "wav";
+    if (normalized.includes("webm")) return "webm";
+    if (normalized.includes("m4a")) return "m4a";
+    if (normalized.includes("jpeg")) return "jpg";
+    if (normalized.includes("png")) return "png";
+    return fallback;
   }
 
   private async sendWhatsAppMessage(
