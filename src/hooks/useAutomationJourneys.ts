@@ -23,6 +23,8 @@ export interface AutomationJourneyPayload {
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
   dispatch_limit_per_hour: number;
+  humanized_dispatch_window_start: string;
+  humanized_dispatch_window_end: string;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -46,6 +48,8 @@ function normalizeJourney(row: Record<string, unknown>) {
     exit_rule: normalizeRuleNode(row.exit_rule),
     humanized_dispatch_enabled: Boolean(row.humanized_dispatch_enabled),
     dispatch_limit_per_hour: Number(row.dispatch_limit_per_hour ?? 40),
+    humanized_dispatch_window_start: String(row.humanized_dispatch_window_start ?? "08:00:00"),
+    humanized_dispatch_window_end: String(row.humanized_dispatch_window_end ?? "19:00:00"),
     anchor_event: (row.anchor_event as AutomationAnchorEvent | null) ?? "stage_entered_at",
     reentry_mode: (row.reentry_mode as AutomationReentryMode | null) ?? "restart_on_match",
     reply_target_stage_id: (row.reply_target_stage_id as string | null) ?? null,

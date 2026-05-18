@@ -11,6 +11,8 @@ export interface AutomationFunnel {
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
   dispatch_limit_per_hour: number;
+  humanized_dispatch_window_start: string;
+  humanized_dispatch_window_end: string;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -62,6 +64,8 @@ interface FunnelPayload {
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
   dispatch_limit_per_hour: number;
+  humanized_dispatch_window_start: string;
+  humanized_dispatch_window_end: string;
 }
 
 interface StepPayload {

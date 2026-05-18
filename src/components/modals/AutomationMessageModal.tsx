@@ -61,6 +61,13 @@ import type { PipelineStage } from "@/types";
 
 type StepTimingMode = "now" | "after";
 
+const DISPATCH_LIMIT_PRESETS = [8, 15, 30, 40];
+const MAX_HUMANIZED_DISPATCH_LIMIT_PER_HOUR = 120;
+const RECOMMENDED_HUMANIZED_DISPATCH_LIMIT_PER_HOUR = 60;
+const MIN_HUMANIZED_WINDOW_MINUTES = 30;
+const RECOMMENDED_HUMANIZED_WINDOW_MINUTES = 120;
+const LATE_HUMANIZED_WINDOW_END_MINUTES = 21 * 60;
+
 type JourneyFormState = {
   id: string | null;
   name: string;
@@ -69,6 +76,8 @@ type JourneyFormState = {
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
   dispatch_limit_per_hour: number;
+  humanized_dispatch_window_start: string;
+  humanized_dispatch_window_end: string;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: "stage_entered_at" | "last_outbound" | "last_inbound";
@@ -126,6 +135,95 @@ function findAtendimentoStageId(stages: PipelineStage[]) {
   return stages.find((stage) => stage.name.trim().toLowerCase() === "atendimento")?.id ?? "";
 }
 
+function toHHMM(value: string | null | undefined, fallback: string) {
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) {
+    return fallback;
+  }
+
+  const hours = String(Math.min(Math.max(Number(match[1]), 0), 23)).padStart(2, "0");
+  const minutes = String(Math.min(Math.max(Number(match[2]), 0), 59)).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function hhmmToMinutes(value: string) {
+  const match = value.trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function normalizeTimeForDb(value: string) {
+  const normalized = toHHMM(value, "08:00");
+  return normalized.length === 5 ? `${normalized}:00` : normalized;
+}
+
+function getHumanizedDispatchQuality(form: JourneyFormState) {
+  const warnings: string[] = [];
+
+  if (!form.humanized_dispatch_enabled) {
+    return { error: null, warnings };
+  }
+
+  if (
+    !Number.isInteger(form.dispatch_limit_per_hour) ||
+    form.dispatch_limit_per_hour < 1 ||
+    form.dispatch_limit_per_hour > MAX_HUMANIZED_DISPATCH_LIMIT_PER_HOUR
+  ) {
+    return {
+      error: `Informe um limite inteiro entre 1 e ${MAX_HUMANIZED_DISPATCH_LIMIT_PER_HOUR} disparos por hora`,
+      warnings,
+    };
+  }
+
+  const startMinutes = hhmmToMinutes(form.humanized_dispatch_window_start);
+  const endMinutes = hhmmToMinutes(form.humanized_dispatch_window_end);
+
+  if (startMinutes === null || endMinutes === null) {
+    return { error: "Informe horarios validos para Inicio e Limite do disparo", warnings };
+  }
+
+  if (startMinutes >= endMinutes) {
+    return { error: "O horario limite deve ser maior que o horario de inicio", warnings };
+  }
+
+  const windowMinutes = endMinutes - startMinutes;
+
+  if (windowMinutes < MIN_HUMANIZED_WINDOW_MINUTES) {
+    return {
+      error: `A janela de disparo precisa ter pelo menos ${MIN_HUMANIZED_WINDOW_MINUTES} minutos`,
+      warnings,
+    };
+  }
+
+  if (form.dispatch_limit_per_hour > RECOMMENDED_HUMANIZED_DISPATCH_LIMIT_PER_HOUR) {
+    warnings.push("Limite acima de 60 disparos/hora pode ficar agressivo para uma instancia.");
+  }
+
+  if (windowMinutes < RECOMMENDED_HUMANIZED_WINDOW_MINUTES) {
+    warnings.push("Janela menor que 2 horas reduz a folga para atrasos e filas.");
+  }
+
+  if (endMinutes > LATE_HUMANIZED_WINDOW_END_MINUTES) {
+    warnings.push("Horario limite depois das 21:00 pode gerar respostas fora do expediente.");
+  }
+
+  return { error: null, warnings };
+}
+
 function getErrorDescription(error: unknown) {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -159,6 +257,8 @@ function buildInitialJourneyForm(params: {
       is_active: true,
       humanized_dispatch_enabled: false,
       dispatch_limit_per_hour: 40,
+      humanized_dispatch_window_start: "08:00",
+      humanized_dispatch_window_end: "19:00",
       entry_rule: createDefaultEntryRule(defaultStageId, params.preselectedInstanceName),
       exit_rule: createDefaultExitRule(),
       anchor_event: "stage_entered_at",
@@ -176,6 +276,8 @@ function buildInitialJourneyForm(params: {
     is_active: params.journey.is_active,
     humanized_dispatch_enabled: params.journey.humanized_dispatch_enabled,
     dispatch_limit_per_hour: params.journey.dispatch_limit_per_hour || 40,
+    humanized_dispatch_window_start: toHHMM(params.journey.humanized_dispatch_window_start, "08:00"),
+    humanized_dispatch_window_end: toHHMM(params.journey.humanized_dispatch_window_end, "19:00"),
     entry_rule: updateDefaultEntryRuleInstance(
       normalizeRuleNode(
         params.journey.entry_rule,
@@ -634,6 +736,15 @@ export function AutomationMessageModal({
     () => orderedSteps.find((step) => step.id === stepForm.id) ?? null,
     [orderedSteps, stepForm.id],
   );
+  const humanizedDispatchQuality = useMemo(
+    () => getHumanizedDispatchQuality(journeyForm),
+    [
+      journeyForm.dispatch_limit_per_hour,
+      journeyForm.humanized_dispatch_enabled,
+      journeyForm.humanized_dispatch_window_end,
+      journeyForm.humanized_dispatch_window_start,
+    ],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -726,13 +837,18 @@ export function AutomationMessageModal({
       return;
     }
 
-    if (!Number.isInteger(journeyForm.dispatch_limit_per_hour) || journeyForm.dispatch_limit_per_hour < 1) {
-      toast.error("Informe um valor valido em Limite de disparos");
+    if (humanizedDispatchQuality.error) {
+      toast.error(humanizedDispatchQuality.error);
       return;
     }
 
     try {
       setSavingJourney(true);
+      const dispatchLimitPerHour =
+        journeyForm.humanized_dispatch_enabled ||
+        (Number.isInteger(journeyForm.dispatch_limit_per_hour) && journeyForm.dispatch_limit_per_hour > 0)
+          ? journeyForm.dispatch_limit_per_hour
+          : 40;
 
       const payload: AutomationJourneyPayload = {
         name: journeyForm.name.trim(),
@@ -740,7 +856,9 @@ export function AutomationMessageModal({
         instance_name: journeyForm.instance_name,
         is_active: journeyForm.is_active,
         humanized_dispatch_enabled: journeyForm.humanized_dispatch_enabled,
-        dispatch_limit_per_hour: journeyForm.dispatch_limit_per_hour,
+        dispatch_limit_per_hour: dispatchLimitPerHour,
+        humanized_dispatch_window_start: normalizeTimeForDb(journeyForm.humanized_dispatch_window_start),
+        humanized_dispatch_window_end: normalizeTimeForDb(journeyForm.humanized_dispatch_window_end),
         entry_rule: normalizeRuleNode(
           updateDefaultEntryRuleInstance(journeyForm.entry_rule, journeyForm.instance_name),
           createDefaultEntryRule(journeyForm.trigger_stage_id, journeyForm.instance_name),
@@ -1074,47 +1192,117 @@ export function AutomationMessageModal({
                     instances={instances}
                   />
 
-                  <div className="rounded-[24px] border bg-card/70 p-5">
-                    <div className="grid gap-4 lg:grid-cols-3">
-                      <div className="flex items-center justify-between rounded-2xl border bg-background/60 px-4 py-3">
-                        <p className="font-medium">Automacao ativa</p>
-                        <Switch
-                          checked={journeyForm.is_active}
-                          onCheckedChange={(checked) => handleJourneyFieldChange("is_active", checked)}
-                        />
+                  <div className="max-w-md divide-y divide-border/70">
+                    <div className="flex min-h-14 items-center justify-between gap-4 py-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">Automacao ativa</p>
                       </div>
+                      <Switch
+                        checked={journeyForm.is_active}
+                        onCheckedChange={(checked) => handleJourneyFieldChange("is_active", checked)}
+                      />
+                    </div>
 
-                      <div className="flex items-center justify-between rounded-2xl border bg-background/60 px-4 py-3">
-                        <p className="font-medium">Envio humanizado</p>
-                        <Switch
-                          checked={journeyForm.humanized_dispatch_enabled}
-                          onCheckedChange={(checked) =>
-                            handleJourneyFieldChange("humanized_dispatch_enabled", checked)
-                          }
-                        />
+                    <div className="flex min-h-14 items-center justify-between gap-4 py-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">Envio humanizado</p>
                       </div>
+                      <Switch
+                        checked={journeyForm.humanized_dispatch_enabled}
+                        onCheckedChange={(checked) => handleJourneyFieldChange("humanized_dispatch_enabled", checked)}
+                      />
+                    </div>
 
-                      <div className="rounded-2xl border bg-background/60 px-4 py-3">
-                        <Label htmlFor="dispatch-limit" className="font-medium">
+                    {journeyForm.humanized_dispatch_enabled ? (
+                      <div className="flex flex-col gap-3 py-4">
+                        <Label htmlFor="dispatch-limit" className="text-sm font-medium">
                           Disparos por hora
                         </Label>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {DISPATCH_LIMIT_PRESETS.map((preset) => {
+                            const selected = journeyForm.dispatch_limit_per_hour === preset;
+
+                            return (
+                              <button
+                                key={preset}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => handleJourneyFieldChange("dispatch_limit_per_hour", preset)}
+                                className={cn(
+                                  "h-8 rounded-md border px-3 text-sm font-medium transition-colors",
+                                  selected
+                                    ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-foreground"
+                                    : "border-border/70 text-muted-foreground hover:border-foreground/25 hover:text-foreground",
+                                )}
+                              >
+                                {preset}
+                              </button>
+                            );
+                          })}
+
+                          <Input
+                            id="dispatch-limit"
+                            type="number"
+                            min={1}
+                            max={MAX_HUMANIZED_DISPATCH_LIMIT_PER_HOUR}
+                            step={1}
+                            className="h-8 w-24 text-sm"
+                            value={journeyForm.dispatch_limit_per_hour}
+                            onChange={(event) =>
+                              handleJourneyFieldChange(
+                                "dispatch_limit_per_hour",
+                                event.target.value === "" ? 0 : Number(event.target.value),
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {journeyForm.humanized_dispatch_enabled ? (
+                      <div className="flex min-h-14 items-center justify-between gap-4 py-3">
+                        <Label htmlFor="dispatch-window-start" className="text-sm font-medium">
+                          Inicio do disparo
+                        </Label>
                         <Input
-                          id="dispatch-limit"
-                          type="number"
-                          min={1}
-                          step={1}
-                          className="mt-3"
-                          value={journeyForm.dispatch_limit_per_hour}
+                          id="dispatch-window-start"
+                          type="time"
+                          step={60}
+                          className="h-9 w-32"
+                          value={journeyForm.humanized_dispatch_window_start}
                           onChange={(event) =>
-                            handleJourneyFieldChange(
-                              "dispatch_limit_per_hour",
-                              Math.max(0, Math.trunc(Number(event.target.value || 0)))
-                            )
+                            handleJourneyFieldChange("humanized_dispatch_window_start", event.target.value)
                           }
                         />
                       </div>
-                    </div>
+                    ) : null}
+
+                    {journeyForm.humanized_dispatch_enabled ? (
+                      <div className="flex min-h-14 items-center justify-between gap-4 py-3">
+                        <Label htmlFor="dispatch-window-end" className="text-sm font-medium">
+                          Horario limite
+                        </Label>
+                        <Input
+                          id="dispatch-window-end"
+                          type="time"
+                          step={60}
+                          className="h-9 w-32"
+                          value={journeyForm.humanized_dispatch_window_end}
+                          onChange={(event) =>
+                            handleJourneyFieldChange("humanized_dispatch_window_end", event.target.value)
+                          }
+                        />
+                      </div>
+                    ) : null}
                   </div>
+
+                  {journeyForm.humanized_dispatch_enabled && humanizedDispatchQuality.warnings.length > 0 ? (
+                    <div className="max-w-md space-y-1 pt-1 text-xs text-amber-300/90">
+                      {humanizedDispatchQuality.warnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
                 </TabsContent>
 
                 <TabsContent value="messages" className="space-y-6">

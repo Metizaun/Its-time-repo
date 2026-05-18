@@ -221,6 +221,13 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       serviceClient,
+      "automation_funnels",
+      ["id", "humanized_dispatch_window_start", "humanized_dispatch_window_end"],
+      "crm.automation_funnels (janela de disparo humanizado)",
+      "supabase/migrations/20260517120000_add_humanized_dispatch_window.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "automation_executions",
       ["id", "dispatch_meta"],
       "crm.automation_executions.dispatch_meta",

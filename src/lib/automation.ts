@@ -54,6 +54,8 @@ export interface AutomationJourney {
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
   dispatch_limit_per_hour: number;
+  humanized_dispatch_window_start: string;
+  humanized_dispatch_window_end: string;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
