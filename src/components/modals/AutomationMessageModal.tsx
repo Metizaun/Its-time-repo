@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Clock3, Plus, Save, Sparkles, Trash2, Workflow } from "lucide-react";
+import { Clock3, Plus, Save, Trash2, Workflow } from "lucide-react";
 import { toast } from "sonner";
 
 import { AutomationConditionComposer } from "@/components/automation/AutomationConditionComposer";
@@ -32,10 +32,8 @@ import { useAutomationMessageFlow } from "@/hooks/useAutomationMessageFlow";
 import type { Instance } from "@/hooks/useInstances";
 import type { Lead } from "@/hooks/useLeads";
 import {
-  AUTOMATION_RECIPES,
   createDefaultEntryRule,
   createDefaultExitRule,
-  createJourneyEntryRuleFromRecipe,
   createRuleGroup,
   formatTimingSummary,
   getAutomationRecipeById,
@@ -320,51 +318,6 @@ function buildStepPayload(
     is_active: stepForm.is_active,
     step_rule: stepForm.step_rule_enabled ? normalizeRuleNode(stepForm.step_rule, createRuleGroup("all", [])) : null,
   };
-}
-
-function RecipePicker({
-  onSelect,
-}: {
-  onSelect: (recipeId: AutomationRecipeId) => void;
-}) {
-  return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <h3 className="text-lg font-semibold">Escolha como a automacao vai comecar</h3>
-        <p className="text-sm text-muted-foreground">
-          Comece por um modelo pronto e ajuste so o que fizer sentido para o seu processo.
-        </p>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        {AUTOMATION_RECIPES.map((recipe) => (
-          <button
-            key={recipe.id}
-            type="button"
-            onClick={() => onSelect(recipe.id)}
-            className="rounded-[24px] border bg-card/80 p-5 text-left transition-all hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md"
-          >
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-[var(--color-accent)]" />
-              <span className="text-sm font-semibold">{recipe.title}</span>
-            </div>
-
-            <p className="mt-3 text-sm text-muted-foreground">{recipe.description}</p>
-
-            <div className="mt-4 rounded-2xl border bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-              Primeira mensagem: {
-                (() => {
-                  const t = minutesToTimeUnit(recipe.suggested_step.delay_minutes);
-                  const labels: Record<string, string> = { minute: "min", hour: "hora", day: "dia" };
-                  return `${t.value} ${labels[t.unit] ?? t.unit}${t.value > 1 && t.unit !== "minute" ? "s" : ""} apos entrar na etapa`;
-                })()
-              }
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function AutomationMessageStepCard({
@@ -722,15 +675,13 @@ export function AutomationMessageModal({
 
   const orderedSteps = useMemo(() => sortStepsForDisplay(steps), [steps]);
   const atendimentoStageId = useMemo(() => findAtendimentoStageId(stages), [stages]);
-  const selectedRecipe = selectedRecipeId ? getAutomationRecipeById(selectedRecipeId) : null;
   const currentStepDelayMinutes = stepForm.timing_mode === "now"
     ? 0
     : timeUnitToMinutes(Math.max(1, Number(stepForm.delay_value || 1)), stepForm.delay_unit);
-  const canShowEditor = !!journey || !!selectedRecipeId;
   const { flow: messageFlow, loading: messageFlowLoading } = useAutomationMessageFlow(
     journeyForm.id,
     orderedSteps,
-    open && canShowEditor,
+    open,
   );
   const editingStep = useMemo(
     () => orderedSteps.find((step) => step.id === stepForm.id) ?? null,
@@ -779,23 +730,6 @@ export function AutomationMessageModal({
       setSelectedPreviewLeadId(previewLeads[0].id);
     }
   }, [previewLeads, selectedPreviewLeadId]);
-
-  const applyRecipe = (recipeId: AutomationRecipeId) => {
-    const recipe = getAutomationRecipeById(recipeId);
-
-    setSelectedRecipeId(recipeId);
-    setJourneyForm((previous) => ({
-      ...previous,
-      name: previous.name.trim() ? previous.name : recipe.title,
-      entry_rule: createJourneyEntryRuleFromRecipe(recipeId, previous.trigger_stage_id, previous.instance_name),
-      exit_rule: createDefaultExitRule(),
-      anchor_event: recipe.anchor_event,
-      reentry_mode: recipe.reentry_mode,
-      builder_version: 2,
-    }));
-    setStepForm(createInitialStepForm(recipeId));
-    setActiveTab("entry");
-  };
 
   const handleJourneyFieldChange = <K extends keyof JourneyFormState>(field: K, value: JourneyFormState[K]) => {
     setJourneyForm((previous) => {
@@ -1050,31 +984,23 @@ export function AutomationMessageModal({
               </p>
             </div>
 
-            {canShowEditor ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {!journeyForm.id && selectedRecipe ? (
-                  <Badge variant="outline">{selectedRecipe.title}</Badge>
-                ) : null}
-                <Button onClick={handleSaveJourney} disabled={savingJourney}>
-                  <Save className="h-4 w-4" />
-                  {savingJourney ? "Salvando..." : journeyForm.id ? "Salvar automacao" : "Criar automacao"}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={handleSaveJourney} disabled={savingJourney}>
+                <Save className="h-4 w-4" />
+                {savingJourney ? "Salvando..." : journeyForm.id ? "Salvar automacao" : "Criar automacao"}
+              </Button>
+              {journeyForm.id ? (
+                <Button variant="outline" onClick={handleDeleteJourney}>
+                  <Trash2 className="h-4 w-4" />
+                  Remover
                 </Button>
-                {journeyForm.id ? (
-                  <Button variant="outline" onClick={handleDeleteJourney}>
-                    <Trash2 className="h-4 w-4" />
-                    Remover
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          {!canShowEditor ? (
-            <RecipePicker onSelect={applyRecipe} />
-          ) : (
-            <div className="space-y-6">
+          <div className="space-y-6">
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
                 <div className="space-y-2">
                   <Label htmlFor="journey-name">Nome da automacao</Label>
@@ -1143,17 +1069,6 @@ export function AutomationMessageModal({
                   </Select>
                 </div>
               </div>
-
-              {!journeyForm.id && selectedRecipe ? (
-                <div className="flex flex-wrap items-center gap-2 rounded-2xl border bg-card/70 px-4 py-3">
-                  <Badge variant="outline">{selectedRecipe.title}</Badge>
-                  <span className="text-sm text-muted-foreground">{selectedRecipe.description}</span>
-                  <Button variant="ghost" size="sm" onClick={() => setSelectedRecipeId(null)}>
-                    <ArrowLeft className="h-4 w-4" />
-                    Trocar modelo
-                  </Button>
-                </div>
-              ) : null}
 
               {!atendimentoStageId ? (
                 <Alert>
@@ -1491,8 +1406,7 @@ export function AutomationMessageModal({
                   </TabsContent>
                 ) : null}
               </Tabs>
-            </div>
-          )}
+          </div>
         </div>
 
         <DialogFooter className="border-t px-6 py-4">

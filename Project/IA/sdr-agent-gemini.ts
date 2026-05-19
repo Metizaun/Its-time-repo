@@ -335,8 +335,20 @@ function asBoolean(value: unknown): boolean | null {
 }
 
 function decodeBase64Payload(value: string) {
-  const normalized = value.includes(",") ? value.split(",").pop() ?? value : value;
+  const normalized = (value.includes(",") ? value.split(",").pop() ?? value : value).replace(/\s/g, "");
   return Buffer.from(normalized, "base64");
+}
+
+function isProbablyTextPayload(buffer: Buffer) {
+  const sample = buffer.subarray(0, 64).toString("utf8").trim().toLowerCase();
+  return (
+    sample.startsWith("{") ||
+    sample.startsWith("[") ||
+    sample.startsWith("<!doctype") ||
+    sample.startsWith("<html") ||
+    sample.includes('"error"') ||
+    sample.includes('"status"')
+  );
 }
 
 function normalizePhone(phone: string): string {
@@ -2573,29 +2585,17 @@ export class AgentManager {
   }
 
   private async buildMediaPart(message: ParsedWebhookMessage) {
-    if (message.mediaBase64 && message.mediaMimeType) {
-      return {
-        inlineData: {
-          mimeType: message.mediaMimeType,
-          data: message.mediaBase64,
-        },
-      };
+    const media = await this.resolveMediaBytes(message);
+    if (!media) {
+      return null;
     }
 
-    if (message.mediaUrl && message.mediaMimeType) {
-      const response = await axios.get<ArrayBuffer>(message.mediaUrl, {
-        responseType: "arraybuffer",
-      });
-
-      return {
-        inlineData: {
-          mimeType: message.mediaMimeType,
-          data: Buffer.from(response.data).toString("base64"),
-        },
-      };
-    }
-
-    return null;
+    return {
+      inlineData: {
+        mimeType: media.mimeType,
+        data: media.buffer.toString("base64"),
+      },
+    };
   }
 
   private async resolveMediaBytes(message: ParsedWebhookMessage) {
@@ -2604,24 +2604,165 @@ export class AgentManager {
       (message.mediaKind === "audio" ? "audio/ogg" : message.mediaKind === "image" ? "image/jpeg" : "application/octet-stream");
 
     if (message.mediaBase64) {
-      return {
-        mimeType,
-        buffer: decodeBase64Payload(message.mediaBase64),
-      };
+      const buffer = decodeBase64Payload(message.mediaBase64);
+      if (buffer.length === 0 || isProbablyTextPayload(buffer)) {
+        console.warn("[crm-ai] Base64 de midia invalido ou nao binario; tentando outras fontes");
+      } else {
+        return {
+          mimeType,
+          buffer,
+        };
+      }
     }
 
     if (message.mediaUrl) {
-      const response = await axios.get<ArrayBuffer>(message.mediaUrl, {
-        responseType: "arraybuffer",
-      });
+      const downloaded = await this.tryDownloadMediaUrl(message.mediaUrl, mimeType);
+      if (downloaded) {
+        return downloaded;
+      }
+    }
 
-      return {
-        mimeType,
-        buffer: Buffer.from(response.data),
-      };
+    const evolutionMedia = await this.fetchMediaFromEvolution(message, mimeType);
+    if (evolutionMedia) {
+      return evolutionMedia;
     }
 
     return null;
+  }
+
+  private async tryDownloadMediaUrl(mediaUrl: string, mimeType: string) {
+    const attempts: Array<{ headers?: Record<string, string> }> = [{}];
+    if (this.isEvolutionApiUrl(mediaUrl)) {
+      attempts.push({ headers: this.evolutionHeaders() });
+    }
+
+    for (const attempt of attempts) {
+      try {
+        const response = await axios.get<ArrayBuffer>(mediaUrl, {
+          responseType: "arraybuffer",
+          headers: attempt.headers,
+          timeout: 15000,
+          validateStatus: (status) => status >= 200 && status < 300,
+        });
+        const buffer = Buffer.from(response.data);
+        const responseMimeType = asString(response.headers["content-type"])?.split(";")[0] || mimeType;
+
+        if (buffer.length === 0 || isProbablyTextPayload(buffer)) {
+          console.warn("[crm-ai] Download de midia retornou conteudo invalido", {
+            mediaUrl,
+            contentType: response.headers["content-type"],
+            bytes: buffer.length,
+          });
+          continue;
+        }
+
+        return {
+          mimeType: responseMimeType,
+          buffer,
+        };
+      } catch (error: any) {
+        console.warn("[crm-ai] Falha ao baixar midia por URL", {
+          mediaUrl,
+          status: error?.response?.status,
+          message: error?.message,
+        });
+      }
+    }
+
+    return null;
+  }
+
+  private async fetchMediaFromEvolution(message: ParsedWebhookMessage, mimeType: string) {
+    if (!message.messageId) {
+      return null;
+    }
+
+    const key = asRecord(asRecord(asRecord(message.raw).data).key);
+    const requestMessage = {
+      key: {
+        id: message.messageId,
+        remoteJid: asString(key.remoteJid) ?? message.conversationId ?? undefined,
+        fromMe: typeof key.fromMe === "boolean" ? key.fromMe : message.fromMe,
+      },
+    };
+
+    try {
+      const { data } = await axios.post(
+        `${this.config.evolutionApiUrl}/chat/getBase64FromMediaMessage/${encodeURIComponent(message.instanceName)}`,
+        {
+          message: requestMessage,
+          convertToMp4: false,
+        },
+        {
+          headers: this.evolutionHeaders(),
+          timeout: 20000,
+        }
+      );
+
+      const base64 = this.extractBase64FromEvolutionResponse(data);
+      if (!base64) {
+        console.warn("[crm-ai] Evolution nao retornou base64 para a midia", { messageId: message.messageId });
+        return null;
+      }
+
+      const buffer = decodeBase64Payload(base64);
+      if (buffer.length === 0 || isProbablyTextPayload(buffer)) {
+        console.warn("[crm-ai] Base64 retornado pela Evolution nao parece midia binaria", {
+          messageId: message.messageId,
+          bytes: buffer.length,
+        });
+        return null;
+      }
+
+      return {
+        mimeType,
+        buffer,
+      };
+    } catch (error: any) {
+      console.warn("[crm-ai] Falha ao buscar midia na Evolution", {
+        messageId: message.messageId,
+        status: error?.response?.status,
+        data: error?.response?.data,
+        message: error?.message,
+      });
+    }
+
+    return null;
+  }
+
+  private extractBase64FromEvolutionResponse(payload: unknown): string | null {
+    if (typeof payload === "string") {
+      return payload.trim().length > 0 ? payload : null;
+    }
+
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+
+    const record = payload as Record<string, unknown>;
+    for (const key of ["base64", "media", "file", "data"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+      }
+    }
+
+    for (const value of Object.values(record)) {
+      const nested = this.extractBase64FromEvolutionResponse(value);
+      if (nested) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
+  private isEvolutionApiUrl(value: string) {
+    try {
+      return new URL(value).origin === new URL(this.config.evolutionApiUrl).origin;
+    } catch {
+      return false;
+    }
   }
 
   private getFileExtensionFromMimeType(mimeType: string, fallback: string) {

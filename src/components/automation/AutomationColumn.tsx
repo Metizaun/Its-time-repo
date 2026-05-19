@@ -24,7 +24,7 @@ export function AutomationColumn({
   onEdit,
 }: AutomationColumnProps) {
   return (
-    <div className="w-[340px] min-w-[340px] rounded-[28px] border bg-card/80 p-4 shadow-sm backdrop-blur">
+    <div className="w-[340px] min-w-[340px] whitespace-normal rounded-[24px] border bg-card/70 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -44,7 +44,7 @@ export function AutomationColumn({
         </Button>
       </div>
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 flex min-w-0 flex-col gap-3">
         {journeys.length === 0 ? (
           <div className="rounded-2xl border border-dashed px-4 py-6 text-sm text-muted-foreground">
             Nenhuma automacao nesta etapa ainda.

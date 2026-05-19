@@ -37,8 +37,8 @@ export function AutomationBoard({
   }, {});
 
   return (
-    <div className="rounded-[32px] border bg-gradient-to-br from-background via-background to-muted/30 p-4 shadow-sm">
-      <ScrollArea className="w-full whitespace-nowrap">
+    <div className="rounded-[28px] border bg-background p-4 shadow-sm">
+      <ScrollArea className="w-full">
         <div className="flex w-max gap-4 pb-4">
           {stages.map((stage) => (
             <AutomationColumn
