@@ -32,3 +32,4 @@ coverage
 .DS_Store
 DEPLOY_ENV_VPS.local.md
 .vercel
+Meta-API/
