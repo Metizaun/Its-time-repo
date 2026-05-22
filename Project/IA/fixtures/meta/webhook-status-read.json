@@ -1,0 +1,28 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "mock_waba_id",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "5511999999999",
+              "phone_number_id": "mock_phone_number_id"
+            },
+            "statuses": [
+              {
+                "id": "mock_wamid_status",
+                "status": "read",
+                "timestamp": "1714500003",
+                "recipient_id": "5511988887777"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

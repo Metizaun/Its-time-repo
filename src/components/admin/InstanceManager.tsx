@@ -4,6 +4,7 @@ import {
   Check,
   Link2,
   Loader2,
+  MessageCircle,
   Pencil,
   Plus,
   QrCode,
@@ -23,11 +24,18 @@ import {
   disconnectInstance,
   fetchInstanceStatus,
   listAdminInstances,
+  listMetaChannels,
+  listMetaTemplates,
   reconnectInstanceWithQr,
   refreshInstanceQrCode,
   syncInstanceStatus,
+  syncMetaTemplates,
+  upsertMetaChannel,
   type AdminInstance,
   type AdminInstanceSetupStatus,
+  type AdminMetaChannelSummary,
+  type AdminMetaTemplate,
+  type MetaChannelStatus,
 } from "@/services/instanceService";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,8 +106,11 @@ function statusBadge(status: AdminInstance["status"]) {
 
 export function InstanceManager() {
   const [instances, setInstances] = useState<AdminInstance[]>([]);
+  const [metaChannels, setMetaChannels] = useState<Record<string, AdminMetaChannelSummary>>({});
+  const [metaTemplates, setMetaTemplates] = useState<Record<string, AdminMetaTemplate[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [metaError, setMetaError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -113,6 +124,19 @@ export function InstanceManager() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [currentSetupStatus, setCurrentSetupStatus] = useState<AdminInstanceSetupStatus | null>(null);
+  const [metaDialogOpen, setMetaDialogOpen] = useState(false);
+  const [metaSaving, setMetaSaving] = useState(false);
+  const [metaInstanceName, setMetaInstanceName] = useState("");
+  const [metaForm, setMetaForm] = useState({
+    wabaId: "",
+    phoneNumberId: "",
+    businessId: "",
+    displayPhoneNumber: "",
+    accessTokenSecretRef: "",
+    appSecretRef: "",
+    webhookVerifyToken: "",
+    status: "draft" as MetaChannelStatus,
+  });
 
   const stateBadge = useMemo(() => {
     switch (connectionState) {
@@ -147,9 +171,19 @@ export function InstanceManager() {
     try {
       setLoading(true);
       setError(null);
+      setMetaError(null);
       const accessToken = await getAccessToken();
       const result = await listAdminInstances({ accessToken });
       setInstances(result.instances ?? []);
+      try {
+        const metaResult = await listMetaChannels({ accessToken });
+        setMetaChannels(
+          Object.fromEntries((metaResult.channels ?? []).map((item) => [item.instanceName, item]))
+        );
+      } catch (metaErr: any) {
+        setMetaChannels({});
+        setMetaError(metaErr?.message ?? "Nao foi possivel carregar canais Meta");
+      }
     } catch (err: any) {
       setError(err?.message ?? "Nao foi possivel carregar as instancias");
       setInstances([]);
@@ -182,6 +216,77 @@ export function InstanceManager() {
       });
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const openMetaDialog = async (instanceName: string) => {
+    const summary = metaChannels[instanceName];
+    const channel = summary?.channel;
+    setMetaInstanceName(instanceName);
+    setMetaForm({
+      wabaId: channel?.wabaId ?? "",
+      phoneNumberId: channel?.phoneNumberId ?? "",
+      businessId: channel?.businessId ?? "",
+      displayPhoneNumber: channel?.displayPhoneNumber ?? "",
+      accessTokenSecretRef: channel?.accessTokenSecretRef ?? "",
+      appSecretRef: channel?.appSecretRef ?? "",
+      webhookVerifyToken: channel?.webhookVerifyToken ?? "",
+      status: channel?.status ?? "draft",
+    });
+    setMetaDialogOpen(true);
+
+    try {
+      const accessToken = await getAccessToken();
+      const result = await listMetaTemplates({ accessToken, instanceName });
+      setMetaTemplates((current) => ({
+        ...current,
+        [instanceName]: result.templates ?? [],
+      }));
+    } catch {
+      setMetaTemplates((current) => ({ ...current, [instanceName]: [] }));
+    }
+  };
+
+  const handleSaveMetaChannel = async () => {
+    if (!metaInstanceName) return;
+
+    try {
+      setMetaSaving(true);
+      const accessToken = await getAccessToken();
+      await upsertMetaChannel({
+        accessToken,
+        instanceName: metaInstanceName,
+        ...metaForm,
+      });
+
+      toast.success("Canal Meta salvo");
+      await loadInstances();
+      setMetaDialogOpen(false);
+    } catch (err: any) {
+      toast.error("Falha ao salvar canal Meta", { description: err?.message });
+    } finally {
+      setMetaSaving(false);
+    }
+  };
+
+  const handleSyncMetaTemplates = async (instanceName: string) => {
+    try {
+      setBusyAction(`meta-sync:${instanceName}`);
+      const accessToken = await getAccessToken();
+      const syncResult = await syncMetaTemplates({ accessToken, instanceName });
+      const templatesResult = await listMetaTemplates({ accessToken, instanceName });
+
+      setMetaTemplates((current) => ({
+        ...current,
+        [instanceName]: templatesResult.templates ?? [],
+      }));
+
+      await loadInstances();
+      toast.success(`Templates sincronizados: ${syncResult.synced}`);
+    } catch (err: any) {
+      toast.error("Falha ao sincronizar templates Meta", { description: err?.message });
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -451,6 +556,13 @@ export function InstanceManager() {
           </div>
         )}
 
+        {metaError && (
+          <div className="mb-4 p-3 bg-muted text-muted-foreground text-sm rounded-md flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            {metaError}
+          </div>
+        )}
+
         {instances.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground bg-muted/30 rounded-lg border border-dashed flex flex-col items-center gap-2">
             <span>Nenhuma instancia ativa encontrada para sua conta.</span>
@@ -465,6 +577,9 @@ export function InstanceManager() {
             {instances.map((instance) => {
               const actions = new Set(instance.actions);
               const isBusy = Boolean(busyAction);
+              const metaSummary = metaChannels[instance.instanceName];
+              const metaChannel = metaSummary?.channel ?? null;
+              const templates = metaTemplates[instance.instanceName] ?? [];
 
               return (
                 <div
@@ -477,6 +592,13 @@ export function InstanceManager() {
                       <div className="flex flex-wrap items-center gap-2">
                         {statusBadge(instance.status)}
                         {setupStatusBadge(instance.setupStatus)}
+                        {metaChannel ? (
+                          <Badge variant={metaChannel.status === "active" ? "secondary" : "outline"}>
+                            Meta {metaChannel.status}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline">Meta nao configurada</Badge>
+                        )}
                       </div>
                       {instance.expiresAt && instance.setupStatus === "pending_qr" && (
                         <span className="text-xs text-muted-foreground">
@@ -579,6 +701,32 @@ export function InstanceManager() {
                       Atualizar status
                     </Button>
 
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={isBusy}
+                      onClick={() => openMetaDialog(instance.instanceName)}
+                    >
+                      <MessageCircle className="h-3.5 w-3.5 mr-1.5" />
+                      Meta
+                    </Button>
+
+                    {metaChannel && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => handleSyncMetaTemplates(instance.instanceName)}
+                      >
+                        {busyAction === `meta-sync:${instance.instanceName}` ? (
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                        )}
+                        Templates{templates.length ? ` (${templates.length})` : ""}
+                      </Button>
+                    )}
+
                     {actions.has("disconnect") && (
                       <Button
                         size="sm"
@@ -615,6 +763,147 @@ export function InstanceManager() {
           </div>
         )}
       </Card>
+
+      <Dialog open={metaDialogOpen} onOpenChange={setMetaDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageCircle className="h-5 w-5" />
+              Canal Meta
+            </DialogTitle>
+            <DialogDescription>
+              {metaInstanceName || "Instancia"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="meta-waba-id">WABA ID</Label>
+              <Input
+                id="meta-waba-id"
+                value={metaForm.wabaId}
+                onChange={(event) => setMetaForm((current) => ({ ...current, wabaId: event.target.value }))}
+                placeholder="mock_waba_id"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-phone-number-id">Phone number ID</Label>
+              <Input
+                id="meta-phone-number-id"
+                value={metaForm.phoneNumberId}
+                onChange={(event) => setMetaForm((current) => ({ ...current, phoneNumberId: event.target.value }))}
+                placeholder="mock_phone_number_id"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-business-id">Business ID</Label>
+              <Input
+                id="meta-business-id"
+                value={metaForm.businessId}
+                onChange={(event) => setMetaForm((current) => ({ ...current, businessId: event.target.value }))}
+                placeholder="mock_business_id"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-display-phone">Telefone exibido</Label>
+              <Input
+                id="meta-display-phone"
+                value={metaForm.displayPhoneNumber}
+                onChange={(event) => setMetaForm((current) => ({ ...current, displayPhoneNumber: event.target.value }))}
+                placeholder="+55 11 99999-9999"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-token-ref">Token secret ref</Label>
+              <Input
+                id="meta-token-ref"
+                value={metaForm.accessTokenSecretRef}
+                onChange={(event) => setMetaForm((current) => ({ ...current, accessTokenSecretRef: event.target.value }))}
+                placeholder="META_ACCESS_TOKEN_MOCK"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-app-secret-ref">App secret ref</Label>
+              <Input
+                id="meta-app-secret-ref"
+                value={metaForm.appSecretRef}
+                onChange={(event) => setMetaForm((current) => ({ ...current, appSecretRef: event.target.value }))}
+                placeholder="META_WEBHOOK_APP_SECRET"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-verify-token">Verify token</Label>
+              <Input
+                id="meta-verify-token"
+                value={metaForm.webhookVerifyToken}
+                onChange={(event) => setMetaForm((current) => ({ ...current, webhookVerifyToken: event.target.value }))}
+                placeholder="local-dev-verify-token"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="meta-status">Status</Label>
+              <select
+                id="meta-status"
+                value={metaForm.status}
+                onChange={(event) =>
+                  setMetaForm((current) => ({
+                    ...current,
+                    status: event.target.value as MetaChannelStatus,
+                  }))
+                }
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="draft">draft</option>
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+                <option value="error">error</option>
+              </select>
+            </div>
+          </div>
+
+          {metaInstanceName && metaTemplates[metaInstanceName]?.length > 0 && (
+            <div className="rounded-md border p-3">
+              <div className="mb-2 text-sm font-medium">Templates</div>
+              <div className="flex flex-wrap gap-2">
+                {metaTemplates[metaInstanceName].map((template) => (
+                  <Badge key={template.id} variant="outline">
+                    {template.name} · {template.language} · {template.status}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setMetaDialogOpen(false)} disabled={metaSaving}>
+              Cancelar
+            </Button>
+            {metaInstanceName && metaChannels[metaInstanceName]?.channel && (
+              <Button
+                variant="outline"
+                disabled={metaSaving || Boolean(busyAction)}
+                onClick={() => handleSyncMetaTemplates(metaInstanceName)}
+              >
+                {busyAction === `meta-sync:${metaInstanceName}` ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : null}
+                Sincronizar templates
+              </Button>
+            )}
+            <Button onClick={handleSaveMetaChannel} disabled={metaSaving}>
+              {metaSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+              Salvar canal
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createDialogOpen} onOpenChange={(open) => (open ? setCreateDialogOpen(true) : resetCreateDialog())}>
         <DialogContent className="max-w-md">

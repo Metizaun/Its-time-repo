@@ -7,11 +7,15 @@
 
 O CRM já possui `crm.pipeline_stages`, `crm.lead_remarketing`, `crm.follow_up_tasks` e `crm.agendamentos`. Esta feature cria uma tela de gerenciamento de funis de automação onde o usuário monta sequências de disparos de mensagens vinculadas a um status de lead (ex: "Agendado"), com delays configuráveis em minutos/horas/dias.
 
+A mensageria principal da automação passa a ser a API oficial da Meta/WhatsApp. A Evolution API não será removida nesta entrega, mas deve ser tratada como provedor legado/fallback temporário. Toda nova implementação de envio deve nascer preparada para Meta primeiro, preservando Evolution apenas para instâncias antigas ou rollback operacional.
+
 ---
 
 ## Objetivo
 
 Permitir criar funis de mensagens personalizados por status, onde cada funil pode ter múltiplos disparos (ex: Follow-up 1h antes do agendamento, Follow-up 15min antes), com template de mensagem com variáveis dinâmicas.
+
+O envio deve usar Meta como provedor preferencial. Quando a instância estiver configurada como `provider = 'meta'`, a automação deve respeitar as regras da WhatsApp Business Platform: janela de atendimento de 24h, uso de templates aprovados fora da janela, registro do `wamid` retornado pela Meta e atualização de status por webhook. Instâncias `provider = 'evolution'` continuam funcionando somente como compatibilidade.
 
 ---
 
@@ -43,8 +47,19 @@ CREATE TABLE crm.automation_steps (
   -- 'after_status'         → X minutos após o lead entrar no status
   -- 'before_appointment'   → X minutos antes do agendamento (usa agendamentos.data_agendamento)
   -- 'after_appointment'    → X minutos após o agendamento
-  message_template text NOT NULL,            -- Suporta variáveis: {nome}, {telefone}, {data_agendamento}, {cidade}
+  message_template text NOT NULL,            -- Preview/render local: {nome}, {telefone}, {data_agendamento}, {cidade}
   channel text NOT NULL DEFAULT 'whatsapp',  -- 'whatsapp' | 'email' (futuro)
+  whatsapp_provider text NOT NULL DEFAULT 'meta',
+  -- Valores possíveis:
+  -- 'meta'       → provedor principal da automação
+  -- 'evolution'  → legado/fallback temporário
+  meta_send_type text NOT NULL DEFAULT 'template',
+  -- Valores possíveis:
+  -- 'template'   → usa template aprovado da Meta
+  -- 'text'       → texto livre permitido apenas dentro da janela de 24h
+  meta_template_name text,
+  meta_template_language text DEFAULT 'pt_BR',
+  meta_template_params jsonb DEFAULT '[]'::jsonb,
   created_at timestamptz DEFAULT now()
 );
 
@@ -56,6 +71,11 @@ CREATE TABLE crm.automation_executions (
   scheduled_at timestamptz NOT NULL,
   sent_at timestamptz,
   status text NOT NULL DEFAULT 'pending',    -- 'pending' | 'sent' | 'failed' | 'cancelled'
+  provider text NOT NULL DEFAULT 'meta',      -- 'meta' | 'evolution'
+  provider_message_id text,                   -- wamid na Meta
+  provider_status text,
+  provider_error_code text,
+  provider_error_message text,
   aces_id integer NOT NULL,
   created_at timestamptz DEFAULT now(),
   UNIQUE (step_id, lead_id)                  -- Nunca disparar duas vezes o mesmo step para o mesmo lead
@@ -70,6 +90,18 @@ CREATE TABLE crm.automation_executions (
 | `crm.agendamentos` | `data_agendamento` é a referência de tempo para funis do tipo `before_appointment` |
 | `crm.pipeline_stages` | Os status disponíveis no select de trigger vêm daqui (`name` da stage) |
 | `crm.tags` | Filtros opcionais por tag (ver seção de filtros) |
+| `crm.instance` | Define a instância WhatsApp e o provedor preferencial (`meta` ou `evolution`) |
+
+### Regra de mensageria
+
+- Meta é o provedor principal para novas automações.
+- Evolution permanece como legado/fallback temporário e não deve orientar novas abstrações.
+- O envio deve passar por uma interface comum de WhatsApp Provider, escolhendo Meta por padrão quando a instância tiver `provider = 'meta'`.
+- Para Meta, texto livre só pode ser enviado dentro da janela de 24h após o último inbound do contato.
+- Fora da janela de 24h, a automação deve usar template aprovado da Meta.
+- Todo envio Meta deve gravar o `wamid` retornado no campo `provider_message_id`.
+- Status real de entrega/leitura/falha deve vir do webhook Meta, não apenas da resposta HTTP inicial.
+- Templates Meta usam variáveis no formato oficial `{{1}}`, `{{2}}`, `{{3}}`. O campo `message_template` continua servindo como preview/render local amigável.
 
 ---
 
@@ -116,6 +148,7 @@ CREATE TABLE crm.automation_executions (
 Nome do funil:        [Follow-up Agendamento         ]
 Status gatilho:       [Agendado                    ▾ ]  ← vem de pipeline_stages.name
 Instância WhatsApp:   [Scael                       ▾ ]
+Provedor:             [Meta WhatsApp API            ▾ ]  ← padrão para novas automações
 Ativo:                [✓]
 ```
 
@@ -146,6 +179,9 @@ Template da mensagem:
 └──────────────────────────────────────────────────────┘
 
 Canal:                [WhatsApp ▾]
+Tipo Meta:            [Template aprovado ▾]
+Template Meta:        [confirmacao_agendamento ▾]
+Idioma:               [pt_BR ▾]
 ```
 
 ---
@@ -172,7 +208,9 @@ O scheduler roda como um job recorrente (cron ou worker). Sugestão: a cada 5 mi
 async function onLeadStatusChange(leadId: string, newStatus: string, acesId: number) {
   const funnels = await db.query(`
     SELECT af.id, as2.id as step_id, as2.delay_minutes, as2.delay_reference,
-           as2.message_template, as2.label
+           as2.message_template, as2.label, as2.whatsapp_provider,
+           as2.meta_send_type, as2.meta_template_name, as2.meta_template_language,
+           as2.meta_template_params
     FROM crm.automation_funnels af
     JOIN crm.automation_steps as2 ON as2.funnel_id = af.id
     WHERE af.trigger_status = $1
@@ -198,10 +236,10 @@ async function onLeadStatusChange(leadId: string, newStatus: string, acesId: num
 
     // Inserir execução (upsert: ignora se já existir para esse step+lead)
     await db.query(`
-      INSERT INTO crm.automation_executions (step_id, lead_id, scheduled_at, aces_id)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO crm.automation_executions (step_id, lead_id, scheduled_at, aces_id, provider)
+      VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT (step_id, lead_id) DO NOTHING
-    `, [step.step_id, leadId, scheduledAt, acesId])
+    `, [step.step_id, leadId, scheduledAt, acesId, step.whatsapp_provider ?? 'meta'])
   }
 }
 ```
@@ -213,12 +251,16 @@ async function onLeadStatusChange(leadId: string, newStatus: string, acesId: num
 async function processScheduledMessages() {
   const pending = await db.query(`
     SELECT ae.*, as2.message_template, as2.channel,
+           as2.whatsapp_provider, as2.meta_send_type,
+           as2.meta_template_name, as2.meta_template_language, as2.meta_template_params,
            l.name, l.contact_phone, l.last_city, l.status,
            l.instancia,
+           i.provider as instance_provider,
            ag.data_agendamento
     FROM crm.automation_executions ae
     JOIN crm.automation_steps as2 ON as2.id = ae.step_id
     JOIN crm.leads l ON l.id = ae.lead_id
+    LEFT JOIN crm.instance i ON i.instancia = l.instancia AND i.aces_id = ae.aces_id
     LEFT JOIN crm.agendamentos ag ON ag.lead_id = ae.lead_id
     WHERE ae.status = 'pending'
       AND ae.scheduled_at <= now()
@@ -235,15 +277,32 @@ async function processScheduledMessages() {
       hora_agendamento: formatTime(exec.data_agendamento),
     })
 
-    // Enviar via Evolution API (instância do lead)
-    await sendWhatsAppMessage(exec.instancia, exec.contact_phone, message)
+    const provider = exec.instance_provider ?? exec.whatsapp_provider ?? 'meta'
 
-    // Marcar como enviado
+    // Enviar via Meta por padrão; Evolution fica apenas como legado/fallback.
+    const result = await whatsappProvider.send({
+      provider,
+      instanceName: exec.instancia,
+      to: exec.contact_phone,
+      text: message,
+      meta: {
+        sendType: exec.meta_send_type,
+        templateName: exec.meta_template_name,
+        languageCode: exec.meta_template_language,
+        parameters: renderMetaTemplateParams(exec.meta_template_params, exec),
+      },
+    })
+
+    // Marcar como aceito pelo provedor. Na Meta, entrega/leitura/falha vêm pelo webhook.
     await db.query(`
       UPDATE crm.automation_executions
-      SET status = 'sent', sent_at = now()
+      SET status = 'sent',
+          sent_at = now(),
+          provider = $2,
+          provider_message_id = $3,
+          provider_status = $4
       WHERE id = $1
-    `, [exec.id])
+    `, [exec.id, result.provider, result.providerMessageId, result.providerStatus])
   }
 }
 ```
@@ -253,6 +312,31 @@ async function processScheduledMessages() {
 ```typescript
 function renderTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`)
+}
+```
+
+### Regra Meta no worker
+
+```typescript
+async function sendAutomationMessage(exec: AutomationExecution) {
+  const provider = exec.instance_provider ?? exec.whatsapp_provider ?? 'meta'
+
+  if (provider === 'meta') {
+    const windowOpen = await isMetaServiceWindowOpen({
+      instanceName: exec.instancia,
+      phone: exec.contact_phone,
+    })
+
+    if (!windowOpen && exec.meta_send_type !== 'template') {
+      throw new Error('Meta exige template aprovado fora da janela de 24h')
+    }
+
+    if (exec.meta_send_type === 'template' && !exec.meta_template_name) {
+      throw new Error('Template Meta obrigatório para automação fora da janela')
+    }
+  }
+
+  return whatsappProvider.send(/* input normalizado */)
 }
 ```
 
@@ -287,15 +371,21 @@ GET    /api/automacao/executions           → histórico de disparos (com filtr
 
 3. **O scheduler (cron) deve ser implementado como um worker separado** ou job agendado, seguindo o padrão já utilizado no projeto (verifique se há `node-cron`, `bullmq`, `pg-boss` ou similar já instalado antes de adicionar nova dependência).
 
-4. **A Evolution API de envio já está integrada no projeto** — use a função/serviço existente de envio de WhatsApp. Não crie uma nova abstração de envio.
+4. **Meta é a mensageria principal da automação**. Crie/use uma interface comum `WhatsAppProvider` para envio, com Meta como provider preferencial e Evolution apenas como provider legado/fallback temporário. Não implemente novos disparos chamando Evolution diretamente.
 
-5. **O campo `trigger_status` do funil deve validar contra `pipeline_stages.name`** — faça a validação no backend antes de inserir.
+5. **A Evolution API já integrada deve ser preservada sem regressão**, mas encapsulada no provider comum quando for necessário manter instâncias antigas. A troca de provider deve ser por instância, nunca global.
 
-6. **Drag-and-drop para reordenar steps**: use `@dnd-kit/core` se já instalado. Se não, verifique o que o projeto usa. Não instale nova biblioteca de DnD sem confirmar.
+6. **Para Meta, o worker deve validar janela de 24h antes do envio**. Texto livre só pode sair dentro da janela. Fora da janela, use template aprovado e configurado no step.
 
-7. **Nunca disparar o mesmo step duas vezes para o mesmo lead**: a constraint `UNIQUE (step_id, lead_id)` em `automation_executions` garante isso em nível de banco.
+7. **Todo envio Meta deve gravar `provider_message_id` com o `wamid` retornado pela Meta**. Status final de entrega/leitura/falha deve ser atualizado pelo webhook Meta.
 
-8. **Se o agendamento não existir** ao tentar agendar um step do tipo `before_appointment`, simplesmente pule (`continue`) sem erro.
+8. **O campo `trigger_status` do funil deve validar contra `pipeline_stages.name`** — faça a validação no backend antes de inserir.
+
+9. **Drag-and-drop para reordenar steps**: use `@dnd-kit/core` se já instalado. Se não, verifique o que o projeto usa. Não instale nova biblioteca de DnD sem confirmar.
+
+10. **Nunca disparar o mesmo step duas vezes para o mesmo lead**: a constraint `UNIQUE (step_id, lead_id)` em `automation_executions` garante isso em nível de banco.
+
+11. **Se o agendamento não existir** ao tentar agendar um step do tipo `before_appointment`, simplesmente pule (`continue`) sem erro.
 
 ---
 
@@ -306,6 +396,12 @@ GET    /api/automacao/executions           → histórico de disparos (com filtr
 - [ ] Criar/editar/deletar steps com delay e referência de tempo configurável
 - [ ] Drag-and-drop para reordenar steps
 - [ ] Template com variáveis `{nome}`, `{data_agendamento}`, `{hora_agendamento}`, `{cidade}` funcionando
+- [ ] Meta configurada como provider principal para novas automações
+- [ ] Evolution preservada apenas como provider legado/fallback por instância
+- [ ] Worker bloqueia texto livre Meta fora da janela de 24h
+- [ ] Steps Meta conseguem usar template aprovado com parâmetros renderizados
+- [ ] Envio Meta grava `wamid` em `provider_message_id`
+- [ ] Webhook Meta atualiza status real de entrega/leitura/falha
 - [ ] Funis com `before_appointment` buscam corretamente `agendamentos.data_agendamento`
 - [ ] Scheduler roda a cada 5 minutos e processa execuções pendentes
 - [ ] Execução duplicada (mesmo step + mesmo lead) é ignorada pelo banco

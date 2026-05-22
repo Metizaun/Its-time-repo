@@ -23,6 +23,45 @@ export type AdminInstance = {
   color: string | null;
 };
 
+export type MetaChannelStatus = "draft" | "active" | "disabled" | "error";
+
+export type AdminMetaChannel = {
+  id: string;
+  instanceName: string;
+  wabaId: string | null;
+  phoneNumberId: string | null;
+  businessId: string | null;
+  displayPhoneNumber: string | null;
+  accessTokenSecretRef: string | null;
+  appSecretRef: string | null;
+  webhookVerifyToken: string | null;
+  status: MetaChannelStatus;
+  lastTemplateSyncAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminMetaChannelSummary = {
+  instanceName: string;
+  provider: "evolution" | "meta";
+  metaChannelId: string | null;
+  channel: AdminMetaChannel | null;
+};
+
+export type AdminMetaTemplate = {
+  id: string;
+  channelId: string;
+  metaTemplateId: string | null;
+  name: string;
+  language: string;
+  category: string;
+  status: string;
+  components: unknown;
+  variables: unknown;
+  rejectionReason: string | null;
+  lastSyncedAt: string;
+};
+
 type BackendResponse<T> = T & {
   error?: string;
 };
@@ -193,5 +232,97 @@ export async function deleteInstance({
     instanceName: string;
     mode: "soft" | "hard";
     warning: string | null;
+  }>(response);
+}
+
+export async function listMetaChannels({ accessToken }: AuthHeadersInput) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/meta/channels`, {
+    method: "GET",
+    headers: buildHeaders(accessToken),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    channels: AdminMetaChannelSummary[];
+  }>(response);
+}
+
+export async function upsertMetaChannel({
+  accessToken,
+  instanceName,
+  wabaId,
+  phoneNumberId,
+  businessId,
+  displayPhoneNumber,
+  accessTokenSecretRef,
+  appSecretRef,
+  webhookVerifyToken,
+  status,
+}: AuthHeadersInput & {
+  instanceName: string;
+  wabaId?: string | null;
+  phoneNumberId?: string | null;
+  businessId?: string | null;
+  displayPhoneNumber?: string | null;
+  accessTokenSecretRef?: string | null;
+  appSecretRef?: string | null;
+  webhookVerifyToken?: string | null;
+  status?: MetaChannelStatus;
+}) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/meta/channels`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({
+      instanceName,
+      wabaId,
+      phoneNumberId,
+      businessId,
+      displayPhoneNumber,
+      accessTokenSecretRef,
+      appSecretRef,
+      webhookVerifyToken,
+      status,
+    }),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    channel: AdminMetaChannel;
+  }>(response);
+}
+
+export async function syncMetaTemplates({
+  accessToken,
+  instanceName,
+}: AuthHeadersInput & { instanceName: string }) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/meta/templates/sync`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({ instanceName }),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    instanceName: string;
+    mode: "mock" | "live";
+    synced: number;
+  }>(response);
+}
+
+export async function listMetaTemplates({
+  accessToken,
+  instanceName,
+}: AuthHeadersInput & { instanceName: string }) {
+  const encodedName = encodeURIComponent(instanceName);
+  const response = await fetch(`${CRM_BACKEND_URL}/api/meta/templates?instanceName=${encodedName}`, {
+    method: "GET",
+    headers: buildHeaders(accessToken),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    instanceName: string;
+    channel: AdminMetaChannel | null;
+    templates: AdminMetaTemplate[];
   }>(response);
 }

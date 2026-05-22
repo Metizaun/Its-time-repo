@@ -178,6 +178,13 @@ export async function assertRuntimeSchemaCompatibility(
   const checks = await Promise.all([
     validateSelectedColumns(
       serviceClient,
+      "instance",
+      ["instancia", "provider", "meta_channel_id"],
+      "crm.instance (Meta provider)",
+      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "ai_agents",
       ["id", "handoff_enabled", "handoff_prompt", "handoff_target_phone"],
       "crm.ai_agents (handoff)",
@@ -232,6 +239,91 @@ export async function assertRuntimeSchemaCompatibility(
       ["id", "dispatch_meta"],
       "crm.automation_executions.dispatch_meta",
       "supabase/migrations/20260420130000_add_humanized_automation_dispatch.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_executions",
+      [
+        "id",
+        "provider",
+        "provider_message_id",
+        "provider_status",
+        "provider_error_code",
+        "provider_error_message",
+        "provider_payload_summary",
+      ],
+      "crm.automation_executions (Meta provider status)",
+      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "message_history",
+      [
+        "id",
+        "provider",
+        "provider_message_id",
+        "provider_status",
+        "provider_error_code",
+        "provider_error_message",
+        "provider_payload_summary",
+      ],
+      "crm.message_history (Meta provider status)",
+      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "whatsapp_meta_channels",
+      [
+        "id",
+        "aces_id",
+        "instance_name",
+        "waba_id",
+        "phone_number_id",
+        "access_token_secret_ref",
+        "app_secret_ref",
+        "webhook_verify_token",
+        "status",
+        "last_template_sync_at",
+      ],
+      "crm.whatsapp_meta_channels",
+      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "whatsapp_meta_templates",
+      [
+        "id",
+        "channel_id",
+        "meta_template_id",
+        "name",
+        "language",
+        "category",
+        "status",
+        "components_json",
+        "variables_json",
+        "rejection_reason",
+        "last_synced_at",
+      ],
+      "crm.whatsapp_meta_templates",
+      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "whatsapp_provider_status_events",
+      [
+        "id",
+        "aces_id",
+        "channel_id",
+        "provider",
+        "provider_message_id",
+        "status",
+        "event_timestamp",
+        "provider_error_code",
+        "provider_error_message",
+        "payload_summary",
+      ],
+      "crm.whatsapp_provider_status_events",
+      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
     ),
     validateSelectedColumns(
       serviceClient,

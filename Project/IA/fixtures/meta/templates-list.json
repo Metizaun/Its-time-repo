@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "id": "mock_template_confirmacao_agendamento",
+      "name": "confirmacao_agendamento",
+      "language": "pt_BR",
+      "category": "UTILITY",
+      "status": "APPROVED",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Ola {{1}}, confirmamos seu agendamento para {{2}}."
+        }
+      ]
+    }
+  ]
+}
