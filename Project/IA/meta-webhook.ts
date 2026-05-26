@@ -21,12 +21,22 @@ type MetaWebhookResult = {
 };
 
 export class MetaWebhookProcessor {
-  private readonly serviceClient: SupabaseClient<any, any, any>;
+  private readonly crmClient: SupabaseClient<any, any, any>;
+  private readonly metaClient: SupabaseClient<any, any, any>;
 
   constructor(private readonly config: MetaWebhookProcessorConfig) {
-    this.serviceClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
-      db: { schema: "crm" },
+    const clientOptions = {
       auth: { persistSession: false, autoRefreshToken: false },
+    };
+
+    this.crmClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "crm" },
+      ...clientOptions,
+    });
+
+    this.metaClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "meta" },
+      ...clientOptions,
     });
   }
 
@@ -93,8 +103,8 @@ export class MetaWebhookProcessor {
   }
 
   private async findChannelByPhoneNumberId(phoneNumberId: string): Promise<MetaChannelContext | null> {
-    const { data, error } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { data, error } = await this.metaClient
+      .from("whatsapp_channels")
       .select("id, aces_id, instance_name")
       .eq("phone_number_id", phoneNumberId)
       .maybeSingle();
@@ -133,7 +143,7 @@ export class MetaWebhookProcessor {
 
     const sentAt = timestampToIso(asString(message.timestamp));
     const content = extractInboundContent(message);
-    const { error } = await this.serviceClient.from("message_history").insert({
+    const { error } = await this.crmClient.from("message_history").insert({
       lead_id: lead.id,
       aces_id: channel.acesId,
       content,
@@ -152,7 +162,7 @@ export class MetaWebhookProcessor {
       throw error;
     }
 
-    await this.serviceClient
+    await this.crmClient
       .from("leads")
       .update({
         last_message_at: sentAt,
@@ -185,7 +195,7 @@ export class MetaWebhookProcessor {
     const errorInfo = extractStatusError(status);
     const payloadSummary = summarizeStatusEvent(status);
 
-    const { error: eventError } = await this.serviceClient
+    const { error: eventError } = await this.metaClient
       .from("whatsapp_provider_status_events")
       .upsert(
         {
@@ -209,7 +219,7 @@ export class MetaWebhookProcessor {
       throw eventError;
     }
 
-    await this.serviceClient
+    await this.crmClient
       .from("message_history")
       .update({
         provider_status: providerStatus,
@@ -220,7 +230,7 @@ export class MetaWebhookProcessor {
       .eq("provider", "meta")
       .eq("provider_message_id", providerMessageId);
 
-    await this.serviceClient
+    await this.crmClient
       .from("automation_executions")
       .update({
         provider_status: providerStatus,
@@ -235,7 +245,7 @@ export class MetaWebhookProcessor {
   }
 
   private async findMessageByProviderId(providerMessageId: string) {
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.crmClient
       .from("message_history")
       .select("id, aces_id")
       .eq("provider", "meta")
@@ -264,7 +274,7 @@ export class MetaWebhookProcessor {
     variants: string[],
     instanceScoped: boolean
   ) {
-    let query = this.serviceClient
+    let query = this.crmClient
       .from("leads")
       .select("id")
       .eq("aces_id", channel.acesId)

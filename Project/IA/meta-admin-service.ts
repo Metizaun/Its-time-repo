@@ -20,6 +20,10 @@ export type UpsertMetaChannelInput = {
 
 type InstanceRow = {
   instancia: string;
+};
+
+type MetaInstanceRow = {
+  instance_name: string;
   provider: "evolution" | "meta";
   meta_channel_id: string | null;
 };
@@ -56,19 +60,29 @@ type MetaTemplateRow = {
 };
 
 export class MetaAdminService {
-  private readonly serviceClient: SupabaseClient<any, any, any>;
+  private readonly crmClient: SupabaseClient<any, any, any>;
+  private readonly metaClient: SupabaseClient<any, any, any>;
 
   constructor(config: MetaAdminServiceConfig) {
-    this.serviceClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
-      db: { schema: "crm" },
+    const clientOptions = {
       auth: { persistSession: false, autoRefreshToken: false },
+    };
+
+    this.crmClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "crm" },
+      ...clientOptions,
+    });
+
+    this.metaClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "meta" },
+      ...clientOptions,
     });
   }
 
   async listChannels(acesId: number) {
-    const { data: instances, error: instanceError } = await this.serviceClient
+    const { data: instances, error: instanceError } = await this.crmClient
       .from("instance")
-      .select("instancia, provider, meta_channel_id")
+      .select("instancia")
       .eq("aces_id", acesId)
       .order("instancia", { ascending: true });
 
@@ -76,8 +90,17 @@ export class MetaAdminService {
       throw instanceError;
     }
 
-    const { data: channels, error: channelError } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { data: metaInstances, error: metaInstanceError } = await this.metaClient
+      .from("instance")
+      .select("instance_name, provider, meta_channel_id")
+      .eq("aces_id", acesId);
+
+    if (metaInstanceError) {
+      throw metaInstanceError;
+    }
+
+    const { data: channels, error: channelError } = await this.metaClient
+      .from("whatsapp_channels")
       .select("*")
       .eq("aces_id", acesId);
 
@@ -85,16 +108,27 @@ export class MetaAdminService {
       throw channelError;
     }
 
+    const metaInstanceByName = new Map(
+      ((metaInstances ?? []) as MetaInstanceRow[]).map((instance) => [
+        instance.instance_name,
+        instance,
+      ])
+    );
     const channelByInstance = new Map(
       ((channels ?? []) as MetaChannelRow[]).map((channel) => [channel.instance_name, channel])
     );
 
-    return ((instances ?? []) as InstanceRow[]).map((instance) => ({
-      instanceName: instance.instancia,
-      provider: instance.provider ?? "evolution",
-      metaChannelId: instance.meta_channel_id,
-      channel: normalizeChannel(channelByInstance.get(instance.instancia) ?? null),
-    }));
+    return ((instances ?? []) as InstanceRow[]).map((instance) => {
+      const metaInstance = metaInstanceByName.get(instance.instancia) ?? null;
+      const channel = channelByInstance.get(instance.instancia) ?? null;
+
+      return {
+        instanceName: instance.instancia,
+        provider: metaInstance?.provider ?? "evolution",
+        metaChannelId: metaInstance?.meta_channel_id ?? channel?.id ?? null,
+        channel: normalizeChannel(channel),
+      };
+    });
   }
 
   async upsertChannel(input: UpsertMetaChannelInput) {
@@ -113,8 +147,8 @@ export class MetaAdminService {
       updated_at: new Date().toISOString(),
     };
 
-    const { data, error } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { data, error } = await this.metaClient
+      .from("whatsapp_channels")
       .upsert(row, { onConflict: "aces_id,instance_name" })
       .select("*")
       .single();
@@ -124,11 +158,18 @@ export class MetaAdminService {
     }
 
     const channel = data as MetaChannelRow;
-    const { error: instanceError } = await this.serviceClient
+    const { error: instanceError } = await this.metaClient
       .from("instance")
-      .update({ meta_channel_id: channel.id })
-      .eq("aces_id", input.acesId)
-      .eq("instancia", instance.instancia);
+      .upsert(
+        {
+          aces_id: input.acesId,
+          instance_name: instance.instancia,
+          provider: channel.status === "active" ? "meta" : "evolution",
+          meta_channel_id: channel.id,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "aces_id,instance_name" }
+      );
 
     if (instanceError) {
       throw instanceError;
@@ -147,8 +188,8 @@ export class MetaAdminService {
       };
     }
 
-    const { data, error } = await this.serviceClient
-      .from("whatsapp_meta_templates")
+    const { data, error } = await this.metaClient
+      .from("whatsapp_templates")
       .select("*")
       .eq("channel_id", channel.id)
       .order("name", { ascending: true });
@@ -165,9 +206,9 @@ export class MetaAdminService {
   }
 
   private async requireInstance(acesId: number, instanceName: string) {
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.crmClient
       .from("instance")
-      .select("instancia, provider, meta_channel_id")
+      .select("instancia")
       .eq("aces_id", acesId)
       .eq("instancia", instanceName)
       .maybeSingle();
@@ -184,8 +225,8 @@ export class MetaAdminService {
   }
 
   private async findChannel(acesId: number, instanceName: string) {
-    const { data, error } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { data, error } = await this.metaClient
+      .from("whatsapp_channels")
       .select("*")
       .eq("aces_id", acesId)
       .eq("instance_name", instanceName)

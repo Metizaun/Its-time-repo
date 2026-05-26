@@ -18,13 +18,13 @@ export type WhatsAppProviderRegistryConfig = {
 };
 
 export class WhatsAppProviderRegistry {
-  private readonly serviceClient: SupabaseClient<any, any, any>;
+  private readonly metaClient: SupabaseClient<any, any, any>;
   private readonly evolutionProvider: EvolutionWhatsAppProvider;
   private readonly metaProvider: MetaWhatsAppProvider;
 
   constructor(config: WhatsAppProviderRegistryConfig) {
-    this.serviceClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
-      db: { schema: "crm" },
+    this.metaClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "meta" },
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
@@ -46,10 +46,10 @@ export class WhatsAppProviderRegistry {
   }
 
   async resolveInstanceProvider(instanceName: string): Promise<WhatsAppProviderName> {
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.metaClient
       .from("instance")
       .select("provider")
-      .eq("instancia", instanceName)
+      .eq("instance_name", instanceName)
       .maybeSingle();
 
     if (error) {
@@ -60,10 +60,11 @@ export class WhatsAppProviderRegistry {
   }
 
   private async resolveMetaChannel(instanceName: string): Promise<MetaChannelConfig | null> {
-    const { data, error } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { data, error } = await this.metaClient
+      .from("whatsapp_channels")
       .select("instance_name, phone_number_id, access_token_secret_ref")
       .eq("instance_name", instanceName)
+      .eq("status", "active")
       .maybeSingle();
 
     if (error) {

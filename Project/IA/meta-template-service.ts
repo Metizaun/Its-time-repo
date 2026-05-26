@@ -44,11 +44,11 @@ const DEFAULT_MOCK_TEMPLATES: MetaTemplatePayload[] = [
 ];
 
 export class MetaTemplateService {
-  private readonly serviceClient: SupabaseClient<any, any, any>;
+  private readonly metaClient: SupabaseClient<any, any, any>;
 
   constructor(private readonly config: MetaTemplateServiceConfig) {
-    this.serviceClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
-      db: { schema: "crm" },
+    this.metaClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "meta" },
       auth: { persistSession: false, autoRefreshToken: false },
     });
   }
@@ -75,8 +75,8 @@ export class MetaTemplateService {
     }));
 
     if (rows.length > 0) {
-      const { error } = await this.serviceClient
-        .from("whatsapp_meta_templates")
+      const { error } = await this.metaClient
+        .from("whatsapp_templates")
         .upsert(rows, { onConflict: "channel_id,name,language" });
 
       if (error) {
@@ -84,8 +84,8 @@ export class MetaTemplateService {
       }
     }
 
-    const { error: channelError } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { error: channelError } = await this.metaClient
+      .from("whatsapp_channels")
       .update({
         last_template_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -104,8 +104,8 @@ export class MetaTemplateService {
   }
 
   private async requireChannel(instanceName: string) {
-    const { data, error } = await this.serviceClient
-      .from("whatsapp_meta_channels")
+    const { data, error } = await this.metaClient
+      .from("whatsapp_channels")
       .select("id, waba_id, access_token_secret_ref")
       .eq("instance_name", instanceName)
       .maybeSingle();

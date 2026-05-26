@@ -175,12 +175,17 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const metaClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "meta" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
     validateSelectedColumns(
-      serviceClient,
+      metaClient,
       "instance",
-      ["instancia", "provider", "meta_channel_id"],
-      "crm.instance (Meta provider)",
+      ["instance_name", "provider", "meta_channel_id"],
+      "meta.instance (provider)",
       "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
     ),
     validateSelectedColumns(
@@ -271,8 +276,8 @@ export async function assertRuntimeSchemaCompatibility(
       "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
     ),
     validateSelectedColumns(
-      serviceClient,
-      "whatsapp_meta_channels",
+      metaClient,
+      "whatsapp_channels",
       [
         "id",
         "aces_id",
@@ -285,12 +290,12 @@ export async function assertRuntimeSchemaCompatibility(
         "status",
         "last_template_sync_at",
       ],
-      "crm.whatsapp_meta_channels",
+      "meta.whatsapp_channels",
       "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
     ),
     validateSelectedColumns(
-      serviceClient,
-      "whatsapp_meta_templates",
+      metaClient,
+      "whatsapp_templates",
       [
         "id",
         "channel_id",
@@ -304,11 +309,11 @@ export async function assertRuntimeSchemaCompatibility(
         "rejection_reason",
         "last_synced_at",
       ],
-      "crm.whatsapp_meta_templates",
+      "meta.whatsapp_templates",
       "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
     ),
     validateSelectedColumns(
-      serviceClient,
+      metaClient,
       "whatsapp_provider_status_events",
       [
         "id",
@@ -322,7 +327,7 @@ export async function assertRuntimeSchemaCompatibility(
         "provider_error_message",
         "payload_summary",
       ],
-      "crm.whatsapp_provider_status_events",
+      "meta.whatsapp_provider_status_events",
       "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
     ),
     validateSelectedColumns(

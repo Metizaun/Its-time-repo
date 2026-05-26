@@ -1,33 +1,33 @@
 -- Meta WhatsApp API foundation.
--- Additive and backward-compatible: existing instances remain on Evolution.
+-- Additive and backward-compatible: existing CRM data remains in schema crm.
+-- Meta-specific configuration lives in schema meta, e.g. meta.instance.provider.
 
-ALTER TABLE crm.instance
-  ADD COLUMN IF NOT EXISTS provider text;
+CREATE SCHEMA IF NOT EXISTS meta;
 
-UPDATE crm.instance
-SET provider = 'evolution'
-WHERE provider IS NULL OR btrim(provider) = '';
+GRANT USAGE ON SCHEMA meta TO anon, authenticated, service_role, authenticator;
 
-ALTER TABLE crm.instance
-  ALTER COLUMN provider SET DEFAULT 'evolution',
-  ALTER COLUMN provider SET NOT NULL;
+CREATE TABLE IF NOT EXISTS meta.instance (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  aces_id integer NOT NULL REFERENCES crm.accounts(id) ON DELETE CASCADE,
+  instance_name text NOT NULL REFERENCES crm.instance(instancia) ON DELETE CASCADE,
+  provider text NOT NULL DEFAULT 'evolution'
+    CHECK (provider IN ('evolution', 'meta')),
+  meta_channel_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT meta_instance_account_instance_unique UNIQUE (aces_id, instance_name)
+);
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'instance_provider_check'
-      AND conrelid = 'crm.instance'::regclass
-  ) THEN
-    ALTER TABLE crm.instance
-      ADD CONSTRAINT instance_provider_check
-      CHECK (provider IN ('evolution', 'meta'));
-  END IF;
-END;
-$$;
+INSERT INTO meta.instance (aces_id, instance_name, provider)
+SELECT i.aces_id, i.instancia, 'evolution'
+FROM crm.instance i
+WHERE i.aces_id IS NOT NULL
+ON CONFLICT (aces_id, instance_name) DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS crm.whatsapp_meta_channels (
+CREATE INDEX IF NOT EXISTS idx_meta_instance_provider
+  ON meta.instance(provider);
+
+CREATE TABLE IF NOT EXISTS meta.whatsapp_channels (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   aces_id integer NOT NULL REFERENCES crm.accounts(id) ON DELETE CASCADE,
   instance_name text NOT NULL REFERENCES crm.instance(instancia) ON DELETE CASCADE,
@@ -43,42 +43,36 @@ CREATE TABLE IF NOT EXISTS crm.whatsapp_meta_channels (
   last_template_sync_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT whatsapp_meta_channels_account_instance_unique UNIQUE (aces_id, instance_name),
-  CONSTRAINT whatsapp_meta_channels_phone_number_unique UNIQUE (phone_number_id)
+  CONSTRAINT meta_whatsapp_channels_account_instance_unique UNIQUE (aces_id, instance_name),
+  CONSTRAINT meta_whatsapp_channels_phone_number_unique UNIQUE (phone_number_id)
 );
-
-ALTER TABLE crm.instance
-  ADD COLUMN IF NOT EXISTS meta_channel_id uuid;
 
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM pg_constraint
-    WHERE conname = 'instance_meta_channel_id_fkey'
-      AND conrelid = 'crm.instance'::regclass
+    WHERE conname = 'meta_instance_meta_channel_id_fkey'
+      AND conrelid = 'meta.instance'::regclass
   ) THEN
-    ALTER TABLE crm.instance
-      ADD CONSTRAINT instance_meta_channel_id_fkey
+    ALTER TABLE meta.instance
+      ADD CONSTRAINT meta_instance_meta_channel_id_fkey
       FOREIGN KEY (meta_channel_id)
-      REFERENCES crm.whatsapp_meta_channels(id)
+      REFERENCES meta.whatsapp_channels(id)
       ON DELETE SET NULL;
   END IF;
 END;
 $$;
 
-CREATE INDEX IF NOT EXISTS idx_instance_provider
-  ON crm.instance(provider);
+CREATE INDEX IF NOT EXISTS idx_meta_whatsapp_channels_aces
+  ON meta.whatsapp_channels(aces_id, status);
 
-CREATE INDEX IF NOT EXISTS idx_whatsapp_meta_channels_aces
-  ON crm.whatsapp_meta_channels(aces_id, status);
+CREATE INDEX IF NOT EXISTS idx_meta_whatsapp_channels_instance
+  ON meta.whatsapp_channels(instance_name);
 
-CREATE INDEX IF NOT EXISTS idx_whatsapp_meta_channels_instance
-  ON crm.whatsapp_meta_channels(instance_name);
-
-CREATE TABLE IF NOT EXISTS crm.whatsapp_meta_templates (
+CREATE TABLE IF NOT EXISTS meta.whatsapp_templates (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  channel_id uuid NOT NULL REFERENCES crm.whatsapp_meta_channels(id) ON DELETE CASCADE,
+  channel_id uuid NOT NULL REFERENCES meta.whatsapp_channels(id) ON DELETE CASCADE,
   meta_template_id text,
   name text NOT NULL,
   language text NOT NULL DEFAULT 'pt_BR',
@@ -90,16 +84,16 @@ CREATE TABLE IF NOT EXISTS crm.whatsapp_meta_templates (
   last_synced_at timestamptz NOT NULL DEFAULT now(),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT whatsapp_meta_templates_channel_name_language_unique UNIQUE (channel_id, name, language)
+  CONSTRAINT meta_whatsapp_templates_channel_name_language_unique UNIQUE (channel_id, name, language)
 );
 
-CREATE INDEX IF NOT EXISTS idx_whatsapp_meta_templates_channel_status
-  ON crm.whatsapp_meta_templates(channel_id, status);
+CREATE INDEX IF NOT EXISTS idx_meta_whatsapp_templates_channel_status
+  ON meta.whatsapp_templates(channel_id, status);
 
-CREATE TABLE IF NOT EXISTS crm.whatsapp_provider_status_events (
+CREATE TABLE IF NOT EXISTS meta.whatsapp_provider_status_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   aces_id integer NOT NULL REFERENCES crm.accounts(id) ON DELETE CASCADE,
-  channel_id uuid REFERENCES crm.whatsapp_meta_channels(id) ON DELETE SET NULL,
+  channel_id uuid REFERENCES meta.whatsapp_channels(id) ON DELETE SET NULL,
   provider text NOT NULL DEFAULT 'meta'
     CHECK (provider IN ('evolution', 'meta')),
   provider_message_id text NOT NULL,
@@ -109,7 +103,7 @@ CREATE TABLE IF NOT EXISTS crm.whatsapp_provider_status_events (
   provider_error_message text,
   payload_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT whatsapp_provider_status_events_unique UNIQUE (
+  CONSTRAINT meta_whatsapp_provider_status_events_unique UNIQUE (
     provider,
     provider_message_id,
     status,
@@ -117,11 +111,11 @@ CREATE TABLE IF NOT EXISTS crm.whatsapp_provider_status_events (
   )
 );
 
-CREATE INDEX IF NOT EXISTS idx_whatsapp_provider_status_events_aces
-  ON crm.whatsapp_provider_status_events(aces_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meta_whatsapp_provider_status_events_aces
+  ON meta.whatsapp_provider_status_events(aces_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_whatsapp_provider_status_events_message
-  ON crm.whatsapp_provider_status_events(provider, provider_message_id);
+CREATE INDEX IF NOT EXISTS idx_meta_whatsapp_provider_status_events_message
+  ON meta.whatsapp_provider_status_events(provider, provider_message_id);
 
 ALTER TABLE crm.message_history
   ADD COLUMN IF NOT EXISTS provider text,
@@ -196,31 +190,32 @@ CREATE INDEX IF NOT EXISTS idx_automation_executions_provider_message
   ON crm.automation_executions(provider, provider_message_id)
   WHERE provider_message_id IS NOT NULL;
 
-ALTER TABLE crm.whatsapp_meta_channels ENABLE ROW LEVEL SECURITY;
-ALTER TABLE crm.whatsapp_meta_templates ENABLE ROW LEVEL SECURITY;
-ALTER TABLE crm.whatsapp_provider_status_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meta.instance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meta.whatsapp_channels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meta.whatsapp_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meta.whatsapp_provider_status_events ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS whatsapp_meta_channels_select ON crm.whatsapp_meta_channels;
-CREATE POLICY whatsapp_meta_channels_select
-ON crm.whatsapp_meta_channels
+DROP POLICY IF EXISTS meta_instance_select ON meta.instance;
+CREATE POLICY meta_instance_select
+ON meta.instance
 FOR SELECT
 USING (
   aces_id = public.current_aces_id()
   AND public.current_crm_role() = 'ADMIN'::crm.user_role
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_channels_insert ON crm.whatsapp_meta_channels;
-CREATE POLICY whatsapp_meta_channels_insert
-ON crm.whatsapp_meta_channels
+DROP POLICY IF EXISTS meta_instance_insert ON meta.instance;
+CREATE POLICY meta_instance_insert
+ON meta.instance
 FOR INSERT
 WITH CHECK (
   aces_id = public.current_aces_id()
   AND public.current_crm_role() = 'ADMIN'::crm.user_role
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_channels_update ON crm.whatsapp_meta_channels;
-CREATE POLICY whatsapp_meta_channels_update
-ON crm.whatsapp_meta_channels
+DROP POLICY IF EXISTS meta_instance_update ON meta.instance;
+CREATE POLICY meta_instance_update
+ON meta.instance
 FOR UPDATE
 USING (
   aces_id = public.current_aces_id()
@@ -231,52 +226,83 @@ WITH CHECK (
   AND public.current_crm_role() = 'ADMIN'::crm.user_role
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_channels_delete ON crm.whatsapp_meta_channels;
-CREATE POLICY whatsapp_meta_channels_delete
-ON crm.whatsapp_meta_channels
+DROP POLICY IF EXISTS meta_whatsapp_channels_select ON meta.whatsapp_channels;
+CREATE POLICY meta_whatsapp_channels_select
+ON meta.whatsapp_channels
+FOR SELECT
+USING (
+  aces_id = public.current_aces_id()
+  AND public.current_crm_role() = 'ADMIN'::crm.user_role
+);
+
+DROP POLICY IF EXISTS meta_whatsapp_channels_insert ON meta.whatsapp_channels;
+CREATE POLICY meta_whatsapp_channels_insert
+ON meta.whatsapp_channels
+FOR INSERT
+WITH CHECK (
+  aces_id = public.current_aces_id()
+  AND public.current_crm_role() = 'ADMIN'::crm.user_role
+);
+
+DROP POLICY IF EXISTS meta_whatsapp_channels_update ON meta.whatsapp_channels;
+CREATE POLICY meta_whatsapp_channels_update
+ON meta.whatsapp_channels
+FOR UPDATE
+USING (
+  aces_id = public.current_aces_id()
+  AND public.current_crm_role() = 'ADMIN'::crm.user_role
+)
+WITH CHECK (
+  aces_id = public.current_aces_id()
+  AND public.current_crm_role() = 'ADMIN'::crm.user_role
+);
+
+DROP POLICY IF EXISTS meta_whatsapp_channels_delete ON meta.whatsapp_channels;
+CREATE POLICY meta_whatsapp_channels_delete
+ON meta.whatsapp_channels
 FOR DELETE
 USING (
   aces_id = public.current_aces_id()
   AND public.current_crm_role() = 'ADMIN'::crm.user_role
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_templates_select ON crm.whatsapp_meta_templates;
-CREATE POLICY whatsapp_meta_templates_select
-ON crm.whatsapp_meta_templates
+DROP POLICY IF EXISTS meta_whatsapp_templates_select ON meta.whatsapp_templates;
+CREATE POLICY meta_whatsapp_templates_select
+ON meta.whatsapp_templates
 FOR SELECT
 USING (
   EXISTS (
     SELECT 1
-    FROM crm.whatsapp_meta_channels c
-    WHERE c.id = whatsapp_meta_templates.channel_id
+    FROM meta.whatsapp_channels c
+    WHERE c.id = whatsapp_templates.channel_id
       AND c.aces_id = public.current_aces_id()
       AND public.current_crm_role() = 'ADMIN'::crm.user_role
   )
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_templates_insert ON crm.whatsapp_meta_templates;
-CREATE POLICY whatsapp_meta_templates_insert
-ON crm.whatsapp_meta_templates
+DROP POLICY IF EXISTS meta_whatsapp_templates_insert ON meta.whatsapp_templates;
+CREATE POLICY meta_whatsapp_templates_insert
+ON meta.whatsapp_templates
 FOR INSERT
 WITH CHECK (
   EXISTS (
     SELECT 1
-    FROM crm.whatsapp_meta_channels c
-    WHERE c.id = whatsapp_meta_templates.channel_id
+    FROM meta.whatsapp_channels c
+    WHERE c.id = whatsapp_templates.channel_id
       AND c.aces_id = public.current_aces_id()
       AND public.current_crm_role() = 'ADMIN'::crm.user_role
   )
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_templates_update ON crm.whatsapp_meta_templates;
-CREATE POLICY whatsapp_meta_templates_update
-ON crm.whatsapp_meta_templates
+DROP POLICY IF EXISTS meta_whatsapp_templates_update ON meta.whatsapp_templates;
+CREATE POLICY meta_whatsapp_templates_update
+ON meta.whatsapp_templates
 FOR UPDATE
 USING (
   EXISTS (
     SELECT 1
-    FROM crm.whatsapp_meta_channels c
-    WHERE c.id = whatsapp_meta_templates.channel_id
+    FROM meta.whatsapp_channels c
+    WHERE c.id = whatsapp_templates.channel_id
       AND c.aces_id = public.current_aces_id()
       AND public.current_crm_role() = 'ADMIN'::crm.user_role
   )
@@ -284,40 +310,49 @@ USING (
 WITH CHECK (
   EXISTS (
     SELECT 1
-    FROM crm.whatsapp_meta_channels c
-    WHERE c.id = whatsapp_meta_templates.channel_id
+    FROM meta.whatsapp_channels c
+    WHERE c.id = whatsapp_templates.channel_id
       AND c.aces_id = public.current_aces_id()
       AND public.current_crm_role() = 'ADMIN'::crm.user_role
   )
 );
 
-DROP POLICY IF EXISTS whatsapp_meta_templates_delete ON crm.whatsapp_meta_templates;
-CREATE POLICY whatsapp_meta_templates_delete
-ON crm.whatsapp_meta_templates
+DROP POLICY IF EXISTS meta_whatsapp_templates_delete ON meta.whatsapp_templates;
+CREATE POLICY meta_whatsapp_templates_delete
+ON meta.whatsapp_templates
 FOR DELETE
 USING (
   EXISTS (
     SELECT 1
-    FROM crm.whatsapp_meta_channels c
-    WHERE c.id = whatsapp_meta_templates.channel_id
+    FROM meta.whatsapp_channels c
+    WHERE c.id = whatsapp_templates.channel_id
       AND c.aces_id = public.current_aces_id()
       AND public.current_crm_role() = 'ADMIN'::crm.user_role
   )
 );
 
-DROP POLICY IF EXISTS whatsapp_provider_status_events_select ON crm.whatsapp_provider_status_events;
-CREATE POLICY whatsapp_provider_status_events_select
-ON crm.whatsapp_provider_status_events
+DROP POLICY IF EXISTS meta_whatsapp_provider_status_events_select ON meta.whatsapp_provider_status_events;
+CREATE POLICY meta_whatsapp_provider_status_events_select
+ON meta.whatsapp_provider_status_events
 FOR SELECT
 USING (
   aces_id = public.current_aces_id()
   AND public.current_crm_role() = 'ADMIN'::crm.user_role
 );
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON crm.whatsapp_meta_channels TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON crm.whatsapp_meta_templates TO authenticated;
-GRANT SELECT ON crm.whatsapp_provider_status_events TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.instance TO authenticated, authenticator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.whatsapp_channels TO authenticated, authenticator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.whatsapp_templates TO authenticated, authenticator;
+GRANT SELECT ON meta.whatsapp_provider_status_events TO authenticated, authenticator;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON crm.whatsapp_meta_channels TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON crm.whatsapp_meta_templates TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON crm.whatsapp_provider_status_events TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.instance TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.whatsapp_channels TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.whatsapp_templates TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON meta.whatsapp_provider_status_events TO service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA meta
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated, service_role, authenticator;
+
+ALTER ROLE authenticator SET pgrst.db_schemas = 'public,storage,graphql_public,crm,meta';
+NOTIFY pgrst, 'reload config';
+NOTIFY pgrst, 'reload schema';
