@@ -10,7 +10,7 @@ interface AppContextType {
   setSearchQuery: (query: string) => void;
   setPeriodFilter: (filter: AppState["ui"]["periodFilter"]) => void;
   setCustomRange: (range: { from: Date | null; to: Date | null }) => void;
-  openModal: (type: string, payload?: any) => void;
+  openModal: (type: string, payload?: unknown) => void;
   closeModal: () => void;
   openDrawer: (leadId: string) => void;
   closeDrawer: () => void;
@@ -27,6 +27,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         const parsed = JSON.parse(stored);
         return {
           ...parsed,
+          theme: "light",
           customRange: {
             from: parsed.customRange?.from ? new Date(parsed.customRange.from) : null,
             to: parsed.customRange?.to ? new Date(parsed.customRange.to) : null,
@@ -40,7 +41,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
     
     return {
-      theme: "dark",
+      theme: "light",
       periodFilter: "30d",
       customRange: { from: null, to: null },
       searchQuery: "",
@@ -52,8 +53,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   });
 
   useEffect(() => {
+    document.documentElement.classList.remove("dark");
+    localStorage.setItem("theme", "light");
+
     const toSave = {
       ...ui,
+      theme: "light",
       toastQueue: [],
       modal: null,
       drawerLeadId: null,
@@ -61,18 +66,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem("Crm-ui-state", JSON.stringify(toSave));
   }, [ui]);
 
-  const setTheme = (theme: "dark" | "light") => {
-    setUi((prev) => ({ ...prev, theme }));
-    if (theme === "dark") {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-    localStorage.setItem("theme", theme);
+  const setTheme = (_theme: "dark" | "light") => {
+    setUi((prev) => ({ ...prev, theme: "light" }));
+    document.documentElement.classList.remove("dark");
+    localStorage.setItem("theme", "light");
   };
 
   const toggleTheme = () => {
-    setTheme(ui.theme === "dark" ? "light" : "dark");
+    setTheme("light");
   };
 
   const setSearchQuery = (query: string) => {
@@ -87,7 +88,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setUi((prev) => ({ ...prev, customRange: range }));
   };
 
-  const openModal = (type: string, payload?: any) => {
+  const openModal = (type: string, payload?: unknown) => {
     setUi((prev) => ({ ...prev, modal: { type, payload } }));
   };
 

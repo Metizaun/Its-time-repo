@@ -1,4 +1,3 @@
-import { Card } from "@/components/ui/card";
 import { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import React, { ReactNode, isValidElement, cloneElement, useMemo } from "react";
@@ -13,31 +12,25 @@ interface KPICardProps {
   className?: string;
 }
 
-/** Remove <br/> e quebras explícitas dos nós de value */
 function removeBr(node: ReactNode): ReactNode {
   if (node == null) return node;
 
-  // CORREÇÃO 1: Se for array, usa React.Children.map para garantir keys
   if (Array.isArray(node)) {
     return React.Children.map(node, removeBr);
   }
 
-  // Elemento React
-  if (isValidElement(node)) {
-    // Se for <br>, substitui por espaço
+  if (isValidElement<{ children?: ReactNode }>(node)) {
     if (node.type === "br") return " ";
 
-    const props = (node as any).props || {};
-    
-    // CORREÇÃO 2: Processa children usando React.Children.map
+    const props = node.props;
     if (props.children) {
       const newChildren = React.Children.map(props.children, removeBr);
-      return cloneElement(node, { ...props, children: newChildren } as any);
+      return cloneElement(node, undefined, newChildren);
     }
+
     return node;
   }
 
-  // Texto simples — mantém
   return node;
 }
 
@@ -50,55 +43,39 @@ export function KPICard({
   trendValue,
   className,
 }: KPICardProps) {
-
   const cleanValue = useMemo(() => removeBr(value), [value]);
 
   return (
-    <Card 
-      className={cn(
-        "p-4 sm:p-6 transition-all duration-200", 
-        "bg-transparent rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]",
-        className
-      )}
-    >
-      <div className="flex items-start justify-between gap-3 min-w-0">
-        <div className="flex-1 min-w-0">
-          <p className="text-[10px] text-[var(--color-text-secondary)] font-semibold uppercase tracking-widest">{title}</p>
+    <article className={cn("card-kpi", className)}>
+      <div className="card-kpi__body">
+        <div className="card-kpi__content">
+          <p className="card-kpi__label">{title}</p>
 
-          {/* força linha única para R$ 4.800,00 */}
-          <p className="stat-value mt-1 whitespace-nowrap text-foreground font-bold text-3xl">
-            {cleanValue}
-          </p>
+          <p className="card-kpi__value stat-value">{cleanValue}</p>
 
-          {subtitle && (
-            <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-              {subtitle}
-            </p>
-          )}
+          {subtitle && <p className="card-kpi__subtitle">{subtitle}</p>}
 
           {trend && trendValue && (
-            <div className="flex items-center gap-1 mt-2">
+            <div className="card-kpi__trend">
               <span
                 className={cn(
-                  "text-xs font-medium",
-                  trend === "up" ? "text-success" : "text-destructive"
+                  "card-kpi__trend-value",
+                  trend === "up" ? "card-kpi__trend-value--up" : "card-kpi__trend-value--down"
                 )}
               >
                 {trend === "up" ? "↑" : "↓"} {trendValue}
               </span>
-              <span className="text-xs text-muted-foreground">
-                vs período anterior
-              </span>
+              <span className="card-kpi__trend-copy">vs periodo anterior</span>
             </div>
           )}
         </div>
 
         {Icon && (
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-            <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
+          <div className="card-kpi__icon" aria-hidden>
+            <Icon />
           </div>
         )}
       </div>
-    </Card>
+    </article>
   );
 }

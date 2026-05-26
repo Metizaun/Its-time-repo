@@ -1,4 +1,3 @@
-import { Card } from "@/components/ui/card";
 import {
   BarChart as RechartsBarChart,
   Bar,
@@ -10,42 +9,46 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { OriginData } from "@/lib/utils/metrics";
+import { ChartCard } from "./ChartCard";
 
 interface BarChartProps {
   data: OriginData[];
   title: string;
 }
 
+const chartColors = {
+  axis: "var(--color-gray-400)",
+  grid: "var(--color-gray-100)",
+  primary: "var(--color-chart-primary)",
+  success: "var(--color-chart-green)",
+  surface: "var(--color-surface-1)",
+  inverse: "var(--color-bg-inverse)",
+};
+
 export function BarChart({ data, title }: BarChartProps) {
   return (
-    <Card className="p-4 sm:p-6 bg-transparent rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
-      <h3 className="text-base sm:text-lg font-semibold mb-4">{title}</h3>
-      <div className="w-full overflow-x-auto">
+    <ChartCard title={title}>
+      <div className="chart-scroll">
         <ResponsiveContainer width="100%" height={300} minHeight={300}>
-          <RechartsBarChart 
-            data={data}
-            margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+          <RechartsBarChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <CartesianGrid stroke={chartColors.grid} />
 
-            <XAxis 
-              dataKey="origem" 
-              stroke="hsl(var(--muted-foreground))" 
+            <XAxis
+              dataKey="origem"
+              stroke={chartColors.axis}
               fontSize={10}
-              tick={{ fontSize: 10 }}
+              tick={{ fontSize: 10, fill: chartColors.axis }}
             />
 
-            {/* Y Ganhos */}
-            <YAxis 
+            <YAxis
               yAxisId="left"
-              stroke="hsl(var(--muted-foreground))" 
+              stroke={chartColors.axis}
               fontSize={10}
-              tick={{ fontSize: 10 }}
+              tick={{ fontSize: 10, fill: chartColors.axis }}
               domain={[0, (dataMax: number) => dataMax + 500]}
             />
 
-            {/* Y Leads (escondido) */}
-            <YAxis 
+            <YAxis
               yAxisId="right"
               orientation="right"
               tick={false}
@@ -55,36 +58,33 @@ export function BarChart({ data, title }: BarChartProps) {
 
             <Tooltip
               contentStyle={{
-                backgroundColor: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "8px",
-                fontSize: "12px",
+                backgroundColor: chartColors.inverse,
+                border: "none",
+                borderRadius: "var(--radius-lg)",
+                boxShadow: "var(--shadow-md)",
+                color: chartColors.surface,
+                fontFamily: "var(--font-family-mono)",
+                fontSize: "var(--text-xs)",
               }}
+              labelStyle={{ color: chartColors.surface, fontWeight: 600 }}
+              itemStyle={{ color: chartColors.surface }}
               wrapperStyle={{ zIndex: 1000 }}
             />
 
-            <Legend wrapperStyle={{ fontSize: "12px" }} />
+            <Legend wrapperStyle={{ color: "var(--color-gray-600)", fontFamily: "var(--font-family-mono)", fontSize: "var(--text-xs)" }} />
 
-            {/* Leads */}
-            <Bar 
-              dataKey="leads" 
-              fill="hsl(var(--primary))" 
-              name="Leads" 
-              radius={[8, 8, 0, 0]}
-              yAxisId="right"
-            />
+            <Bar dataKey="leads" fill={chartColors.primary} name="Leads" radius={[6, 6, 0, 0]} yAxisId="right" />
 
-            {/* Ganhos */}
             <Bar
               dataKey="ganhos"
-              fill="hsl(var(--success))"
+              fill={chartColors.success}
               name="Ganhos (R$)"
-              radius={[8, 8, 0, 0]}
+              radius={[6, 6, 0, 0]}
               yAxisId="left"
             />
           </RechartsBarChart>
         </ResponsiveContainer>
       </div>
-    </Card>
+    </ChartCard>
   );
 }

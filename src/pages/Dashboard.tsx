@@ -18,7 +18,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/material-ui-dropdown-menu";
+} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { filterLeadsByPeriod } from "@/lib/utils/filters";
@@ -28,7 +28,7 @@ import {
   groupLeadsByOrigin,
   groupRevenueByVendor,
 } from "@/lib/utils/metrics";
-import { Lead, PipelineStage } from "@/types";
+import { Lead, PeriodFilter, PipelineStage } from "@/types";
 
 const MAX_FUNNEL_STAGES = 5;
 
@@ -42,6 +42,19 @@ function getEffectiveFunnelStages(stages: PipelineStage[]) {
   return stages.slice(0, MAX_FUNNEL_STAGES);
 }
 
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div className="section-label">
+      <span className="section-label__text">{children}</span>
+    </div>
+  );
+}
+
+function normalizeConnection(value?: string | null): Lead["conexao"] {
+  if (value === "Baixa" || value === "Alta") return value;
+  return "Média";
+}
+
 export default function Dashboard() {
   const { leads, loading } = useLeads({ enableRealtime: false });
   const { stages, toggleFunnelStage } = usePipelineStages();
@@ -51,7 +64,7 @@ export default function Dashboard() {
   const [selectedInstance, setSelectedInstance] = useState<string>("todas");
   const isAdmin = userRole === "ADMIN";
 
-  const normalizedLeads = useMemo(() => {
+  const normalizedLeads = useMemo<Lead[]>(() => {
     return leads.map((lead) => ({
       ...lead,
       nome: lead.lead_name || "Sem nome",
@@ -59,12 +72,12 @@ export default function Dashboard() {
       email: lead.email || "",
       telefone: lead.contact_phone || "",
       origem: lead.source || "Desconhecido",
-      conexao: (lead.connection_level || "Media") as any,
+      conexao: normalizeConnection(lead.connection_level),
       valor: lead.value || 0,
       dataCriacao: lead.created_at,
-      responsavel: lead.owner_name || "Sem responsável",
+      responsavel: lead.owner_name || "Sem responsavel",
       observacoes: "",
-    })) as unknown as Lead[];
+    }));
   }, [leads]);
 
   const periodFilteredLeads = useMemo(
@@ -76,16 +89,12 @@ export default function Dashboard() {
     if (selectedInstance === "todas") return periodFilteredLeads;
 
     return periodFilteredLeads.filter((lead) => {
-      const leadInstanceName = (lead as any).instance_name;
-      return leadInstanceName === selectedInstance;
+      return lead.instance_name === selectedInstance;
     });
   }, [periodFilteredLeads, selectedInstance]);
 
   const selectedFunnelStages = useMemo(() => getEffectiveFunnelStages(stages), [stages]);
-  const selectedFunnelStageIds = useMemo(
-    () => selectedFunnelStages.map((stage) => stage.id),
-    [selectedFunnelStages]
-  );
+  const selectedFunnelStageIds = useMemo(() => selectedFunnelStages.map((stage) => stage.id), [selectedFunnelStages]);
 
   const handleFunnelStageToggle = async (stageId: string, nextEnabled: boolean) => {
     if (!isAdmin) return;
@@ -103,53 +112,39 @@ export default function Dashboard() {
     return { totalLeads, negociosGanhos, valorTotal, taxaConversao };
   }, [filteredLeads]);
 
-  const dailyData = useMemo(() => groupLeadsByDay(filteredLeads as any), [filteredLeads]);
-  const originData = useMemo(() => groupLeadsByOrigin(filteredLeads as any), [filteredLeads]);
+  const dailyData = useMemo(() => groupLeadsByDay(filteredLeads), [filteredLeads]);
+  const originData = useMemo(() => groupLeadsByOrigin(filteredLeads), [filteredLeads]);
   const funnelData = useMemo(() => {
     if (!stages.length || selectedFunnelStageIds.length === 0) {
       return [];
     }
 
-    return computeFunnelDataFromStages(filteredLeads as any, stages, selectedFunnelStageIds);
+    return computeFunnelDataFromStages(filteredLeads, stages, selectedFunnelStageIds);
   }, [filteredLeads, selectedFunnelStageIds, stages]);
-  const revenueByVendor = useMemo(() => groupRevenueByVendor(filteredLeads as any), [filteredLeads]);
+  const revenueByVendor = useMemo(() => groupRevenueByVendor(filteredLeads), [filteredLeads]);
 
   const funnelHeaderAction = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Selecionar etapas do funil"
-          className="group inline-flex h-11 w-11 items-center justify-center rounded-[18px] border border-white/10 bg-[rgba(5,8,14,0.34)] text-white/75 shadow-[0_10px_30px_rgba(0,0,0,0.16)] backdrop-blur-xl transition-all duration-200 hover:border-white/15 hover:bg-[rgba(8,12,18,0.46)] hover:text-white/90"
-        >
+        <button type="button" aria-label="Selecionar etapas do funil" className="funnel-menu-trigger">
           <Filter className="h-4 w-4" />
         </button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent
-        align="end"
-        sideOffset={10}
-        className="w-[360px] overflow-hidden rounded-[28px] p-0"
-      >
-        <div className="border-b border-white/8 px-5 pb-4 pt-5">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <p className="text-sm font-semibold tracking-tight text-white">Etapas do funil</p>
-            </div>
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-white/65">
-              {selectedFunnelStageIds.length}/{MAX_FUNNEL_STAGES}
-            </span>
-          </div>
+      <DropdownMenuContent align="end" sideOffset={10} className="funnel-menu-content">
+        <div className="funnel-menu-header">
+          <p className="funnel-menu-title">Etapas do funil</p>
+          <span className="funnel-menu-count">
+            {selectedFunnelStageIds.length}/{MAX_FUNNEL_STAGES}
+          </span>
         </div>
 
-        <DropdownMenuLabel className="px-5 pb-2 pt-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/35">
-          Pipeline
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator className="mx-4 my-0 h-px bg-white/8" />
+        <DropdownMenuLabel className="funnel-menu-label">Pipeline</DropdownMenuLabel>
+        <DropdownMenuSeparator className="funnel-menu-separator" />
 
-        <div className="max-h-80 overflow-y-auto px-2 py-2">
+        <div className="funnel-menu-list">
           {stages.length === 0 ? (
-            <p className="px-4 py-5 text-xs text-white/55">Nenhuma etapa do pipeline encontrada.</p>
+            <p className="funnel-menu-empty">Nenhuma etapa do pipeline encontrada.</p>
           ) : (
             stages.map((stage) => {
               const isChecked = selectedFunnelStageIds.includes(stage.id);
@@ -162,26 +157,12 @@ export default function Dashboard() {
                     event.preventDefault();
                     void handleFunnelStageToggle(stage.id, !isChecked);
                   }}
-                  className={cn(
-                    "mb-1.5 rounded-[22px] border border-white/[0.06] px-0 py-0 text-white/85",
-                    "focus:bg-transparent focus:text-white",
-                    !isAdmin && "cursor-default",
-                    isChecked
-                      ? "bg-white/[0.08]"
-                      : "bg-transparent hover:bg-white/[0.04]"
-                  )}
+                  className={cn("funnel-menu-item", !isAdmin && "cursor-default")}
                 >
-                  <div className="flex w-full items-center justify-between gap-4 px-4 py-3">
-                    <p className="min-w-0 truncate text-[13px] font-semibold text-white">{stage.name}</p>
+                  <div className="funnel-menu-item__inner">
+                    <p className="funnel-menu-item__name">{stage.name}</p>
 
-                    <span
-                      className={cn(
-                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-all",
-                        isChecked
-                          ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white shadow-[0_0_18px_rgba(229,57,58,0.24)]"
-                          : "border-white/12 bg-white/[0.02] text-transparent"
-                      )}
-                    >
+                    <span className={cn("funnel-check", isChecked && "funnel-check--active")}>
                       <Check className="h-3.5 w-3.5" />
                     </span>
                   </div>
@@ -191,45 +172,43 @@ export default function Dashboard() {
           )}
         </div>
 
-        <DropdownMenuSeparator className="mx-4 my-0 h-px bg-white/8" />
-        {!isAdmin ? (
-          <div className="px-5 py-4 text-xs text-white/50">
-            Somente usuários ADMIN podem editar o filtro do funil.
-          </div>
-        ) : null}
+        <DropdownMenuSeparator className="funnel-menu-separator" />
+        {!isAdmin ? <div className="funnel-menu-note">Somente usuarios ADMIN podem editar o filtro do funil.</div> : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 
   if (loading) {
     return (
-      <div className="space-y-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">Carregando...</p>
+      <div className="dashboard-page">
+        <div>
+          <SectionLabel>Dashboard</SectionLabel>
+          <h1 className="dashboard-title">Dashboard</h1>
+          <p className="dashboard-description">Carregando metricas de vendas...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="dashboard-page">
+      <header className="dashboard-header">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold">Dashboard</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Visão geral do desempenho de vendas</p>
+          <SectionLabel>Dashboard</SectionLabel>
+          <h1 className="dashboard-title">Dashboard</h1>
+          <p className="dashboard-description">Visao geral do desempenho de vendas</p>
         </div>
 
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="dashboard-filters">
           <Select value={selectedInstance} onValueChange={setSelectedInstance} disabled={instancesLoading}>
-            <SelectTrigger className="w-full sm:w-[210px]">
+            <SelectTrigger className="dashboard-filter-trigger dashboard-filter--instance">
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <Building2 className="w-4 h-4" />
-                <div className="min-w-0 flex-1">
-                  <SelectValue className="truncate block" placeholder="Todas as instâncias" />
-                </div>
+                <SelectValue placeholder="Todas as instancias" />
               </div>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="todas">Todas as instâncias</SelectItem>
+              <SelectItem value="todas">Todas as instancias</SelectItem>
               {instances.map((instance) => (
                 <SelectItem key={instance.instancia} value={instance.instancia}>
                   {instance.instancia}
@@ -238,71 +217,79 @@ export default function Dashboard() {
             </SelectContent>
           </Select>
 
-          <Select value={ui.periodFilter} onValueChange={(value: any) => setPeriodFilter(value)}>
-            <SelectTrigger className="w-full sm:w-[180px]">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <div className="min-w-0 flex-1">
-                  <SelectValue className="truncate block" />
-                </div>
-              </div>
+          <Select value={ui.periodFilter} onValueChange={(value: PeriodFilter) => setPeriodFilter(value)}>
+            <SelectTrigger className="dashboard-filter-trigger dashboard-filter--period">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="hoje">Hoje</SelectItem>
-              <SelectItem value="7d">Últimos 7 dias</SelectItem>
-              <SelectItem value="30d">Últimos 30 dias</SelectItem>
+              <SelectItem value="7d">Ultimos 7 dias</SelectItem>
+              <SelectItem value="30d">Ultimos 30 dias</SelectItem>
               <SelectItem value="total">Total</SelectItem>
             </SelectContent>
           </Select>
         </div>
-      </div>
+      </header>
 
       {selectedInstance !== "todas" && (
-        <div className="p-3 bg-[var(--color-bg-elevated)] border-none rounded-[16px] text-sm text-[var(--color-text-secondary)] shadow-[0_4px_12px_rgba(0,0,0,0.4)]">
-          <span className="font-medium text-foreground">Filtrando por instância:</span> {selectedInstance}
+        <div className="dashboard-filter-note">
+          <strong>Filtrando por instancia:</strong> {selectedInstance}
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0">
-        <KPICard title="Total de Leads" value={kpis.totalLeads} icon={Users} subtitle="leads no periodo" />
-        <KPICard title="Negócios Ganhos" value={kpis.negociosGanhos} icon={Target} subtitle="vendas fechadas" />
-        <KPICard
-          title="Receita Total"
-          value={
-            <>
-              R${" "}
-              <span className="whitespace-nowrap">
-                {kpis.valorTotal.toLocaleString("pt-BR", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
-            </>
-          }
-          icon={DollarSign}
-          subtitle="valor total fechado"
-        />
-        <KPICard
-          title="Taxa de Conversão"
-          value={`${kpis.taxaConversao.toFixed(1)}%`}
-          icon={TrendingUp}
-          subtitle="leads para vendas"
-        />
-      </div>
+      <section className="dashboard-section">
+        <SectionLabel>Consolidado Geral</SectionLabel>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <LineChart data={dailyData} title="Evolução de Leads" />
-        <BarChart data={originData} title="Leads por Origem" />
-      </div>
+        <div className="dashboard-kpi-grid">
+          <KPICard title="Total de Leads" value={kpis.totalLeads} icon={Users} subtitle="leads no periodo" />
+          <KPICard title="Negocios Ganhos" value={kpis.negociosGanhos} icon={Target} subtitle="vendas fechadas" />
+          <KPICard
+            title="Receita Total"
+            value={
+              <>
+                R${" "}
+                <span className="whitespace-nowrap">
+                  {kpis.valorTotal.toLocaleString("pt-BR", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+              </>
+            }
+            icon={DollarSign}
+            subtitle="valor total fechado"
+          />
+          <KPICard
+            title="Taxa de Conversao"
+            value={`${kpis.taxaConversao.toFixed(1)}%`}
+            icon={TrendingUp}
+            subtitle="leads para vendas"
+          />
+        </div>
+      </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <FunnelChart
-          data={funnelData}
-          title="Funil de Vendas"
-          headerAction={funnelHeaderAction}
-          totalLeads={filteredLeads.length}
-        />
-        <RevenueByVendorChart data={revenueByVendor} title="Receita por Vendedor" />
-      </div>
+      <section className="dashboard-section">
+        <SectionLabel>Aquisicao De Clientes</SectionLabel>
+
+        <div className="dashboard-chart-grid">
+          <LineChart data={dailyData} title="Evolucao de Leads" />
+          <BarChart data={originData} title="Leads por Origem" />
+        </div>
+      </section>
+
+      <section className="dashboard-section">
+        <SectionLabel>Funil E Receita</SectionLabel>
+
+        <div className="dashboard-chart-grid">
+          <FunnelChart
+            data={funnelData}
+            title="Funil de Vendas"
+            headerAction={funnelHeaderAction}
+            totalLeads={filteredLeads.length}
+          />
+          <RevenueByVendorChart data={revenueByVendor} title="Receita por Vendedor" />
+        </div>
+      </section>
     </div>
   );
 }

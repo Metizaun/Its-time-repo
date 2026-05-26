@@ -1,4 +1,3 @@
-import { Card } from "@/components/ui/card";
 import {
   BarChart as RechartsBarChart,
   Bar,
@@ -10,18 +9,26 @@ import {
   Cell,
 } from "recharts";
 import { RevenueByVendor } from "@/lib/utils/metrics";
+import { ChartCard } from "./ChartCard";
 
 interface RevenueByVendorChartProps {
   data: RevenueByVendor[];
   title: string;
 }
 
-const COLORS = [
-  "hsl(190, 90%, 50%)",  // Cyan
-  "hsla(241, 45%, 35%, 1.00)",   // Gold suave
-  "hsl(142, 70%, 45%)",  // Verde sucesso 
-  "hsl(262, 75%, 60%)",  // Roxo 
-  "hsl(346, 75%, 62%)",  // Rosa neon
+const chartColors = {
+  axis: "var(--color-gray-400)",
+  grid: "var(--color-gray-100)",
+  surface: "var(--color-surface-1)",
+  inverse: "var(--color-bg-inverse)",
+};
+
+const seriesColors = [
+  "var(--color-chart-primary)",
+  "var(--color-chart-blue)",
+  "var(--color-chart-green)",
+  "var(--color-chart-purple)",
+  "var(--color-chart-graphite)",
 ];
 
 export function RevenueByVendorChart({ data, title }: RevenueByVendorChartProps) {
@@ -35,22 +42,17 @@ export function RevenueByVendorChart({ data, title }: RevenueByVendorChartProps)
   }));
 
   return (
-    <Card className="p-4 sm:p-6 bg-transparent rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
-      <h3 className="text-base sm:text-lg font-semibold mb-4">{title}</h3>
-      <div className="w-full overflow-x-auto">
+    <ChartCard title={title}>
+      <div className="chart-scroll">
         <ResponsiveContainer width="100%" height={300} minHeight={300}>
-          <RechartsBarChart
-            data={formattedData}
-            margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
-            layout="vertical"
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+          <RechartsBarChart data={formattedData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }} layout="vertical">
+            <CartesianGrid stroke={chartColors.grid} />
 
             <XAxis
               type="number"
-              stroke="hsl(var(--muted-foreground))"
+              stroke={chartColors.axis}
               fontSize={10}
-              tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+              tick={{ fontSize: 10, fill: chartColors.axis }}
               tickFormatter={(value) =>
                 new Intl.NumberFormat("pt-BR", {
                   notation: "compact",
@@ -62,53 +64,42 @@ export function RevenueByVendorChart({ data, title }: RevenueByVendorChartProps)
             <YAxis
               type="category"
               dataKey="responsavel"
-              stroke="hsl(var(--muted-foreground))"
+              stroke={chartColors.axis}
               fontSize={11}
-              tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+              tick={{ fontSize: 11, fill: chartColors.axis }}
               width={90}
             />
 
             <Tooltip
-  contentStyle={{
-    backgroundColor: "hsl(var(--card))",
-    border: "1px solid hsl(var(--border))",
-    borderRadius: "8px",
-    fontSize: "12px",
-    color: "var(--color-text-primary)",
-  }}
-  labelStyle={{
-    color: "var(--color-text-primary)",
-    fontWeight: 600,
-  }}
-  formatter={(value: number, name) => [
-    <span style={{ color: "var(--color-text-primary)" }}>
-      {new Intl.NumberFormat("pt-BR", {
-        style: "currency",
-        currency: "BRL",
-      }).format(value)}
-    </span>,
-    <span style={{ color: "var(--color-text-primary)" }}>{name}</span>
-  ]}
-  labelFormatter={(label) => `Vendedor: ${label}`}
-  wrapperStyle={{ zIndex: 1000 }}
-/>
+              contentStyle={{
+                backgroundColor: chartColors.inverse,
+                border: "none",
+                borderRadius: "var(--radius-lg)",
+                boxShadow: "var(--shadow-md)",
+                color: chartColors.surface,
+                fontFamily: "var(--font-family-mono)",
+                fontSize: "var(--text-xs)",
+              }}
+              labelStyle={{ color: chartColors.surface, fontWeight: 600 }}
+              formatter={(value: number, name) => [
+                new Intl.NumberFormat("pt-BR", {
+                  style: "currency",
+                  currency: "BRL",
+                }).format(value),
+                name,
+              ]}
+              labelFormatter={(label) => `Vendedor: ${label}`}
+              wrapperStyle={{ zIndex: 1000 }}
+            />
 
-
-
-            <Bar dataKey="receita" name="Receita" radius={[0, 8, 8, 0]}>
+            <Bar dataKey="receita" name="Receita" radius={[0, 6, 6, 0]}>
               {formattedData.map((_, index) => (
-                <Cell
-                  key={`cell-${index}`}
-                  fill={COLORS[index % COLORS.length]}
-                  style={{ transition: "all .2s ease" }}
-                  className="hover:opacity-90 hover:brightness-125"
-                />
+                <Cell key={`cell-${index}`} fill={seriesColors[index % seriesColors.length]} className="transition-opacity hover:opacity-80" />
               ))}
             </Bar>
-
           </RechartsBarChart>
         </ResponsiveContainer>
       </div>
-    </Card>
+    </ChartCard>
   );
 }

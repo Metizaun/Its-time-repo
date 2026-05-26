@@ -1,4 +1,3 @@
-import { Card } from "@/components/ui/card";
 import {
   LineChart as RechartsLineChart,
   Line,
@@ -10,87 +9,96 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { DailyData } from "@/lib/utils/metrics";
+import { ChartCard } from "./ChartCard";
 
 interface LineChartProps {
   data: DailyData[];
   title: string;
 }
 
+const chartColors = {
+  axis: "var(--color-gray-400)",
+  grid: "var(--color-gray-100)",
+  primary: "var(--color-chart-primary)",
+  success: "var(--color-chart-green)",
+  surface: "var(--color-surface-1)",
+  inverse: "var(--color-bg-inverse)",
+};
+
 export function LineChart({ data, title }: LineChartProps) {
   return (
-    <Card className="p-4 sm:p-6 bg-transparent rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] shadow-[0_8px_32px_rgba(229,57,58,0.04)]">
-      <h3 className="text-base sm:text-lg font-semibold mb-4">{title}</h3>
-      <div className="w-full overflow-x-auto">
+    <ChartCard title={title}>
+      <div className="chart-scroll">
         <ResponsiveContainer width="100%" height={300} minHeight={300}>
-          <RechartsLineChart 
-            data={data}
-            margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+          <RechartsLineChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <CartesianGrid stroke={chartColors.grid} />
 
-            {/* Eixo X */}
-            <XAxis 
-              dataKey="date" 
-              stroke="hsl(var(--muted-foreground))" 
+            <XAxis
+              dataKey="date"
+              stroke={chartColors.axis}
               fontSize={10}
-              tick={{ fontSize: 10 }}
+              tick={{ fontSize: 10, fill: chartColors.axis }}
             />
 
-            {/* Eixo Y de GANHOS (esquerda) */}
-            <YAxis 
+            <YAxis
               yAxisId="left"
-              stroke="hsl(var(--muted-foreground))" 
+              stroke={chartColors.axis}
               fontSize={10}
-              tick={{ fontSize: 10 }}
+              tick={{ fontSize: 10, fill: chartColors.axis }}
             />
 
-            {/* Eixo Y de LEADS (direita) - tick escondido */}
-            <YAxis 
+            <YAxis
               yAxisId="right"
               orientation="right"
-              stroke="hsl(var(--muted-foreground))"
+              stroke={chartColors.axis}
               tick={false}
               domain={[0, (dataMax: number) => dataMax + 1]}
             />
 
             <Tooltip
               contentStyle={{
-                backgroundColor: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "8px",
-                fontSize: "12px",
+                backgroundColor: chartColors.inverse,
+                border: "none",
+                borderRadius: "var(--radius-lg)",
+                boxShadow: "var(--shadow-md)",
+                color: chartColors.surface,
+                fontFamily: "var(--font-family-mono)",
+                fontSize: "var(--text-xs)",
               }}
+              labelStyle={{ color: chartColors.surface, fontWeight: 600 }}
+              itemStyle={{ color: chartColors.surface }}
               wrapperStyle={{ zIndex: 1000 }}
             />
-            <Legend wrapperStyle={{ fontSize: "12px" }} />
+            <Legend wrapperStyle={{ color: "var(--color-gray-600)", fontFamily: "var(--font-family-mono)", fontSize: "var(--text-xs)" }} />
 
-            {/* Linha de Leads (eixo direito) */}
             <Line
               type="monotone"
               dataKey="leads"
-              stroke="hsl(var(--primary))"
+              stroke={chartColors.primary}
               strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
               name="Leads"
               yAxisId="right"
-              dot={{ fill: "hsl(var(--primary))" }}
+              dot={{ fill: chartColors.primary, stroke: chartColors.surface, strokeWidth: 2, r: 4 }}
               activeDot={{ r: 5 }}
             />
 
-            {/* Linha de Ganhos (eixo esquerdo) */}
             <Line
               type="monotone"
               dataKey="ganhos"
-              stroke="hsl(var(--success))"
+              stroke={chartColors.success}
               strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
               name="Ganhos (R$)"
               yAxisId="left"
-              dot={{ fill: "hsl(var(--success))" }}
+              dot={{ fill: chartColors.success, stroke: chartColors.surface, strokeWidth: 2, r: 4 }}
               activeDot={{ r: 5 }}
             />
-
           </RechartsLineChart>
         </ResponsiveContainer>
       </div>
-    </Card>
+    </ChartCard>
   );
 }
