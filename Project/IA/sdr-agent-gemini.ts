@@ -95,6 +95,7 @@ type InstanceListItem = {
   lastError: string | null;
   actions: InstanceAction[];
   color: string | null;
+  leadCount: number;
 };
 
 type LeadRow = {
@@ -230,6 +231,15 @@ type TestHandoffInput = {
 
 type CreateInstanceInput = {
   instanceName: string;
+};
+
+type DeleteInstanceLeadAction = "none" | "transfer" | "delete";
+
+type DeleteInstanceOptions = {
+  hardDelete?: boolean;
+  leadAction?: DeleteInstanceLeadAction;
+  transferToInstanceName?: string | null;
+  confirmationText?: string | null;
 };
 
 type UpdateInstanceLifecycleInput = {
@@ -805,6 +815,99 @@ export class AgentManager {
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel atualizar a instancia", error);
+    }
+  }
+
+  private async assignInstanceOwner(acesId: number, instanceName: string, ownerId: string) {
+    const { error } = await this.serviceClient
+      .from("instance")
+      .update({ created_by: ownerId })
+      .eq("instancia", instanceName)
+      .eq("aces_id", acesId)
+      .is("created_by", null);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel vincular a instancia ao usuario", error);
+    }
+  }
+
+  private async countActiveLeadsForInstance(acesId: number, instanceName: string) {
+    const { count, error } = await this.serviceClient
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .eq("aces_id", acesId)
+      .eq("instancia", instanceName)
+      .eq("view", true);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel contar os leads da instancia", error);
+    }
+
+    return count ?? 0;
+  }
+
+  private async buildLeadCountMap(acesId: number, instances: InstanceRow[]) {
+    const entries = await Promise.all(
+      instances.map(async (instance) => [
+        instance.instancia,
+        await this.countActiveLeadsForInstance(acesId, instance.instancia),
+      ] as const)
+    );
+
+    return new Map(entries);
+  }
+
+  private async transferActiveLeadsToInstance(
+    context: AuthContext,
+    sourceInstanceName: string,
+    targetInstanceName: string
+  ) {
+    const { error } = await this.serviceClient
+      .from("leads")
+      .update({
+        instancia: targetInstanceName,
+        owner_id: context.crmUserId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("aces_id", context.acesId)
+      .eq("instancia", sourceInstanceName)
+      .eq("view", true);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel transferir os leads da instancia", error);
+    }
+  }
+
+  private async hideActiveLeadsForInstance(context: AuthContext, instanceName: string) {
+    const { error } = await this.serviceClient
+      .from("leads")
+      .update({
+        view: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("aces_id", context.acesId)
+      .eq("instancia", instanceName)
+      .eq("view", true);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel apagar os leads da instancia", error);
+    }
+  }
+
+  private async deactivateAutomationFunnelsForInstance(context: AuthContext, instanceName: string) {
+    const { error } = await this.serviceClient
+      .from("automation_funnels")
+      .update({
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("aces_id", context.acesId)
+      .eq("created_by", context.crmUserId)
+      .eq("instance_name", instanceName)
+      .eq("is_active", true);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel desativar automacoes da instancia", error);
     }
   }
 
@@ -1464,7 +1567,10 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel listar as instancias", error);
     }
 
-    return ((data ?? []) as InstanceRow[]).map((instance): InstanceListItem => {
+    const rows = (data ?? []) as InstanceRow[];
+    const leadCounts = await this.buildLeadCountMap(context.acesId, rows);
+
+    return rows.map((instance): InstanceListItem => {
       const setupStatus = this.deriveSetupStatus(instance);
       return {
         instanceName: instance.instancia,
@@ -1475,6 +1581,7 @@ export class AgentManager {
         lastError: instance.last_error ?? null,
         actions: this.buildInstanceActions(instance, setupStatus),
         color: instance.color ?? null,
+        leadCount: leadCounts.get(instance.instancia) ?? 0,
       };
     });
   }
@@ -1491,11 +1598,16 @@ export class AgentManager {
       throw new HttpError(409, "Nome de instancia indisponivel");
     }
 
-    if (existingRow && existingRow.created_by !== context.crmUserId) {
+    if (existingRow && existingRow.created_by && existingRow.created_by !== context.crmUserId) {
       throw new HttpError(403, "Instancia nao pertence ao usuario atual");
     }
 
     let existing = existingRow;
+    if (existing && !existing.created_by) {
+      await this.assignInstanceOwner(context.acesId, instanceName, context.crmUserId);
+      existing = { ...existing, created_by: context.crmUserId };
+    }
+
     let token = existing?.token ?? null;
     let qrCodeBase64: string | null = null;
 
@@ -1807,13 +1919,50 @@ export class AgentManager {
     });
   }
 
-  async deleteInstance(context: AuthContext, instanceNameRaw: string, options?: { hardDelete?: boolean }) {
+  async deleteInstance(context: AuthContext, instanceNameRaw: string, options?: DeleteInstanceOptions) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
     const hardDelete = options?.hardDelete ?? false;
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
+      const leadCount = await this.countActiveLeadsForInstance(context.acesId, instanceName);
+      const leadAction = options?.leadAction ?? "none";
+      let transferTarget: string | null = null;
+
+      if (leadCount > 0) {
+        if (leadAction === "none") {
+          throw new HttpError(409, "Transfira ou apague os leads antes de excluir a instancia", {
+            leadCount,
+            requiredAction: true,
+          });
+        }
+
+        if (leadAction === "transfer") {
+          transferTarget = this.sanitizeInstanceName(options?.transferToInstanceName ?? "");
+          if (transferTarget === instanceName) {
+            throw new HttpError(400, "Selecione uma instancia de destino diferente");
+          }
+
+          const target = await this.ensureInstanceOwnership(context.acesId, transferTarget, context.crmUserId);
+          if (this.deriveSetupStatus(target) === "cancelled") {
+            throw new HttpError(400, "A instancia de destino nao esta ativa");
+          }
+
+          await this.transferActiveLeadsToInstance(context, instanceName, transferTarget);
+        } else if (leadAction === "delete") {
+          if ((options?.confirmationText ?? "").trim().toLowerCase() !== "apagar") {
+            throw new HttpError(400, "Digite apagar para confirmar a remocao dos leads");
+          }
+
+          await this.hideActiveLeadsForInstance(context, instanceName);
+        } else {
+          throw new HttpError(400, "Acao de leads invalida");
+        }
+      }
+
+      await this.deactivateAutomationFunnelsForInstance(context, instanceName);
+
       const evolutionResult = await this.deleteOnEvolution(instanceName);
       const remoteError = evolutionResult.ok ? null : JSON.stringify(evolutionResult.data ?? {});
 
@@ -1840,12 +1989,18 @@ export class AgentManager {
       await this.logInstanceEvent(context.acesId, instanceName, "deleted", {
         hard_delete: hardDelete,
         evolution_ok: evolutionResult.ok,
+        lead_action: leadCount > 0 ? leadAction : "none",
+        leads_affected: leadCount,
+        transfer_target: transferTarget,
       });
 
       return {
         success: true,
         instanceName,
         mode: hardDelete ? "hard" : "soft",
+        leadAction: leadCount > 0 ? leadAction : "none",
+        leadsAffected: leadCount,
+        transferTarget,
         warning: evolutionResult.ok ? null : "Instancia removida do CRM, mas a Evolution retornou erro durante exclusao.",
       };
     });

@@ -420,6 +420,14 @@ app.delete(
     const hardDelete = String(req.query.hard ?? "").toLowerCase() === "true";
     const result = await manager.deleteInstance(req.authContext!, instanceName, {
       hardDelete,
+      leadAction:
+        req.body?.leadAction === "transfer" || req.body?.leadAction === "delete" || req.body?.leadAction === "none"
+          ? req.body.leadAction
+          : undefined,
+      transferToInstanceName:
+        typeof req.body?.transferToInstanceName === "string" ? req.body.transferToInstanceName : undefined,
+      confirmationText:
+        typeof req.body?.confirmationText === "string" ? req.body.confirmationText : undefined,
     });
     res.json(result);
   })

@@ -21,6 +21,7 @@ export type AdminInstance = {
   lastError: string | null;
   actions: AdminInstanceAction[];
   color: string | null;
+  leadCount: number;
 };
 
 export type MetaChannelStatus = "draft" | "active" | "disabled" | "error";
@@ -220,17 +221,34 @@ export async function deleteInstance({
   accessToken,
   instanceName,
   hardDelete = false,
-}: AuthHeadersInput & { instanceName: string; hardDelete?: boolean }) {
+  leadAction = "none",
+  transferToInstanceName,
+  confirmationText,
+}: AuthHeadersInput & {
+  instanceName: string;
+  hardDelete?: boolean;
+  leadAction?: "none" | "transfer" | "delete";
+  transferToInstanceName?: string | null;
+  confirmationText?: string | null;
+}) {
   const encodedName = encodeURIComponent(instanceName);
   const response = await fetch(`${CRM_BACKEND_URL}/api/instances/${encodedName}?hard=${hardDelete ? "true" : "false"}`, {
     method: "DELETE",
     headers: buildHeaders(accessToken),
+    body: JSON.stringify({
+      leadAction,
+      transferToInstanceName: transferToInstanceName || null,
+      confirmationText: confirmationText || null,
+    }),
   });
 
   return parseResponse<{
     success: boolean;
     instanceName: string;
     mode: "soft" | "hard";
+    leadAction: "none" | "transfer" | "delete";
+    leadsAffected: number;
+    transferTarget: string | null;
     warning: string | null;
   }>(response);
 }

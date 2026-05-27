@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  ArrowRight,
   Check,
+  Eraser,
   Link2,
   Loader2,
   MessageCircle,
@@ -37,6 +39,7 @@ import {
   type AdminMetaTemplate,
   type MetaChannelStatus,
 } from "@/services/instanceService";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -55,10 +58,19 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
+type DeleteLeadAction = "transfer" | "delete";
 
 function setupStatusLabel(setupStatus: AdminInstanceSetupStatus) {
   switch (setupStatus) {
@@ -137,6 +149,11 @@ export function InstanceManager() {
     webhookVerifyToken: "",
     status: "draft" as MetaChannelStatus,
   });
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [instancePendingDelete, setInstancePendingDelete] = useState<AdminInstance | null>(null);
+  const [deleteLeadAction, setDeleteLeadAction] = useState<DeleteLeadAction>("transfer");
+  const [deleteTransferTarget, setDeleteTransferTarget] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   const stateBadge = useMemo(() => {
     switch (connectionState) {
@@ -157,6 +174,32 @@ export function InstanceManager() {
         return <Badge variant="outline">Aguardando</Badge>;
     }
   }, [connectionState]);
+
+  const deleteLeadCount = instancePendingDelete?.leadCount ?? 0;
+  const hasLeadsToResolve = deleteLeadCount > 0;
+  const transferTargets = useMemo(() => {
+    if (!instancePendingDelete) return [];
+
+    return instances.filter((instance) => instance.instanceName !== instancePendingDelete.instanceName);
+  }, [instances, instancePendingDelete]);
+
+  const canConfirmDelete = useMemo(() => {
+    if (!instancePendingDelete || Boolean(busyAction)) return false;
+    if (!hasLeadsToResolve) return true;
+
+    if (deleteLeadAction === "transfer") {
+      return Boolean(deleteTransferTarget);
+    }
+
+    return deleteConfirmation.trim().toLowerCase() === "apagar";
+  }, [
+    busyAction,
+    deleteConfirmation,
+    deleteLeadAction,
+    deleteTransferTarget,
+    hasLeadsToResolve,
+    instancePendingDelete,
+  ]);
 
   const getAccessToken = useCallback(async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -461,29 +504,53 @@ export function InstanceManager() {
     }
   };
 
-  const handleDelete = async (instanceName: string) => {
-    const confirmed = window.confirm(
-      `Excluir a instancia "${instanceName}" da administracao?\n\nEssa acao cancela o setup no CRM.`
-    );
-    if (!confirmed) return;
+  const openDeleteDialog = (instance: AdminInstance) => {
+    const targets = instances.filter((item) => item.instanceName !== instance.instanceName);
+    setInstancePendingDelete(instance);
+    setDeleteLeadAction(targets.length > 0 ? "transfer" : "delete");
+    setDeleteTransferTarget("");
+    setDeleteConfirmation("");
+    setDeleteDialogOpen(true);
+  };
+
+  const resetDeleteDialog = () => {
+    setDeleteDialogOpen(false);
+    setInstancePendingDelete(null);
+    setDeleteLeadAction("transfer");
+    setDeleteTransferTarget("");
+    setDeleteConfirmation("");
+  };
+
+  const handleDelete = async () => {
+    if (!instancePendingDelete) return;
 
     try {
-      setBusyAction(`delete:${instanceName}`);
+      setBusyAction(`delete:${instancePendingDelete.instanceName}`);
       const accessToken = await getAccessToken();
       const result = await deleteInstance({
         accessToken,
-        instanceName,
+        instanceName: instancePendingDelete.instanceName,
         hardDelete: false,
+        leadAction: hasLeadsToResolve ? deleteLeadAction : "none",
+        transferToInstanceName: deleteLeadAction === "transfer" ? deleteTransferTarget : null,
+        confirmationText: deleteLeadAction === "delete" ? deleteConfirmation : null,
       });
       await loadInstances();
+      resetDeleteDialog();
 
       if (result.warning) {
         toast.warning(result.warning);
+      } else if (result.leadAction === "transfer") {
+        toast.success(`Instancia removida e ${result.leadsAffected} leads transferidos`);
+      } else if (result.leadAction === "delete") {
+        toast.success(`Instancia removida e ${result.leadsAffected} leads apagados`);
       } else {
         toast.success("Instancia removida da lista");
       }
-    } catch (err: any) {
-      toast.error("Falha ao excluir instancia", { description: err?.message });
+    } catch (err: unknown) {
+      toast.error("Falha ao excluir instancia", {
+        description: err instanceof Error ? err.message : "Erro desconhecido",
+      });
     } finally {
       setBusyAction(null);
     }
@@ -599,6 +666,9 @@ export function InstanceManager() {
                         ) : (
                           <Badge variant="outline">Meta nao configurada</Badge>
                         )}
+                        <Badge variant="outline">
+                          {instance.leadCount ?? 0} leads
+                        </Badge>
                       </div>
                       {instance.expiresAt && instance.setupStatus === "pending_qr" && (
                         <span className="text-xs text-muted-foreground">
@@ -747,7 +817,7 @@ export function InstanceManager() {
                       size="sm"
                       variant="destructive"
                       disabled={isBusy}
-                      onClick={() => handleDelete(instance.instanceName)}
+                      onClick={() => openDeleteDialog(instance)}
                     >
                       {busyAction === `delete:${instance.instanceName}` ? (
                         <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -900,6 +970,119 @@ export function InstanceManager() {
             <Button onClick={handleSaveMetaChannel} disabled={metaSaving}>
               {metaSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
               Salvar canal
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => (open ? setDeleteDialogOpen(true) : resetDeleteDialog())}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" />
+              Excluir instancia
+            </DialogTitle>
+            <DialogDescription>
+              {instancePendingDelete?.instanceName ?? "Instancia"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {instancePendingDelete && (
+            <div className="space-y-4">
+              {hasLeadsToResolve ? (
+                <>
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Leads vinculados</AlertTitle>
+                    <AlertDescription>
+                      Esta instancia possui <strong>{deleteLeadCount} leads ativos</strong>. Escolha o destino desses
+                      leads antes de concluir a exclusao.
+                    </AlertDescription>
+                  </Alert>
+
+                  <RadioGroup
+                    value={deleteLeadAction}
+                    onValueChange={(value) => setDeleteLeadAction(value as DeleteLeadAction)}
+                    className="gap-3"
+                  >
+                    <div className="rounded-md border p-4">
+                      <div className="flex items-start gap-3">
+                        <RadioGroupItem
+                          id="delete-instance-transfer"
+                          value="transfer"
+                          disabled={transferTargets.length === 0}
+                          className="mt-1"
+                        />
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <Label htmlFor="delete-instance-transfer" className="flex items-center gap-2">
+                            <ArrowRight className="h-4 w-4" />
+                            Transferir leads
+                          </Label>
+                          <Select
+                            value={deleteTransferTarget}
+                            onValueChange={setDeleteTransferTarget}
+                            disabled={deleteLeadAction !== "transfer" || transferTargets.length === 0}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecione a instancia de destino" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {transferTargets.map((instance) => (
+                                <SelectItem key={instance.instanceName} value={instance.instanceName}>
+                                  {instance.instanceName} ({instance.leadCount ?? 0} leads)
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {transferTargets.length === 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              Nao ha outra instancia ativa do usuario para receber esses leads.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-destructive/30 p-4">
+                      <div className="flex items-start gap-3">
+                        <RadioGroupItem id="delete-instance-delete-leads" value="delete" className="mt-1" />
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <Label htmlFor="delete-instance-delete-leads" className="flex items-center gap-2">
+                            <Eraser className="h-4 w-4" />
+                            Apagar leads
+                          </Label>
+                          <Input
+                            value={deleteConfirmation}
+                            onChange={(event) => setDeleteConfirmation(event.target.value)}
+                            disabled={deleteLeadAction !== "delete"}
+                            placeholder='Digite "apagar"'
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </RadioGroup>
+                </>
+              ) : (
+                <Alert>
+                  <Trash2 className="h-4 w-4" />
+                  <AlertTitle>Nenhum lead ativo</AlertTitle>
+                  <AlertDescription>
+                    Esta instancia sera removida da lista e o setup sera cancelado no CRM.
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={resetDeleteDialog} disabled={Boolean(busyAction)}>
+              Cancelar
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={!canConfirmDelete}>
+              {busyAction === `delete:${instancePendingDelete?.instanceName}` ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : null}
+              Excluir instancia
             </Button>
           </DialogFooter>
         </DialogContent>
