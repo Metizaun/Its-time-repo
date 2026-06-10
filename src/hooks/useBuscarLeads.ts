@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { notifyLeadsUpdated } from "@/hooks/useLeads";
+import { postCrmBackend } from "@/services/crmBackend";
 
 export type BuscarLeadResult = {
   externalId?: string;
@@ -54,44 +54,7 @@ type BuscarFunctionPayload =
   | { action: "status"; runId: string; payload: BuscarLeadsStartPayload };
 
 async function callBuscarFunction<T>(payload: BuscarFunctionPayload): Promise<T> {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) {
-    throw new Error(sessionError.message || "Nao foi possivel validar a sessao");
-  }
-
-  const accessToken = sessionData.session?.access_token;
-  if (!accessToken) {
-    throw new Error("Sessao expirada. Faca login novamente.");
-  }
-
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Configuracao do Supabase ausente no frontend");
-  }
-
-  const response = await fetch(`${supabaseUrl}/functions/v1/buscar-leads`, {
-    method: "POST",
-    headers: {
-      apikey: supabaseAnonKey,
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    const backendMessage =
-      typeof data?.error === "string"
-        ? data.error
-        : typeof data?.message === "string"
-          ? data.message
-          : null;
-    throw new Error(backendMessage ?? `Erro ao executar busca (${response.status})`);
-  }
-
-  return (data ?? {}) as T;
+  return postCrmBackend<T>("/api/buscar-leads", payload);
 }
 
 export function useBuscarLeads() {

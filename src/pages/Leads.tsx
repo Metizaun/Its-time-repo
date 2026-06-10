@@ -18,6 +18,7 @@ import EditLeadModal from "@/components/modals/EditLeadModal";
 import { Lead } from "@/hooks/useLeads";
 import { downloadLeadImportTemplate, exportToCSV, exportGenericToCSV } from "@/lib/utils/export";
 import { supabase } from "@/integrations/supabase/client";
+import { getCrmBackend } from "@/services/crmBackend";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { DateRange } from "react-day-picker";
@@ -34,6 +35,12 @@ import {
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Erro inesperado";
 }
+
+type CrmProfileResponse = {
+  profile?: {
+    aces_id: number;
+  };
+};
 
 export default function Leads() {
   const { leads, loading, refetch } = useLeads({ enableRealtime: false });
@@ -102,25 +109,8 @@ export default function Leads() {
 
   const handleExport = async () => {
     try {
-      // 1. Obter o usuário autenticado
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      
-      if (userError || !user) {
-        throw new Error("Erro ao obter usuário autenticado");
-      }
-
-      // 2. Buscar o aces_id do usuário
-      const { data: userData, error: userDataError } = await supabase
-        .from('users')
-        .select('aces_id')
-        .eq('auth_user_id', user.id)
-        .single();
-
-      if (userDataError) {
-        throw new Error("Erro ao buscar dados do usuário");
-      }
-
-      const acesId = userData?.aces_id;
+      const { profile } = await getCrmBackend<CrmProfileResponse>("/api/crm/profile");
+      const acesId = profile?.aces_id;
 
       // 3. Verificar se é o aces_id especial (535)
       if (acesId === 535) {

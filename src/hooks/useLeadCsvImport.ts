@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
 import { notifyLeadsUpdated } from "@/hooks/useLeads";
+import { postCrmBackend } from "@/services/crmBackend";
 
 const REQUIRED_HEADERS = ["nome", "telefone"] as const;
 const PREVIEW_LIMIT = 8;
@@ -95,45 +95,7 @@ async function callImportLeadsCsvFunction(
     importOptions: { stageId: string; source: string; ownerId: string; instanceName: string };
   }
 ) {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) {
-    throw new Error(sessionError.message || "Nao foi possivel validar a sessao");
-  }
-
-  const accessToken = sessionData.session?.access_token;
-  if (!accessToken) {
-    throw new Error("Sessao expirada. Faca login novamente.");
-  }
-
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Configuracao do Supabase ausente no frontend");
-  }
-
-  const response = await fetch(`${supabaseUrl}/functions/v1/import-leads-csv`, {
-    method: "POST",
-    headers: {
-      apikey: supabaseAnonKey,
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    const backendMessage =
-      typeof data?.error === "string"
-        ? data.error
-        : typeof data?.message === "string"
-          ? data.message
-          : null;
-
-    throw new Error(backendMessage ?? `Erro ao importar CSV (${response.status})`);
-  }
-
-  return (data ?? {}) as ImportLeadsCsvResponse;
+  return postCrmBackend<ImportLeadsCsvResponse>("/api/leads/import-csv", body);
 }
 
 export function useLeadCsvImport() {

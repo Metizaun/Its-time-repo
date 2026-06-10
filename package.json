@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
+    "dev:frontend": "vite",
+    "dev:backend": "npm --prefix Project/IA run dev",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",

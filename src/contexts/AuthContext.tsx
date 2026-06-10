@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, ReactNode, useRef } fro
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { getCrmBackend } from "@/services/crmBackend";
 
 type UserRole = "NENHUM" | "VENDEDOR" | "ADMIN";
 
@@ -17,11 +18,24 @@ interface AuthContextType {
   isPendingApproval: boolean;
 }
 
+type CrmProfileResponse = {
+  profile?: {
+    id: string;
+    aces_id: number;
+    role: UserRole;
+    name: string | null;
+  };
+};
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 function parseAcesId(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseUserRole(value: unknown): UserRole | null {
+  return value === "ADMIN" || value === "VENDEDOR" || value === "NENHUM" ? value : null;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -32,31 +46,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const claimsRefreshAttemptRef = useRef<string | null>(null);
 
+  const applySessionSnapshot = (currentSession: Session | null) => {
+    setSession(currentSession);
+    setUser(currentSession?.user ?? null);
+    setProfileName(currentSession?.user?.user_metadata?.name ?? null);
+
+    const roleFromClaims = parseUserRole(currentSession?.user?.app_metadata?.crm_role);
+    if (roleFromClaims) {
+      setUserRole(roleFromClaims);
+    } else if (!currentSession?.user) {
+      setUserRole(null);
+    }
+  };
+
   const fetchUserProfileBackground = async (userId: string, currentSession?: Session | null) => {
     try {
-      const { data, error } = await supabase
-        .from("users")
-        .select("id, aces_id, role, name")
-        .eq("auth_user_id", userId)
-        .maybeSingle();
+      const { profile } = await getCrmBackend<CrmProfileResponse>("/api/crm/profile");
 
-      if (!error && data) {
-        setUserRole(data.role as UserRole);
-        setProfileName(data.name ?? null);
+      if (profile) {
+        setUserRole(profile.role);
+        setProfileName(profile.name ?? null);
 
         const appMetadata = currentSession?.user?.app_metadata ?? {};
         const tokenAcesId = parseAcesId(appMetadata.aces_id);
         const claimsOutOfSync =
-          appMetadata.crm_user_id !== data.id ||
-          appMetadata.crm_role !== data.role ||
-          tokenAcesId !== data.aces_id;
+          appMetadata.crm_user_id !== profile.id ||
+          appMetadata.crm_role !== profile.role ||
+          tokenAcesId !== profile.aces_id;
 
         if (!claimsOutOfSync) {
           claimsRefreshAttemptRef.current = null;
           return;
         }
 
-        const refreshKey = `${userId}:${data.id}:${data.aces_id}:${data.role}`;
+        const refreshKey = `${userId}:${profile.id}:${profile.aces_id}:${profile.role}`;
         if (currentSession?.refresh_token && claimsRefreshAttemptRef.current !== refreshKey) {
           claimsRefreshAttemptRef.current = refreshKey;
           await supabase.auth.refreshSession();
@@ -65,10 +88,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (!error && !data) {
-        claimsRefreshAttemptRef.current = null;
-        setUserRole(null);
-      }
+      claimsRefreshAttemptRef.current = null;
+      setUserRole(null);
     } catch (error) {
       console.error("Erro silencioso ao buscar perfil:", error);
     }
@@ -84,9 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } = await supabase.auth.getSession();
 
         if (mounted) {
-          setSession(currentSession);
-          setUser(currentSession?.user ?? null);
-          setProfileName(currentSession?.user?.user_metadata?.name ?? null);
+          applySessionSnapshot(currentSession);
           setLoading(false);
 
           if (currentSession?.user) {
@@ -106,9 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
       if (!mounted) return;
 
-      setSession(currentSession);
-      setUser(currentSession?.user ?? null);
-      setProfileName(currentSession?.user?.user_metadata?.name ?? null);
+      applySessionSnapshot(currentSession);
       setLoading(false);
 
       if (currentSession?.user) {
