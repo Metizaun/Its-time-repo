@@ -108,7 +108,7 @@ export default function Chat() {
           // Estado vazio (nenhum chat selecionado)
           <div className="flex-1 flex items-center justify-center">
             <div className="flex flex-col items-center gap-5">
-              <div className="w-20 h-20 rounded-full bg-transparent border border-t-2 border-t-[var(--color-accent)] border-[var(--color-border-subtle)] flex items-center justify-center shadow-[0_8px_32px_rgba(229,57,58,0.08)]">
+              <div className="w-20 h-20 rounded-full bg-[var(--color-surface-1)] border border-[var(--border-default)] flex items-center justify-center shadow-sm">
                 <MessageSquare className="w-9 h-9 text-[var(--color-text-secondary)]" />
               </div>
               <div className="text-center space-y-1">

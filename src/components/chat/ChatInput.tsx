@@ -46,8 +46,8 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const canSend = message.trim() && !isLoading && !disabled;
 
   return (
-    <div className="w-full px-5 py-4 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)]">
-      <div className="relative flex items-end gap-2 bg-[var(--color-border-subtle)] border border-[var(--color-border-subtle)] rounded-[20px] px-4 py-2 transition-all duration-200 focus-within:border-[var(--color-border-medium)]">
+    <div className="w-full border-t border-[var(--border-default)] bg-[var(--color-surface-1)] px-5 py-4">
+      <div className="relative flex items-end gap-2 rounded-[20px] border border-[var(--border-input)] bg-[var(--color-surface-2)] px-4 py-2 shadow-inset transition-all duration-200 focus-within:border-[var(--border-focus)] focus-within:shadow-focus">
         <textarea
           ref={textareaRef}
           value={message}
@@ -56,23 +56,19 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           placeholder="Digite sua mensagem..."
           disabled={disabled || isLoading}
           rows={1}
-          className="min-h-[24px] max-h-[150px] w-full resize-none border-0 shadow-none bg-transparent py-3 px-1 text-sm text-foreground placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-0"
-          style={{ outline: "none" }}
+          className="min-h-[24px] max-h-[150px] w-full resize-none border-0 bg-transparent px-1 py-3 text-sm text-[var(--color-gray-700)] shadow-none placeholder:text-[var(--color-gray-500)] focus:outline-none focus:ring-0"
         />
         <button
           onClick={handleSend}
           disabled={!canSend}
           className={`rounded-full w-9 h-9 shrink-0 mb-1 flex items-center justify-center transition-all duration-200 ${
             canSend 
-              ? "bg-[var(--color-accent)] hover:brightness-110 text-white shadow-[0_2px_8px_rgba(229,57,58,0.25)] scale-100 opacity-100" 
-              : "bg-[var(--color-border-subtle)] text-[var(--color-text-secondary)] scale-90 opacity-50"
+              ? "scale-100 bg-[var(--color-primary-500)] text-[var(--color-surface-1)] opacity-100 shadow-primary hover:bg-[var(--color-primary-600)]"
+              : "scale-90 bg-[var(--color-bg-muted)] text-[var(--color-gray-400)] opacity-50"
           }`}
         >
           <SendHorizontal className="h-4 w-4 ml-0.5" />
         </button>
-      </div>
-      <div className="text-center mt-2">
-        <p className="text-[10px] text-[var(--color-text-secondary)] opacity-40">Enter para enviar, Shift + Enter para quebrar linha</p>
       </div>
     </div>
   );

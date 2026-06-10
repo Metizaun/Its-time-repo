@@ -123,7 +123,7 @@ export default function Automacao() {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => handleCreateAutomation(null)}
-            className="flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(229,57,58,0.25)] transition-all duration-200 hover:brightness-110"
+            className="flex items-center gap-2 rounded-xl bg-[var(--color-primary-500)] px-4 py-2 text-sm font-semibold text-[var(--color-surface-1)] shadow-primary transition-all duration-200 hover:bg-[var(--color-primary-600)]"
           >
             <Plus className="h-4 w-4" />
             Nova automacao
@@ -131,7 +131,7 @@ export default function Automacao() {
         </div>
       </div>
 
-      <Card className="rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-transparent p-5 shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-6">
+      <Card className="rounded-[24px] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-5 shadow-sm sm:p-6">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border-medium)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
@@ -192,7 +192,7 @@ export default function Automacao() {
           </div>
         </div>
       ) : stages.length === 0 ? (
-        <Card className="rounded-[24px] border border-dashed border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-transparent p-8 text-center text-sm text-[var(--color-text-secondary)] shadow-[0_8px_32px_rgba(229,57,58,0.04)] sm:p-10">
+        <Card className="rounded-[24px] border border-dashed border-[var(--border-default)] bg-[var(--color-surface-1)] p-8 text-center text-sm text-[var(--color-gray-600)] shadow-sm sm:p-10">
           Nenhuma etapa do pipeline foi cadastrada ainda. Crie as etapas no CRM antes de montar o Kanban de automacao.
         </Card>
       ) : (

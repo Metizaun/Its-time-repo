@@ -350,7 +350,7 @@
   .topbar {
     position: sticky;
     top: 0;
-    z-index: 100;
+    z-index: 30;
     display: flex;
     height: var(--layout-topbar-height);
     align-items: center;
@@ -639,7 +639,7 @@
     position: fixed;
     top: 50vh;
     left: var(--sidebar-toggle-left);
-    z-index: 50;
+    z-index: 30;
     display: none;
     width: 30px;
     height: 30px;

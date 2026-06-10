@@ -60,7 +60,7 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                 className={cn(
                   "w-full p-3 rounded-xl flex items-center gap-3 transition-all duration-200",
                   isSelected
-                    ? "bg-[var(--color-border-subtle)] border border-[var(--color-border-medium)] border-t-2 border-t-[var(--color-accent)] shadow-[0_4px_16px_rgba(229,57,58,0.06)]"
+                    ? "bg-[var(--color-surface-1)] border border-[var(--color-primary-200)] shadow-sm"
                     : "border border-transparent hover:bg-[var(--color-border-subtle)]"
                 )}
               >

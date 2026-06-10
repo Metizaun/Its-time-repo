@@ -272,11 +272,11 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-[rgba(26,24,20,0.45)] backdrop-blur-sm" onClick={onClose} />
 
       <div
         className={cn(
-          "relative flex flex-col rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-[var(--color-bg-elevated)] shadow-[0_24px_64px_rgba(0,0,0,0.3)] transition-all duration-300",
+          "relative flex flex-col rounded-[24px] border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-modal transition-all duration-300",
           studioExpanded ? "h-[90vh] w-[95vw] max-w-none" : "max-h-[90vh] w-full max-w-xl"
         )}
         onClick={(event) => event.stopPropagation()}
@@ -389,7 +389,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   />
                 </div>
 
-                <div className="rounded-xl border border-[var(--color-border-subtle)] border-t-2 border-t-[var(--color-accent)] bg-transparent px-4 py-3 shadow-[0_4px_16px_rgba(229,57,58,0.04)]">
+                <div className="rounded-xl border border-[var(--border-default)] bg-[var(--color-surface-1)] px-4 py-3 shadow-sm">
                   <p className="text-xs font-semibold text-foreground">{currentPersonality.label}</p>
                   <p className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
                     {currentPersonality.description}
@@ -559,10 +559,10 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                         )
                       }
                       className={cn(
-                        "flex cursor-grab items-center gap-3 rounded-xl border border-[var(--color-border-subtle)] border-t-2 bg-transparent px-3 py-2.5 shadow-[0_4px_12px_rgba(229,57,58,0.03)] transition-all duration-150 hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-border-subtle)] active:cursor-grabbing",
+                        "flex cursor-grab items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-all duration-150 hover:border-[var(--color-primary-200)] hover:bg-[var(--color-bg-subtle)] active:cursor-grabbing",
                         section.required
-                          ? "border-t-[var(--color-accent)]/60"
-                          : "border-t-[var(--color-border-medium)]"
+                          ? "border-[var(--color-primary-200)]"
+                          : "border-[var(--color-border-medium)]"
                       )}
                     >
                       <GripVertical className="h-4 w-4 flex-shrink-0 text-[var(--color-text-muted)]" />
@@ -590,7 +590,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
             <button
               type="submit"
               disabled={saving}
-              className="rounded-xl bg-[var(--color-accent)] px-5 py-2 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(229,57,58,0.3)] transition-all hover:brightness-110 disabled:opacity-50"
+              className="rounded-xl bg-[var(--color-primary-500)] px-5 py-2 text-sm font-semibold text-[var(--color-surface-1)] shadow-primary transition-all hover:bg-[var(--color-primary-600)] disabled:opacity-50"
             >
               {saving ? "Salvando..." : agent ? "Salvar Alteracoes" : "Criar Agente"}
             </button>
