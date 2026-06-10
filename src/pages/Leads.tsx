@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { useEffect, useMemo, useState } from "react";
 import EditLeadModal from "@/components/modals/EditLeadModal";
 import { Lead } from "@/hooks/useLeads";
-import { downloadLeadImportTemplate, exportToCSV, exportGenericToCSV } from "@/lib/utils/export";
+import { exportToCSV, exportGenericToCSV } from "@/lib/utils/export";
 import { supabase } from "@/integrations/supabase/client";
 import { getCrmBackend } from "@/services/crmBackend";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -213,10 +213,6 @@ export default function Leads() {
           <Button variant="outline" onClick={handleExport} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
             <Download className="w-4 h-4 sm:mr-2" />
             <span className="hidden sm:inline">Exportar CSV</span>
-          </Button>
-          <Button variant="outline" onClick={() => downloadLeadImportTemplate()} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
-            <Download className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Modelo CSV</span>
           </Button>
           <Button variant="outline" onClick={() => openModal("IMPORT_LEADS_CSV")} className="text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3">
             <Upload className="w-4 h-4 sm:mr-2" />

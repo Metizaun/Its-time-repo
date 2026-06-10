@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
+  Download,
   FileSpreadsheet,
   Loader2,
   Upload,
@@ -26,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { downloadLeadImportTemplate } from "@/lib/utils/export";
 import {
   Table,
   TableBody,
@@ -205,7 +207,19 @@ export function LeadCsvImportModal({ open, onClose }: LeadCsvImportModalProps) {
             </div>
 
             <div className="space-y-2">
-              <Label>Arquivo CSV</Label>
+              <div className="flex items-center justify-between gap-3">
+                <Label>Arquivo CSV</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => downloadLeadImportTemplate()}
+                  disabled={importing}
+                >
+                  <Download className="h-4 w-4" />
+                  Modelo CSV
+                </Button>
+              </div>
               <div
                 className={[
                   "rounded-lg border border-dashed p-5 transition-colors",

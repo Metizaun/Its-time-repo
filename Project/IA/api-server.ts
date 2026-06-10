@@ -379,13 +379,18 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     const supabaseAdmin = createServiceSupabaseClient();
-    const { data, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("instance")
       .select("instancia, color, aces_id, status, setup_status, created_by")
       .eq("aces_id", context.acesId)
-      .eq("created_by", context.crmUserId)
       .or("setup_status.is.null,setup_status.neq.cancelled")
       .order("instancia");
+
+    if (context.role !== "ADMIN") {
+      query = query.eq("created_by", context.crmUserId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel carregar instancias", error);

@@ -77,7 +77,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
   const [handoffEnabled, setHandoffEnabled] = useState(false);
   const [handoffPrompt, setHandoffPrompt] = useState("");
   const [handoffTargetPhone, setHandoffTargetPhone] = useState("");
-  const [handoffEditorOpen, setHandoffEditorOpen] = useState(false);
+  const [handoffConfigOpen, setHandoffConfigOpen] = useState(false);
   const [testingHandoff, setTestingHandoff] = useState(false);
 
   const [studioExpanded, setStudioExpanded] = useState(false);
@@ -109,7 +109,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
       setHandoffEnabled(Boolean(agent.handoff_enabled));
       setHandoffPrompt(agent.handoff_prompt ?? "");
       setHandoffTargetPhone(agent.handoff_target_phone ?? "");
-      setHandoffEditorOpen(Boolean(agent.handoff_enabled));
+      setHandoffConfigOpen(false);
 
       const idx = PERSONALITY_LEVELS.reduce((best, level, index) => {
         return Math.abs(level.temperature - agent.temperature) <
@@ -126,7 +126,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
       setHandoffEnabled(false);
       setHandoffPrompt("");
       setHandoffTargetPhone("");
-      setHandoffEditorOpen(false);
+      setHandoffConfigOpen(false);
     }
 
     setStudioExpanded(false);
@@ -189,13 +189,13 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
     }
 
     if (handoffEnabled && !handoffPrompt.trim()) {
-      setHandoffEditorOpen(true);
+      setHandoffConfigOpen(true);
       toast.error("Defina quando a IA deve fazer o handoff.");
       return;
     }
 
     if (handoffEnabled && !handoffTargetPhone.trim()) {
-      setHandoffEditorOpen(true);
+      setHandoffConfigOpen(true);
       toast.error("Informe o numero que vai receber o handoff.");
       return;
     }
@@ -276,8 +276,8 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
 
       <div
         className={cn(
-          "relative flex flex-col rounded-[24px] border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-modal transition-all duration-300",
-          studioExpanded ? "h-[90vh] w-[95vw] max-w-none" : "max-h-[90vh] w-full max-w-xl"
+          "relative flex max-h-[90vh] flex-col rounded-[24px] border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-modal transition-all duration-300",
+          studioExpanded ? "h-[90vh] w-[95vw] max-w-7xl" : "w-full max-w-xl"
         )}
         onClick={(event) => event.stopPropagation()}
       >
@@ -300,13 +300,26 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex flex-1 overflow-hidden">
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 overflow-hidden",
+              studioExpanded ? "flex-col lg:flex-row" : "flex-col"
+            )}
+          >
             <div
               className={cn(
-                "flex flex-col gap-5 overflow-y-auto p-6",
-                studioExpanded ? "w-3/4 border-r border-[var(--color-border-subtle)]" : "w-full"
+                "flex min-h-0 flex-col gap-5 p-6",
+                studioExpanded
+                  ? "flex-1 overflow-hidden border-b border-[var(--color-border-subtle)] lg:w-[72%] lg:border-b-0 lg:border-r"
+                  : "w-full overflow-y-auto"
               )}
             >
+              <div
+                className={cn(
+                  "grid-cols-1 gap-5",
+                  studioExpanded ? "hidden" : "grid"
+                )}
+              >
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                   Nome do Agente
@@ -349,7 +362,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                 ) : null}
               </div>
 
-              <div className="flex flex-col gap-3">
+              <div className={cn("flex flex-col gap-3", studioExpanded && "xl:col-span-2")}>
                 <div>
                   <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                     Estilo de Abordagem
@@ -400,15 +413,14 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3 rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]/60 p-4">
+              <div className={cn("rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]/60 p-4", studioExpanded && "xl:col-span-2")}>
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                       Handoff Humano
                     </label>
                     <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
-                      Liga um disparo interno no WhatsApp quando a IA identificar a condicao
-                      definida por voce.
+                      Configure um alerta interno no WhatsApp para transferencia humana.
                     </p>
                     <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
                       {handoffEnabled
@@ -427,77 +439,29 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                       onCheckedChange={(checked) => {
                         setHandoffEnabled(checked);
                         if (checked) {
-                          setHandoffEditorOpen(true);
+                          setHandoffConfigOpen(true);
                         }
                       }}
                       aria-label="Ativar handoff humano"
                     />
                     <button
                       type="button"
-                      onClick={() => setHandoffEditorOpen((current) => !current)}
+                      onClick={() => setHandoffConfigOpen(true)}
                       className="rounded-xl border border-[var(--color-border-medium)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-border-subtle)] hover:text-foreground"
                     >
-                      {handoffEditorOpen ? "Fechar" : "Editar"}
+                      Configurar
                     </button>
                   </div>
                 </div>
-
-                {handoffEditorOpen ? (
-                  <div className="grid gap-3 border-t border-[var(--color-border-subtle)] pt-3">
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                        Quando a IA Deve Fazer o Handoff
-                      </label>
-                      <textarea
-                        value={handoffPrompt}
-                        onChange={(event) => setHandoffPrompt(event.target.value)}
-                        placeholder="Ex: Acione o handoff quando o lead pedir atendimento humano, reclamar, pedir desconto fora da politica ou demonstrar urgencia alta."
-                        className="min-h-[110px] w-full resize-y rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
-                      />
-                      <p className="text-[10px] text-[var(--color-text-muted)]">
-                        Escreva em linguagem natural as situacoes que exigem transferencia para uma pessoa.
-                      </p>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                        Numero para Receber o Handoff
-                      </label>
-                      <input
-                        type="text"
-                        value={handoffTargetPhone}
-                        onChange={(event) => setHandoffTargetPhone(event.target.value)}
-                        placeholder="Ex: 5511999999999"
-                        className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
-                      />
-                      <p className="text-[10px] text-[var(--color-text-muted)]">
-                        Esse numero recebe o alerta interno disparado pela Evolution.
-                      </p>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)]/60 px-4 py-3">
-                      <div>
-                        <p className="text-xs font-semibold text-foreground">Teste de envio</p>
-                        <p className="text-[11px] text-[var(--color-text-secondary)]">
-                          Valida a instancia, o numero informado e o disparo real do handoff.
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={handleTestHandoff}
-                        disabled={testingHandoff || !instanceName || !handoffTargetPhone.trim()}
-                        className="inline-flex items-center gap-2 rounded-xl border border-[var(--color-border-medium)] px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-[var(--color-border-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {testingHandoff ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        {testingHandoff ? "Testando..." : "Testar envio"}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
+              </div>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+              <div
+                className={cn(
+                  "flex flex-col gap-1.5",
+                  studioExpanded ? "min-h-0 flex-1" : "min-h-[320px]"
+                )}
+              >
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                     Instrucoes do Agente
@@ -531,15 +495,15 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   required
                   className={cn(
                     "w-full resize-none rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm leading-relaxed text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none",
-                    studioExpanded ? "h-full flex-1" : "h-48"
+                    studioExpanded ? "min-h-[360px] flex-1" : "min-h-[280px]"
                   )}
                 />
               </div>
             </div>
 
             {studioExpanded ? (
-              <div className="flex w-1/4 flex-col overflow-hidden bg-[var(--color-bg-surface)]">
-                <div className="border-b border-[var(--color-border-subtle)] px-4 py-3">
+              <div className="flex max-h-[34vh] min-h-0 flex-col overflow-hidden bg-[var(--color-bg-surface)] lg:max-h-none lg:w-[28%]">
+                <div className="flex-shrink-0 border-b border-[var(--color-border-subtle)] px-4 py-3">
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                     Blocos de Instrucao
                   </p>
@@ -597,6 +561,118 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
           </div>
         </form>
       </div>
+
+      {handoffConfigOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-[rgba(26,24,20,0.35)] backdrop-blur-sm"
+            onClick={() => setHandoffConfigOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="handoff-config-title"
+            className="relative flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-[24px] border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--color-border-subtle)] px-6 py-4">
+              <div>
+                <h3 id="handoff-config-title" className="text-base font-bold text-foreground">
+                  Configuracao rapida de handoff
+                </h3>
+                <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                  Defina quando a IA deve transferir e qual numero recebe o alerta.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setHandoffConfigOpen(false)}
+                className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-border-medium)] transition-colors hover:bg-[var(--color-border-subtle)]"
+                aria-label="Fechar configuracao de handoff"
+              >
+                <X className="h-4 w-4 text-[var(--color-text-secondary)]" />
+              </button>
+            </div>
+
+            <div className="grid gap-4 overflow-y-auto px-6 py-5">
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]/60 px-4 py-3">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Handoff humano</p>
+                  <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
+                    {handoffEnabled ? "Ativo para este agente." : "Desativado para este agente."}
+                  </p>
+                </div>
+                <Switch
+                  checked={handoffEnabled}
+                  onCheckedChange={setHandoffEnabled}
+                  aria-label="Ativar handoff humano"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                  Quando a IA Deve Fazer o Handoff
+                </label>
+                <textarea
+                  value={handoffPrompt}
+                  onChange={(event) => setHandoffPrompt(event.target.value)}
+                  placeholder="Ex: Acione o handoff quando o lead pedir atendimento humano, reclamar, pedir desconto fora da politica ou demonstrar urgencia alta."
+                  className="min-h-[150px] w-full resize-y rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
+                />
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  Escreva em linguagem natural as situacoes que exigem transferencia para uma pessoa.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                  Numero para Receber o Handoff
+                </label>
+                <input
+                  type="text"
+                  value={handoffTargetPhone}
+                  onChange={(event) => setHandoffTargetPhone(event.target.value)}
+                  placeholder="Ex: 5511999999999"
+                  className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
+                />
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  Esse numero recebe o alerta interno disparado pela Evolution.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)]/60 px-4 py-3">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Teste de envio</p>
+                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                    Valida a instancia, o numero informado e o disparo real do handoff.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleTestHandoff}
+                  disabled={testingHandoff || !instanceName || !handoffTargetPhone.trim()}
+                  className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl border border-[var(--color-border-medium)] px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-[var(--color-border-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {testingHandoff ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {testingHandoff ? "Testando..." : "Testar envio"}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-[var(--color-border-subtle)] px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setHandoffConfigOpen(false)}
+                className="rounded-xl px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-border-subtle)] hover:text-foreground"
+              >
+                Concluir
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
