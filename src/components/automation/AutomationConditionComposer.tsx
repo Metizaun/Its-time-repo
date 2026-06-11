@@ -389,9 +389,6 @@ export function AutomationConditionComposer({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-1">
           <h3 className="font-semibold">{title}</h3>
-          {!compact ? (
-            <p className="text-sm text-muted-foreground">Escolha apenas as condicoes que fazem sentido para a jornada.</p>
-          ) : null}
         </div>
 
         <Select value={analysis.operator} onValueChange={handleOperatorChange}>
@@ -462,7 +459,6 @@ export function AutomationConditionComposer({
                   </div>
 
                   <div className="flex items-center justify-between gap-3 lg:flex-col lg:items-end">
-                    {!compact ? <p className="text-xs text-muted-foreground">{definition?.description}</p> : <span />}
                     <Button
                       variant="ghost"
                       size="icon"

@@ -353,9 +353,6 @@ function AutomationMessageStepCard({
       <div className="relative z-10 flex h-full flex-col">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-gray-500)]">
-              {timingLabel}
-            </p>
             <p className="mt-2 line-clamp-2 text-base font-bold leading-tight text-[var(--color-gray-900)]">
               {title}
             </p>
@@ -370,9 +367,6 @@ function AutomationMessageStepCard({
           </div>
         </div>
 
-        <div className="mt-3 inline-flex w-fit rounded-full border border-[var(--border-default)] bg-[var(--color-bg-subtle)] px-2 py-0.5 text-[10px] text-[var(--color-gray-600)]">
-          Mensagem
-        </div>
         <p className="mt-4 line-clamp-4 text-sm leading-relaxed text-[var(--color-gray-600)]">{preview}</p>
 
         <div className="mt-auto flex items-end justify-between gap-3 border-t border-[var(--border-default)] pt-3">
@@ -431,7 +425,7 @@ function AutomationMessageEditorDialog({
         </DialogHeader>
 
         <div className="space-y-5 px-6 py-6">
-          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_150px_150px]">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1.6fr)_170px_110px_120px]">
             <div className="space-y-2">
               <Label htmlFor="step-label" className="text-[var(--color-gray-600)]">
                 Nome interno
@@ -463,51 +457,50 @@ function AutomationMessageEditorDialog({
               </Select>
             </div>
 
-            <div className="flex items-end">
-              <div className="w-full rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-3 text-sm text-[var(--color-gray-600)]">
-                {formatTimingSummary(currentStepDelayMinutes, journeyAnchorEvent)}
-              </div>
-            </div>
+            {stepForm.timing_mode === "after" ? (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="step-delay" className="text-[var(--color-gray-600)]">
+                    Tempo
+                  </Label>
+                  <Input
+                    id="step-delay"
+                    type="number"
+                    min={1}
+                    value={stepForm.delay_value}
+                    onChange={(event) =>
+                      onStepFormChange((previous) => ({ ...previous, delay_value: event.target.value }))
+                    }
+                    className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-[var(--color-gray-600)]">Unidade</Label>
+                  <Select
+                    value={stepForm.delay_unit}
+                    onValueChange={(value: AutomationTimeUnit) =>
+                      onStepFormChange((previous) => ({ ...previous, delay_unit: value }))
+                    }
+                  >
+                    <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="minute">min</SelectItem>
+                      <SelectItem value="hour">hora</SelectItem>
+                      <SelectItem value="day">dia</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="hidden md:block" />
+                <div className="hidden md:block" />
+              </>
+            )}
           </div>
-
-          {stepForm.timing_mode === "after" ? (
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_160px]">
-              <div className="space-y-2">
-                <Label htmlFor="step-delay" className="text-[var(--color-gray-600)]">
-                  Tempo
-                </Label>
-                <Input
-                  id="step-delay"
-                  type="number"
-                  min={1}
-                  value={stepForm.delay_value}
-                  onChange={(event) =>
-                    onStepFormChange((previous) => ({ ...previous, delay_value: event.target.value }))
-                  }
-                  className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-[var(--color-gray-600)]">Unidade</Label>
-                <Select
-                  value={stepForm.delay_unit}
-                  onValueChange={(value: AutomationTimeUnit) =>
-                    onStepFormChange((previous) => ({ ...previous, delay_unit: value }))
-                  }
-                >
-                  <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="minute">min</SelectItem>
-                    <SelectItem value="hour">hora</SelectItem>
-                    <SelectItem value="day">dia</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="step-message" className="text-[var(--color-gray-600)]">
@@ -525,57 +518,58 @@ function AutomationMessageEditorDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-3 rounded-[22px] border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="font-medium text-[var(--color-gray-900)]">Mensagem ativa</p>
-              <p className="text-xs text-[var(--color-gray-500)]">Mensagens inativas ficam no fluxo, mas nao disparam.</p>
-            </div>
-            <Switch
-              checked={stepForm.is_active}
-              onCheckedChange={(checked) => onStepFormChange((previous) => ({ ...previous, is_active: checked }))}
-            />
-          </div>
-
-          <div className="rounded-[22px] border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="font-medium text-[var(--color-gray-900)]">Condicao extra</p>
-                <p className="text-xs text-[var(--color-gray-500)]">Use apenas se essa mensagem depender de uma regra adicional.</p>
+          <div className="border-t border-[var(--border-default)]">
+            <div className="flex items-center justify-between gap-4 py-4">
+              <div className="min-w-0">
+                <p className="font-medium text-[var(--color-gray-900)]">Mensagem ativa</p>
               </div>
               <Switch
-                checked={stepForm.step_rule_enabled}
-                onCheckedChange={(checked) =>
-                  onStepFormChange((previous) => ({ ...previous, step_rule_enabled: checked }))
-                }
+                checked={stepForm.is_active}
+                onCheckedChange={(checked) => onStepFormChange((previous) => ({ ...previous, is_active: checked }))}
               />
             </div>
 
-            {stepForm.step_rule_enabled ? (
-              <div className="mt-4">
-                <AutomationConditionComposer
-                  title="Regras da mensagem"
-                  compact
-                  value={stepForm.step_rule}
-                  onChange={(nextValue) =>
-                    onStepFormChange((previous) => ({ ...previous, step_rule: nextValue }))
+            <div className="border-t border-[var(--border-default)]/70">
+              <div className="flex items-center justify-between gap-4 py-4">
+                <div className="min-w-0">
+                  <p className="font-medium text-[var(--color-gray-900)]">Regras adicionais</p>
+                </div>
+                <Switch
+                  checked={stepForm.step_rule_enabled}
+                  onCheckedChange={(checked) =>
+                    onStepFormChange((previous) => ({ ...previous, step_rule_enabled: checked }))
                   }
-                  stages={stages}
-                  tags={tags}
-                  leadSources={leadSources}
-                  instances={instances}
                 />
               </div>
-            ) : null}
+
+              {stepForm.step_rule_enabled ? (
+                <div className="pb-2">
+                  <AutomationConditionComposer
+                    title="Regras da mensagem"
+                    compact
+                    value={stepForm.step_rule}
+                    onChange={(nextValue) =>
+                      onStepFormChange((previous) => ({ ...previous, step_rule: nextValue }))
+                    }
+                    stages={stages}
+                    tags={tags}
+                    leadSources={leadSources}
+                    instances={instances}
+                  />
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
 
-        <DialogFooter className="border-t border-[var(--border-default)] bg-[var(--color-bg-subtle)] px-6 py-4">
+        <DialogFooter className="border-t border-[var(--border-default)] bg-transparent px-6 py-4">
           <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
               {stepForm.id && onDelete ? (
                 <Button
                   variant="outline"
                   onClick={onDelete}
+                  className="h-10 shadow-none"
                 >
                   <Trash2 className="h-4 w-4" />
                   Remover
@@ -583,15 +577,16 @@ function AutomationMessageEditorDialog({
               ) : null}
               {stepForm.id ? (
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   onClick={onCancelEdit}
+                  className="h-10 text-[var(--color-gray-700)]"
                 >
                   Cancelar edicao
                 </Button>
               ) : null}
             </div>
 
-            <Button onClick={onSave} disabled={savingStep}>
+            <Button onClick={onSave} disabled={savingStep} className="h-10 shadow-none">
               <Save className="h-4 w-4" />
               {savingStep ? "Salvando..." : journeySaved ? (stepForm.id ? "Salvar mensagem" : "Adicionar mensagem") : "Salvar rascunho"}
             </Button>
@@ -981,9 +976,6 @@ export function AutomationMessageModal({
                 <Workflow className="h-5 w-5" />
                 {journeyForm.id ? "Editar automacao" : "Nova automacao"}
               </DialogTitle>
-              <p className="text-sm text-muted-foreground">
-                Monte a jornada em linguagem simples, sem precisar pensar na logica interna.
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1107,6 +1099,7 @@ export function AutomationMessageModal({
                     tags={tags}
                     leadSources={leadSources}
                     instances={instances}
+                    compact
                   />
 
                   <div className="max-w-md divide-y divide-border/70">
@@ -1326,17 +1319,6 @@ export function AutomationMessageModal({
                             >
                               {messageFlow.parkedCount}
                             </button>
-
-                            <button
-                              type="button"
-                              onClick={openNewStepEditor}
-                              className="text-left transition-opacity hover:opacity-100"
-                            >
-                              <span className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-gray-500)]">
-                                No fim
-                              </span>
-                              <span className="block text-xs text-[var(--color-gray-600)]">Nova mensagem</span>
-                            </button>
                           </div>
                         </div>
                       </div>
@@ -1373,7 +1355,7 @@ export function AutomationMessageModal({
 
                     <AutomationRuleBuilder
                       title="Regra de entrada"
-                      description="Modo tecnico para revisar ou editar a regra completa."
+                      description=""
                       value={journeyForm.entry_rule}
                       onChange={(nextValue) => handleJourneyFieldChange("entry_rule", nextValue)}
                       stages={stages}
@@ -1384,7 +1366,7 @@ export function AutomationMessageModal({
 
                     <AutomationRuleBuilder
                       title="Regra de saida"
-                      description="Modo tecnico para revisar ou editar a regra completa."
+                      description=""
                       value={journeyForm.exit_rule}
                       onChange={(nextValue) => handleJourneyFieldChange("exit_rule", nextValue)}
                       stages={stages}

@@ -861,7 +861,32 @@
   }
 
   .dashboard-filter--instance {
-    width: 210px;
+    width: 240px;
+    min-width: 240px;
+  }
+
+  .dashboard-filter-content {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+  }
+
+  .dashboard-filter-icon {
+    width: var(--space-4);
+    height: var(--space-4);
+    flex-shrink: 0;
+  }
+
+  .dashboard-filter-value {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .dashboard-filter--period {
@@ -1493,6 +1518,7 @@
   .dashboard-filter--instance,
   .dashboard-filter--period {
     width: 100%;
+    min-width: 0;
   }
 
   .funnel-wrapper {

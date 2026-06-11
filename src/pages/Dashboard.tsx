@@ -202,9 +202,11 @@ export default function Dashboard() {
         <div className="dashboard-filters">
           <Select value={selectedInstance} onValueChange={setSelectedInstance} disabled={instancesLoading}>
             <SelectTrigger className="dashboard-filter-trigger dashboard-filter--instance">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <Building2 className="w-4 h-4" />
-                <SelectValue placeholder="Todas as instancias" />
+              <div className="dashboard-filter-content">
+                <Building2 className="dashboard-filter-icon" />
+                <span className="dashboard-filter-value">
+                  <SelectValue placeholder="Todas as instancias" />
+                </span>
               </div>
             </SelectTrigger>
             <SelectContent>
