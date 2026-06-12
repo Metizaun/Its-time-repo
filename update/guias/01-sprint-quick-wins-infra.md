@@ -24,14 +24,14 @@ Tarefas de referencia:
 - `src/pages/Leads.tsx` mostra botao separado "Modelo CSV".
 - `src/components/modals/LeadCsvImportModal.tsx` concentra o fluxo real de importacao CSV.
 - `src/lib/utils/export.ts` ja possui `downloadLeadImportTemplate()`.
-- Supabase ja e usado no frontend/backend, mas nao ha bucket/documentacao de anexos do chat.
+- Supabase ja e usado no frontend/backend, mas nao havia bucket/documentacao de anexos do chat antes da execucao do Sprint 1.6.
 - O chat atual envia apenas texto pelo backend (`/api/chat/send-manual`); o fluxo de arquivo local do usuario ainda nao esta implementado.
 - A Evolution API e o provedor operacional atual para envio manual, mas ainda falta contrato de midia/anexo no provider.
 
 ### O que precisa ser criado ou ajustado
 
 - Criar migration de Storage apenas na execucao real da sprint.
-- Definir bucket privado para anexos do chat.
+- Definir bucket privado `chat-attachments` para anexos do chat, com limite de 100 MB e MIME types de imagens, audios, PDF, TXT e documentos comuns.
 - Documentar o fluxo alvo: arquivo do PC do usuario -> frontend seleciona -> backend valida lead/instancia/usuario -> Storage privado -> backend chama Evolution API para enviar a midia -> historico do chat exibe mensagem/anexo.
 - Deixar explicito que o Sprint 1.6 nao entrega ainda a UI de upload nem o envio real de midia; isso depende dos contratos do Sprint 2 e da interface do Sprint 3.
 - Mover o download do modelo para dentro do modal de importacao.
@@ -58,7 +58,7 @@ Tarefas de referencia:
 - Agentes: manter `studioExpanded`, mas garantir que modal expandido tenha dimensoes estaveis, textarea com altura correta, painel lateral legivel e scroll previsivel.
 - Dashboard: revisar se "todas" usa a lista filtrada por periodo sem aplicar filtro de instancia adicional; confirmar que `useInstances()` nao restringe indevidamente o admin.
 - Importacao CSV: remover botao "Modelo CSV" da pagina `Leads` e colocar acao dentro de `LeadCsvImportModal`, perto da area de upload.
-- Storage: planejar bucket privado `chat-attachments` com signed URLs e politicas por usuario/conta antes de qualquer envio de midia.
+- Storage: criar bucket privado `chat-attachments` com signed upload URL como estrategia v1. Nesta fundacao, nao criar policies amplas de `storage.objects` para `anon` ou `authenticated`; o backend validara usuario/lead/instancia antes de gerar URLs temporarias nas proximas sprints.
 - Evolution API: tratar o Storage como origem segura/controlada do arquivo, mas deixar a chamada de envio de midia para o backend/provider nas sprints de chat. O frontend nao deve chamar a Evolution diretamente.
 
 ## 5. Ordem de execucao
@@ -68,7 +68,7 @@ Tarefas de referencia:
 3. Corrigir expansao do `AgentConfigModal` em desktop e mobile.
 4. Revisar filtro "todas as instancias" no `Dashboard.tsx` com admin e vendedor.
 5. Reduzir densidade visual do `AutomationMessageModal` mantendo a estrutura funcional.
-6. Criar migration Supabase para bucket/policies de Storage em ambiente de implementacao.
+6. Criar migration Supabase para bucket privado de Storage em ambiente de implementacao.
 7. Atualizar exemplos de `.env` se alguma variavel publica ou privada for necessaria.
 8. Registrar no guia tecnico o contrato esperado para as proximas sprints: upload seguro, metadados do anexo, envio pela Evolution e exibicao no chat.
 
@@ -80,6 +80,7 @@ Tarefas de referencia:
 - Dashboard mostra dados consolidados quando "Todas as instancias" esta selecionado.
 - Download de modelo CSV fica disponivel dentro do modal de importacao.
 - Bucket de Storage fica documentado/aplicado com acesso privado e base para signed URLs.
+- `schema-preflight` valida que o bucket `chat-attachments` existe, e privado e possui limite/MIME types esperados.
 - O fluxo alvo de anexos fica documentado, incluindo validacao no backend, uso da Evolution API para envio e proibicao de expor `service_role` ou `EVOLUTION_API_KEY` no frontend.
 - Fica claro que upload pelo usuario, persistencia de metadados, envio de midia e exibicao do anexo no chat sao entregas das sprints 2 e 3, nao do Sprint 1.6 isoladamente.
 
@@ -101,10 +102,12 @@ Tarefas de referencia:
 - Testar Dashboard com "Todas as instancias" e uma instancia especifica.
 - Para Storage: validar upload/listagem/signed URL em ambiente de teste antes de conectar ao chat.
 - Validar que o desenho nao exige credenciais sensiveis no frontend e que o backend sera o unico responsavel por conversar com a Evolution API.
+- Validar que acesso publico/listagem anonima ao bucket privado permanece bloqueado.
 
 ## 9. Pontos de atencao
 
 - Nao recriar helper de download CSV; usar `downloadLeadImportTemplate()`.
 - Nao alterar schema de chat nesta sprint, exceto a fundacao de Storage.
 - Nao implementar upload no `ChatInput`, envio de midia na Evolution ou renderizacao de anexos nesta sprint; manter essas entregas para Sprint 2/3.
+- Nao criar policies amplas em `storage.objects` para o bucket `chat-attachments`; signed upload URL sera gerada pelo backend apos validacao de dominio.
 - Se tocar Supabase, verificar documentacao/changelog atual e criar migration com Supabase CLI.

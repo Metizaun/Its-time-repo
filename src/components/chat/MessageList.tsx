@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { DateSeparator } from "./DateSeparator";
-import { ChatMessage } from "@/hooks/useChat";
+import type { ChatMessage } from "@/types/chat";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatChatDateLabel, getDayKey } from "@/lib/utils/chatDate";
 
@@ -11,15 +11,49 @@ interface MessageListProps {
 }
 
 export function MessageList({ messages, loading }: MessageListProps) {
+  const scrollRootRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const previousMessageCountRef = useRef(0);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const getScrollViewport = () => {
+    return scrollRootRef.current?.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]") ?? null;
+  };
+
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+    shouldStickToBottomRef.current = true;
+    setHasUnreadMessages(false);
+  };
+
+  const updateStickiness = () => {
+    const viewport = getScrollViewport();
+    if (!viewport) {
+      shouldStickToBottomRef.current = true;
+      return;
+    }
+
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom < 120;
+    if (shouldStickToBottomRef.current) {
+      setHasUnreadMessages(false);
+    }
   };
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      scrollToBottom();
+      const messageCountIncreased = messages.length > previousMessageCountRef.current;
+      previousMessageCountRef.current = messages.length;
+
+      if (loading || shouldStickToBottomRef.current) {
+        scrollToBottom(messages.length <= 1 ? "auto" : "smooth");
+        return;
+      }
+
+      if (messageCountIncreased) {
+        setHasUnreadMessages(true);
+      }
     }, 100);
 
     return () => clearTimeout(timeoutId);
@@ -46,7 +80,8 @@ export function MessageList({ messages, loading }: MessageListProps) {
   }
 
   return (
-    <ScrollArea className="flex-1 h-full">
+    <div className="relative min-h-0 flex-1">
+    <ScrollArea ref={scrollRootRef} onScrollCapture={updateStickiness} className="h-full">
       <div className="space-y-3 py-4 pl-5 pr-7">
         {messages.map((message, index) => {
           const currentMessageDate = new Date(message.sent_at);
@@ -66,6 +101,7 @@ export function MessageList({ messages, loading }: MessageListProps) {
                 sentAt={message.sent_at}
                 isOutbound={message.direction_code === 2}
                 senderName={message.sender_name}
+                attachments={message.attachments}
               />
             </Fragment>
           );
@@ -73,5 +109,15 @@ export function MessageList({ messages, loading }: MessageListProps) {
         <div ref={messagesEndRef} />
       </div>
     </ScrollArea>
+    {hasUnreadMessages && (
+      <button
+        type="button"
+        onClick={() => scrollToBottom()}
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-1.5 text-xs font-semibold text-[var(--color-primary-600)] shadow-sm focus-ring"
+      >
+        Novas mensagens
+      </button>
+    )}
+    </div>
   );
 }

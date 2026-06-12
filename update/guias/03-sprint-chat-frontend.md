@@ -4,6 +4,10 @@
 
 Sprint focada em transformar a experiencia do chat de texto puro em uma interface multimidia com audio, documentos e tags de conversa.
 
+Guia visual obrigatorio desta sprint:
+
+- `update/guias/03-sprint-chat-frontend-design.md`
+
 Tarefas de referencia:
 
 - 3.1 Interface e logica de gravacao/envio de audio.
@@ -149,4 +153,3 @@ export interface ChatMessageWithAttachments {
 - Nao enviar base64 grande diretamente pelo frontend para persistencia final.
 - Nao renderizar HTML de documentos/textos; tratar como download/preview seguro.
 - Garantir que textarea, botoes e previews nao redimensionem a barra inferior de forma instavel.
-
