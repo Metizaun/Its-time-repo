@@ -74,9 +74,9 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-var(--layout-topbar-height))] overflow-hidden">
+    <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
       {showSidebar && (
-        <div className={cn("h-full shrink-0", isMobile ? "w-full" : "w-80")}>
+        <div className={cn("h-full min-w-0 shrink-0", isMobile ? "w-full" : "w-[var(--chat-sidebar-width)]")}>
           <LeadSidebar
             leads={filteredLeads}
             selectedLeadId={selectedLeadId}

@@ -298,9 +298,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
           {lead && (
             <div className="space-y-2">
               <Label>Tags</Label>
-              <div className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-2)] p-3">
-                <ConversationTags leadId={lead.id} variant="editor" />
-              </div>
+              <ConversationTags leadId={lead.id} />
             </div>
           )}
 

@@ -94,7 +94,7 @@ export function ChatHeader({
   const aiToggleDisabled = !aiControl || aiControl.loading || aiControl.saving || !aiControl.available;
 
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 py-3 md:px-5">
+    <div className="flex h-[var(--chat-header-height)] shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 md:px-5">
       <div className="flex min-w-0 items-center gap-3">
         {showBackButton && onBack && (
           <button

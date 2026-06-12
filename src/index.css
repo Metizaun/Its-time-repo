@@ -247,6 +247,8 @@
     --layout-topbar-height: 56px;
     --layout-sidebar-width: 240px;
     --layout-sidebar-collapsed: 64px;
+    --chat-sidebar-width: 320px;
+    --chat-header-height: 64px;
     --layout-content-padding: 32px;
     --layout-content-max-width: 1040px;
     --layout-section-gap: 32px;
@@ -639,7 +641,7 @@
     position: fixed;
     top: 50vh;
     left: var(--sidebar-toggle-left);
-    z-index: 30;
+    z-index: 45;
     display: none;
     width: 30px;
     height: 30px;
@@ -1433,6 +1435,33 @@
     letter-spacing: var(--tracking-wide);
     line-height: var(--leading-none);
     white-space: nowrap;
+  }
+
+  .chat-tag-delete-item {
+    border-radius: var(--radius-md);
+    color: var(--color-gray-700);
+    cursor: pointer;
+    transition: var(--transition-colors);
+  }
+
+  .chat-tag-delete-item svg {
+    color: var(--color-gray-500);
+    transition: var(--transition-colors);
+  }
+
+  .select-content .chat-tag-delete-item:hover,
+  .select-content .chat-tag-delete-item:focus,
+  .select-content .chat-tag-delete-item:focus-visible,
+  .select-content .chat-tag-delete-item[data-highlighted] {
+    background-color: transparent;
+    color: var(--color-error-600);
+  }
+
+  .select-content .chat-tag-delete-item:hover svg,
+  .select-content .chat-tag-delete-item:focus svg,
+  .select-content .chat-tag-delete-item:focus-visible svg,
+  .select-content .chat-tag-delete-item[data-highlighted] svg {
+    color: var(--color-error-600);
   }
 
   .chat-tags-row {

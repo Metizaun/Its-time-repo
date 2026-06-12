@@ -103,6 +103,17 @@ export function useLeadTags(leadId: string | null, enabled = true) {
     onSuccess: invalidateLeadTags,
   });
 
+  const deleteTagMutation = useMutation({
+    mutationFn: async (tagId: string) => {
+      const { error } = await supabase.from("tags").delete().eq("id", tagId);
+
+      if (error) {
+        throw error;
+      }
+    },
+    onSuccess: invalidateLeadTags,
+  });
+
   return {
     leadTags,
     selectedTagIds,
@@ -112,6 +123,7 @@ export function useLeadTags(leadId: string | null, enabled = true) {
     refetch: leadTagsQuery.refetch,
     addTag: addTagMutation.mutateAsync,
     removeTag: removeTagMutation.mutateAsync,
-    saving: addTagMutation.isPending || removeTagMutation.isPending,
+    deleteTag: deleteTagMutation.mutateAsync,
+    saving: addTagMutation.isPending || removeTagMutation.isPending || deleteTagMutation.isPending,
   };
 }
