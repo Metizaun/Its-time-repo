@@ -147,6 +147,11 @@ const manager = new AgentManager({
     process.env.WEBHOOK_PUBLIC_BASE_URL ??
     process.env.VITE_CRM_BACKEND_URL ??
     process.env.CRM_BACKEND_URL,
+  chatCacheTtlSeconds: Number(process.env.CHAT_CACHE_TTL_SECONDS ?? 60),
+  chatSignedDownloadTtlSeconds: Number(process.env.CHAT_SIGNED_DOWNLOAD_TTL_SECONDS ?? 900),
+  chatAttachmentUploadIntentTtlMinutes: Number(
+    process.env.CHAT_ATTACHMENTS_UPLOAD_INTENT_TTL_MINUTES ?? 120
+  ),
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -593,17 +598,59 @@ app.post(
 );
 
 app.post(
+  "/api/chat/attachments/upload-url",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.createChatAttachmentUploadUrl(req.authContext!, {
+      leadId: String(req.body.leadId ?? ""),
+      instanceName:
+        typeof req.body.instanceName === "string" ? req.body.instanceName : null,
+      fileName: String(req.body.fileName ?? ""),
+      mimeType: String(req.body.mimeType ?? ""),
+      fileSize: Number(req.body.fileSize ?? 0),
+      kind: String(req.body.kind ?? "") as "image" | "audio" | "document",
+    });
+
+    res.json(result);
+  })
+);
+
+app.post(
   "/api/chat/send-manual",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
+    const attachmentInput = asRecord(req.body.attachment);
     const result = await manager.sendManualMessage(context, {
       leadId: String(req.body.leadId ?? ""),
-      content: String(req.body.content ?? ""),
+      content: typeof req.body.content === "string" ? req.body.content : "",
       instanceName:
         typeof req.body.instanceName === "string" ? req.body.instanceName : null,
+      attachment: req.body.attachment
+        ? {
+            messageId: String(attachmentInput.messageId ?? ""),
+            attachmentId: String(attachmentInput.attachmentId ?? ""),
+            storagePath: String(attachmentInput.storagePath ?? ""),
+            fileName: String(attachmentInput.fileName ?? ""),
+            mimeType: String(attachmentInput.mimeType ?? ""),
+            fileSize: Number(attachmentInput.fileSize ?? 0),
+            kind: String(attachmentInput.kind ?? "") as "image" | "audio" | "document",
+          }
+        : null,
     });
 
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/chat/leads/:leadId/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.listChatMessages(
+      req.authContext!,
+      getSingleParam(req.params.leadId)
+    );
     res.json(result);
   })
 );

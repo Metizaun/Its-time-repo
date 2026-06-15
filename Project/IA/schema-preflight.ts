@@ -3,6 +3,33 @@ import { createClient, type PostgrestError, type SupabaseClient } from "@supabas
 import { fileURLToPath } from "node:url";
 
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
+const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
+const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/aac",
+  "audio/ogg",
+  "audio/opus",
+  "audio/wav",
+  "audio/webm",
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
+];
 
 type SchemaPreflightConfig = {
   supabaseUrl?: string;
@@ -20,6 +47,20 @@ type NormalizedPostgrestError = {
   message: string;
   details: string | null;
   hint: string | null;
+};
+
+type StorageBucketInfo = {
+  public: boolean;
+  file_size_limit?: number | null;
+  allowed_mime_types?: string[] | null;
+};
+
+type StorageBucketLookupClient = {
+  storage: {
+    getBucket: (
+      id: string
+    ) => Promise<{ data: StorageBucketInfo | null; error: { message: string } | null }>;
+  };
 };
 
 function requireEnv(name: string) {
@@ -83,6 +124,18 @@ function formatSchemaFailures(failures: SchemaFailure[]) {
     "Aplique as migrations abaixo no Supabase antes de redeployar:",
     ...migrations.map((migration) => `- ${migration}`),
   ].join("\n");
+}
+
+function buildManualSchemaFailure(
+  label: string,
+  migration: string,
+  reason: string
+): SchemaFailure {
+  return {
+    label,
+    migration,
+    reason,
+  };
 }
 
 async function validateSelectedColumns(
@@ -163,6 +216,61 @@ async function validateAutomationFreezeRepairRpc(serviceClient: SupabaseClient<a
     : null;
 }
 
+async function validateChatAttachmentsStorage(
+  serviceClient: StorageBucketLookupClient
+) {
+  const migration =
+    "supabase/migrations/20260611202948_create_chat_attachments_storage.sql";
+  const { data, error } = await serviceClient.storage.getBucket(CHAT_ATTACHMENTS_BUCKET);
+
+  if (error) {
+    return buildManualSchemaFailure(
+      "storage.bucket chat-attachments",
+      migration,
+      error.message
+    );
+  }
+
+  if (!data) {
+    return buildManualSchemaFailure(
+      "storage.bucket chat-attachments",
+      migration,
+      "Bucket nao encontrado"
+    );
+  }
+
+  if (data.public) {
+    return buildManualSchemaFailure(
+      "storage.bucket chat-attachments",
+      migration,
+      "Bucket deve ser privado"
+    );
+  }
+
+  if (data.file_size_limit !== CHAT_ATTACHMENTS_FILE_SIZE_LIMIT) {
+    return buildManualSchemaFailure(
+      "storage.bucket chat-attachments",
+      migration,
+      `file_size_limit esperado ${CHAT_ATTACHMENTS_FILE_SIZE_LIMIT}, recebido ${data.file_size_limit}`
+    );
+  }
+
+  const actualMimeTypes = new Set(data.allowed_mime_types ?? []);
+  const missingMimeTypes = CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES.filter(
+    (mimeType) => !actualMimeTypes.has(mimeType)
+  );
+
+  if (missingMimeTypes.length > 0) {
+    return buildManualSchemaFailure(
+      "storage.bucket chat-attachments",
+      migration,
+      `allowed_mime_types ausentes: ${missingMimeTypes.join(", ")}`
+    );
+  }
+
+  return null;
+}
+
 export async function assertRuntimeSchemaCompatibility(
   config: SchemaPreflightConfig = {}
 ) {
@@ -181,6 +289,7 @@ export async function assertRuntimeSchemaCompatibility(
   });
 
   const checks = await Promise.all([
+    validateChatAttachmentsStorage(serviceClient),
     validateSelectedColumns(
       metaClient,
       "instance",
@@ -274,6 +383,51 @@ export async function assertRuntimeSchemaCompatibility(
       ],
       "crm.message_history (Meta provider status)",
       "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "message_attachment_upload_intents",
+      [
+        "id",
+        "message_id",
+        "attachment_id",
+        "aces_id",
+        "lead_id",
+        "kind",
+        "mime_type",
+        "storage_bucket",
+        "storage_path",
+        "file_name",
+        "file_size",
+        "status",
+        "intent_expires_at",
+        "created_at",
+        "updated_at",
+      ],
+      "crm.message_attachment_upload_intents",
+      "supabase/migrations/20260611232755_create_chat_message_attachments_backend.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "message_attachments",
+      [
+        "id",
+        "message_id",
+        "aces_id",
+        "lead_id",
+        "kind",
+        "mime_type",
+        "storage_bucket",
+        "storage_path",
+        "file_name",
+        "file_size",
+        "expires_at",
+        "storage_deleted_at",
+        "created_at",
+        "updated_at",
+      ],
+      "crm.message_attachments",
+      "supabase/migrations/20260611232755_create_chat_message_attachments_backend.sql"
     ),
     validateSelectedColumns(
       metaClient,

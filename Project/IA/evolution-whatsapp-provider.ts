@@ -3,6 +3,7 @@ import axios from "axios";
 import {
   summarizeProviderPayload,
   toEvolutionJid,
+  type SendMediaInput,
   type SendResult,
   type SendTemplateInput,
   type SendTextInput,
@@ -50,6 +51,35 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
       text: input.parameters.length > 0 ? input.parameters.join(" ") : input.templateName,
       sourceType: input.sourceType,
     });
+  }
+
+  async sendMedia(input: SendMediaInput): Promise<SendResult> {
+    try {
+      const response = await axios.post(
+        `${this.config.evolutionApiUrl}/message/sendMedia/${encodeURIComponent(input.instanceName)}`,
+        {
+          number: toEvolutionJid(input.to),
+          mediatype: input.kind,
+          mimetype: input.mimeType,
+          media: input.mediaUrl,
+          fileName: input.fileName,
+          caption: input.caption?.trim() || undefined,
+          delay: 1000,
+        },
+        {
+          headers: { apikey: this.config.evolutionApiKey },
+        }
+      );
+
+      return {
+        provider: "evolution",
+        providerMessageId: extractEvolutionMessageId(response.data),
+        providerStatus: "sent",
+        raw: summarizeProviderPayload(response.data),
+      };
+    } catch (error) {
+      throw buildEvolutionProviderError(error);
+    }
   }
 }
 

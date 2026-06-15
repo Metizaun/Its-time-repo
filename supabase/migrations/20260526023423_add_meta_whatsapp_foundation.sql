@@ -355,4 +355,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA meta
 
 ALTER ROLE authenticator SET pgrst.db_schemas = 'public,storage,graphql_public,crm,meta';
 NOTIFY pgrst, 'reload config';
-NOTIFY pgrst, 'reload schema';
+NOTIFY pgrst, 'reload schema';;

@@ -22,6 +22,16 @@ type ClaimedExecution = {
   attempt_count: number;
 };
 
+type ExpiredUploadIntent = {
+  id: string;
+  storage_path: string | null;
+};
+
+type ExpiredMessageAttachment = {
+  id: string;
+  storage_path: string | null;
+};
+
 type BrasilApiHoliday = {
   date?: string;
   name?: string;
@@ -67,6 +77,7 @@ const TRANSIENT_NETWORK_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ET
 const MAX_TRANSIENT_RETRIES = 5;
 const RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RETRY_DELAYS_MS = [5, 15, 30, 60, 120].map((minutes) => minutes * 60 * 1000);
+const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
 const GENERIC_NAME_PATTERNS = [
   /^clinica de estetica$/i,
   /^clinica odontologica$/i,
@@ -426,6 +437,12 @@ export function startAutomationWorker() {
   const evolutionApiKey = requireEnv("EVOLUTION_API_KEY");
   const pollMs = Number(process.env.AUTOMATION_WORKER_POLL_MS ?? 15000);
   const batchSize = Number(process.env.AUTOMATION_WORKER_BATCH_SIZE ?? 50);
+  const chatAttachmentsCleanupIntervalMs = Number(
+    process.env.CHAT_ATTACHMENTS_CLEANUP_INTERVAL_MS ?? 3600000
+  );
+  const chatAttachmentsCleanupBatchSize = Number(
+    process.env.CHAT_ATTACHMENTS_CLEANUP_BATCH_SIZE ?? 100
+  );
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     db: { schema: "crm" },
@@ -433,6 +450,7 @@ export function startAutomationWorker() {
   });
 
   let running = false;
+  let chatCleanupRunning = false;
   const holidayCacheYears = new Set<number>();
   let lastFreezeRepairAt = 0;
 
@@ -715,6 +733,101 @@ export function startAutomationWorker() {
     }
   }
 
+  async function removeChatAttachmentObject(storagePath: string | null) {
+    if (!storagePath) {
+      return true;
+    }
+
+    const { error } = await supabase.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .remove([storagePath]);
+
+    if (error) {
+      console.warn("[automation-worker] Falha ao remover objeto de anexo do chat:", {
+        storagePath,
+        error,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function cleanupExpiredChatAttachments() {
+    if (chatCleanupRunning) {
+      return;
+    }
+
+    chatCleanupRunning = true;
+
+    try {
+      const now = new Date().toISOString();
+      const { data: intentsData, error: intentsError } = await supabase
+        .from("message_attachment_upload_intents")
+        .select("id, storage_path")
+        .eq("status", "issued")
+        .lte("intent_expires_at", now)
+        .limit(chatAttachmentsCleanupBatchSize);
+
+      if (intentsError) {
+        throw intentsError;
+      }
+
+      for (const intent of (intentsData ?? []) as ExpiredUploadIntent[]) {
+        const removed = await removeChatAttachmentObject(intent.storage_path);
+        if (!removed) {
+          continue;
+        }
+
+        const { error } = await supabase
+          .from("message_attachment_upload_intents")
+          .update({ status: "expired", updated_at: new Date().toISOString() })
+          .eq("id", intent.id)
+          .eq("status", "issued");
+
+        if (error) {
+          console.warn("[automation-worker] Falha ao marcar intent de anexo como expirada:", {
+            intentId: intent.id,
+            error,
+          });
+        }
+      }
+
+      const { data: attachmentsData, error: attachmentsError } = await supabase
+        .from("message_attachments")
+        .select("id, storage_path")
+        .is("storage_deleted_at", null)
+        .lte("expires_at", now)
+        .limit(chatAttachmentsCleanupBatchSize);
+
+      if (attachmentsError) {
+        throw attachmentsError;
+      }
+
+      for (const attachment of (attachmentsData ?? []) as ExpiredMessageAttachment[]) {
+        const removed = await removeChatAttachmentObject(attachment.storage_path);
+        if (!removed) {
+          continue;
+        }
+
+        const { error } = await supabase
+          .from("message_attachments")
+          .update({ storage_deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq("id", attachment.id)
+          .is("storage_deleted_at", null);
+
+        if (error) {
+          console.warn("[automation-worker] Falha ao marcar anexo do chat como removido:", {
+            attachmentId: attachment.id,
+            error,
+          });
+        }
+      }
+    } finally {
+      chatCleanupRunning = false;
+    }
+  }
+
   async function processDueExecutions() {
     if (running) {
       return;
@@ -885,18 +998,30 @@ export function startAutomationWorker() {
     });
   }, pollMs);
 
+  const chatCleanupTimer = setInterval(() => {
+    cleanupExpiredChatAttachments().catch((error) => {
+      console.error("[automation-worker] Erro na limpeza de anexos do chat:", error);
+    });
+  }, chatAttachmentsCleanupIntervalMs);
+
   processDueExecutions().catch((error) => {
     console.error("[automation-worker] Erro na execucao inicial:", error);
   });
 
+  cleanupExpiredChatAttachments().catch((error) => {
+    console.error("[automation-worker] Erro na limpeza inicial de anexos do chat:", error);
+  });
+
   console.log(
-    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes`
+    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes; limpeza de anexos a cada ${chatAttachmentsCleanupIntervalMs}ms`
   );
 
   return {
     processDueExecutions,
+    cleanupExpiredChatAttachments,
     stop() {
       clearInterval(timer);
+      clearInterval(chatCleanupTimer);
     },
   };
 }
