@@ -502,6 +502,34 @@ function normalizePhone(phone: string): string {
   return clean;
 }
 
+function normalizeLeadDisplayName(value: string | null | undefined) {
+  const name = value?.trim().replace(/\s+/g, " ") ?? "";
+  if (!name || name.length < 2) {
+    return null;
+  }
+
+  const lower = name.toLowerCase();
+  if (lower === "unknown" || lower === "desconhecido" || lower === "sem nome") {
+    return null;
+  }
+
+  if (/^\+?\d{8,15}$/.test(name.replace(/\s/g, ""))) {
+    return null;
+  }
+
+  return name.slice(0, 120);
+}
+
+function isFallbackLeadName(value: string | null | undefined, phone: string) {
+  const current = value?.trim() ?? "";
+  if (!current) {
+    return true;
+  }
+
+  const normalizedPhone = normalizePhone(phone);
+  return current === `Lead ${normalizedPhone}` || current === normalizedPhone || current === `Lead ${phone}`;
+}
+
 function resolveWhatsappRecipient(phone: string) {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 10 || digits.length > 15) {
@@ -2421,6 +2449,62 @@ export class AgentManager {
     return null;
   }
 
+  private outboundSourceTypeFromEcho(origin: OutboundEchoOrigin): "human" | "ai" | "automation" {
+    return origin === "manual" ? "human" : origin;
+  }
+
+  private async ensureOutboundEchoVisible(params: {
+    acesId: number;
+    leadId: string | null;
+    instanceName: string;
+    content: string;
+    sentAt: string;
+    conversationId: string | null;
+    origin: OutboundEchoOrigin;
+  }) {
+    if (!params.leadId) {
+      return;
+    }
+
+    const sourceType = this.outboundSourceTypeFromEcho(params.origin);
+    const sentAtMs = Date.parse(params.sentAt);
+    const since = new Date((Number.isFinite(sentAtMs) ? sentAtMs : Date.now()) - 10 * 60_000).toISOString();
+
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("id")
+      .eq("lead_id", params.leadId)
+      .eq("aces_id", params.acesId)
+      .eq("direction", "outbound")
+      .eq("source_type", sourceType)
+      .eq("instance", params.instanceName)
+      .eq("content", params.content)
+      .gte("sent_at", since)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel verificar echo outbound no historico", error);
+    }
+
+    if (data) {
+      await this.invalidateChatMessagesCache(params.acesId, params.leadId);
+      return;
+    }
+
+    await this.saveMessage({
+      leadId: params.leadId,
+      acesId: params.acesId,
+      content: params.content,
+      direction: "outbound",
+      sourceType,
+      instanceName: params.instanceName,
+      conversationId: params.conversationId,
+      sentAt: params.sentAt,
+    });
+  }
+
   private async repairAutomationFreezeForLead(leadId: string | null, reference: string) {
     if (!leadId) {
       return;
@@ -2638,9 +2722,29 @@ export class AgentManager {
     ownerId?: string | null
   ) {
     const found = await this.findLeadByPhone(acesId, phone);
+    const payloadName = normalizeLeadDisplayName(pushName);
     if (found) {
       if (ownerId && found.owner_id !== ownerId) {
         throw new HttpError(403, "Lead pertence a outro responsavel");
+      }
+
+      if (payloadName && isFallbackLeadName(found.name, phone)) {
+        const { data, error } = await this.serviceClient
+          .from("leads")
+          .update({
+            name: payloadName,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", found.id)
+          .eq("aces_id", acesId)
+          .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+          .single();
+
+        if (error) {
+          throw new HttpError(500, "Nao foi possivel atualizar o nome do lead", error);
+        }
+
+        return data as LeadRow;
       }
 
       return found;
@@ -2649,7 +2753,7 @@ export class AgentManager {
     const stages = await this.getStagesForAccount(acesId);
     const defaultStage = stages.find((stage) => stage.category === "Aberto") ?? stages[0] ?? null;
     const preferredPhone = normalizePhone(phone);
-    const name = pushName?.trim() || `Lead ${preferredPhone}`;
+    const name = payloadName || `Lead ${preferredPhone}`;
     const resolvedOwnerId = ownerId ?? await this.getDefaultLeadOwnerId(acesId);
 
     const { data, error } = await this.serviceClient
@@ -2883,7 +2987,22 @@ export class AgentManager {
       asString(asRecord(root.apikey).instance);
 
     const remoteJid = asString(key.remoteJid) ?? asString(data.remoteJid) ?? asString(root.remoteJid);
-    const pushName = asString(data.pushName) ?? asString(root.pushName) ?? asString(asRecord(data.sender).pushName);
+    const sender = asRecord(data.sender);
+    const contact = asRecord(data.contact);
+    const pushName = normalizeLeadDisplayName(
+      asString(data.pushName) ??
+        asString(data.pushname) ??
+        asString(data.senderName) ??
+        asString(data.notifyName) ??
+        asString(data.verifiedBizName) ??
+        asString(root.pushName) ??
+        asString(root.senderName) ??
+        asString(root.notifyName) ??
+        asString(sender.pushName) ??
+        asString(sender.name) ??
+        asString(contact.pushName) ??
+        asString(contact.name)
+    );
     const messageId = asString(key.id) ?? asString(root.messageId) ?? asString(data.messageId);
     const fromMe = Boolean(key.fromMe ?? data.fromMe ?? root.fromMe);
     const sentAtRaw = data.messageTimestamp ?? root.messageTimestamp ?? root.timestamp ?? Date.now();
@@ -3729,6 +3848,16 @@ export class AgentManager {
         normalizedContent,
       );
       if (matchedOutbound) {
+        await this.ensureOutboundEchoVisible({
+          acesId: instance.aces_id,
+          leadId: matchedOutbound.leadId,
+          instanceName: message.instanceName,
+          content: normalizedContent,
+          sentAt: message.sentAt,
+          conversationId: matchedOutbound.conversationId ?? message.conversationId,
+          origin: matchedOutbound.origin,
+        });
+
         if (matchedOutbound.origin !== "manual") {
           await this.repairAutomationFreezeForLead(
             matchedOutbound.leadId,
@@ -3751,7 +3880,7 @@ export class AgentManager {
         instance.aces_id,
         message.phone,
         message.instanceName,
-        message.pushName,
+        null,
         agent?.created_by ?? null
       );
 
@@ -3761,6 +3890,8 @@ export class AgentManager {
         normalizedContent,
       );
       if (fallbackMatch) {
+        await this.invalidateChatMessagesCache(instance.aces_id, lead.id);
+
         if (fallbackMatch.sourceType !== "manual") {
           await this.repairAutomationFreezeForLead(
             lead.id,
