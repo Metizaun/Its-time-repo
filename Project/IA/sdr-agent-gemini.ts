@@ -2450,7 +2450,15 @@ export class AgentManager {
   }
 
   private outboundSourceTypeFromEcho(origin: OutboundEchoOrigin): "human" | "ai" | "automation" {
-    return origin === "manual" ? "human" : origin;
+    if (origin === "manual") {
+      return "human";
+    }
+
+    if (origin === "calendar_followup") {
+      return "automation";
+    }
+
+    return origin;
   }
 
   private async ensureOutboundEchoVisible(params: {
@@ -3872,7 +3880,9 @@ export class AgentManager {
               ? "Echo de mensagem manual do backend"
               : matchedOutbound.origin === "automation"
                 ? "Echo de mensagem da automacao ignorado"
-                : "Echo de mensagem da IA ignorado",
+                : matchedOutbound.origin === "calendar_followup"
+                  ? "Echo de follow-up do calendario ignorado"
+                  : "Echo de mensagem da IA ignorado",
         };
       }
 

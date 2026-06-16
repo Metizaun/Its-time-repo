@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
+const CALENDAR_FOLLOWUP_MIGRATION =
+  "supabase/migrations/20260615223657_add_calendar_followup_dispatch.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -216,6 +218,67 @@ async function validateAutomationFreezeRepairRpc(serviceClient: SupabaseClient<a
     : null;
 }
 
+async function validateCalendarFollowupClaimRpc(calendarClient: SupabaseClient<any, any, any>) {
+  const { error } = await calendarClient.rpc("rpc_claim_due_followup_events", {
+    p_limit: 0,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "calendar.rpc_claim_due_followup_events",
+        CALENDAR_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateCalendarFollowupMarkSentRpc(calendarClient: SupabaseClient<any, any, any>) {
+  const { error } = await calendarClient.rpc("rpc_mark_followup_sent", {
+    p_event_id: NIL_UUID,
+    p_sent_at: new Date().toISOString(),
+    p_provider_message_id: null,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "calendar.rpc_mark_followup_sent",
+        CALENDAR_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateCalendarFollowupMarkFailedRpc(calendarClient: SupabaseClient<any, any, any>) {
+  const { error } = await calendarClient.rpc("rpc_mark_followup_failed", {
+    p_event_id: NIL_UUID,
+    p_error: "schema_preflight",
+    p_retry: true,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "calendar.rpc_mark_followup_failed",
+        CALENDAR_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateCalendarFollowupSkipRpc(calendarClient: SupabaseClient<any, any, any>) {
+  const { error } = await calendarClient.rpc("rpc_skip_followup", {
+    p_event_id: NIL_UUID,
+    p_reason: "schema_preflight",
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "calendar.rpc_skip_followup",
+        CALENDAR_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
 async function validateChatAttachmentsStorage(
   serviceClient: StorageBucketLookupClient
 ) {
@@ -288,8 +351,35 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const calendarClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "calendar" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
     validateChatAttachmentsStorage(serviceClient),
+    validateSelectedColumns(
+      calendarClient,
+      "events",
+      [
+        "id",
+        "aces_id",
+        "lead_id",
+        "title",
+        "start_time",
+        "end_time",
+        "status",
+        "followup_1h_enabled",
+        "followup_1h_status",
+        "followup_1h_last_attempt_at",
+        "followup_1h_sent_at",
+        "followup_1h_error",
+        "metadata",
+        "deleted_at",
+      ],
+      "calendar.events (follow-up)",
+      CALENDAR_FOLLOWUP_MIGRATION
+    ),
     validateSelectedColumns(
       metaClient,
       "instance",
@@ -502,6 +592,10 @@ export async function assertRuntimeSchemaCompatibility(
     validateHumanizedMarkRpc(serviceClient),
     validateHumanizedWindowRpc(serviceClient),
     validateAutomationFreezeRepairRpc(serviceClient),
+    validateCalendarFollowupClaimRpc(calendarClient),
+    validateCalendarFollowupMarkSentRpc(calendarClient),
+    validateCalendarFollowupMarkFailedRpc(calendarClient),
+    validateCalendarFollowupSkipRpc(calendarClient),
   ]);
 
   const failures = checks.filter((check): check is SchemaFailure => check !== null);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MessageSquare } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChatHeader } from "@/components/chat/ChatHeader";
 import { ChatInput } from "@/components/chat/ChatInput";
@@ -21,6 +21,7 @@ export default function Chat() {
   const { ui } = useApp();
   const { userRole } = useAuth();
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
@@ -73,6 +74,11 @@ export default function Chat() {
     return sendMessage(payload, selectedLead.contact_phone || undefined, selectedLead.instance_name);
   };
 
+  const handleSchedule = () => {
+    if (!selectedLead?.id) return;
+    navigate(`/calendar?leadId=${selectedLead.id}&new=1`);
+  };
+
   return (
     <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
       {showSidebar && (
@@ -97,6 +103,7 @@ export default function Chat() {
                 showBackButton={isMobile}
                 onBack={() => handleSelectLead(null)}
                 onOpenDetails={() => setEditingLead(selectedLead)}
+                onSchedule={handleSchedule}
                 aiControl={
                   isAdmin
                     ? {

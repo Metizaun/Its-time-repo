@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLeads, Lead, notifyLeadsUpdated } from "@/hooks/useLeads";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
+import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { useApp } from "@/context/AppContext";
 import { StageBadge } from "@/components/kanban/StageBadge";
 import {
@@ -23,10 +24,12 @@ import {
   Signal,
   Edit,
   MessageCircle,
+  CalendarPlus,
+  Clock3,
   CheckCircle,
   XCircle,
 } from "lucide-react";
-import { format, parseISO } from "date-fns";
+import { addDays, format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import EditLeadModal from "@/components/modals/EditLeadModal";
 import { supabase } from "@/integrations/supabase/client";
@@ -44,6 +47,22 @@ export function LeadDrawer() {
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
 
   const lead = leads.find((l) => l.id === ui.drawerLeadId);
+  const calendarRange = useMemo(() => {
+    const start = new Date();
+    return { start, end: addDays(start, 90) };
+  }, []);
+  const { events: calendarEvents } = useCalendarEvents(calendarRange, Boolean(lead?.id));
+  const upcomingCalendarEvents = useMemo(() => {
+    if (!lead) return [];
+
+    const now = Date.now();
+    return calendarEvents
+      .filter((event) => event.lead_id === lead.id)
+      .filter((event) => event.status !== "cancelled")
+      .filter((event) => Date.parse(event.end_time) >= now)
+      .sort((left, right) => left.start_time.localeCompare(right.start_time))
+      .slice(0, 3);
+  }, [calendarEvents, lead]);
   const normalize = (value?: string | null) =>
     (value || "")
       .normalize("NFD")
@@ -77,6 +96,12 @@ export function LeadDrawer() {
     if (!lead?.id) return;
     closeDrawer();
     navigate(`/chat?leadId=${lead.id}`);
+  };
+
+  const handleOpenCalendar = (createNew = false) => {
+    if (!lead?.id) return;
+    closeDrawer();
+    navigate(`/calendar?leadId=${lead.id}${createNew ? "&new=1" : ""}`);
   };
 
   if (!lead) return null;
@@ -205,6 +230,54 @@ export function LeadDrawer() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]/70 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Agenda</p>
+                <h3 className="text-sm font-semibold">Proximos compromissos</h3>
+              </div>
+              <Calendar className="h-5 w-5 text-muted-foreground" />
+            </div>
+
+            <div className="space-y-2">
+              {upcomingCalendarEvents.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-[var(--color-border-medium)] p-3 text-sm text-muted-foreground">
+                  Nenhum compromisso futuro para este lead.
+                </p>
+              ) : (
+                upcomingCalendarEvents.map((event) => (
+                  <button
+                    key={event.id}
+                    type="button"
+                    onClick={() => {
+                      closeDrawer();
+                      navigate(`/calendar?leadId=${lead.id}&eventId=${event.id}`);
+                    }}
+                    className="w-full rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] p-3 text-left transition-colors hover:border-[var(--color-primary-200)] hover:bg-[var(--color-primary-50)]"
+                  >
+                    <p className="line-clamp-1 text-sm font-medium">{event.title}</p>
+                    <span className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Clock3 className="h-3.5 w-3.5" />
+                      {event.all_day
+                        ? format(parseISO(event.start_time), "dd/MM", { locale: ptBR })
+                        : format(parseISO(event.start_time), "dd/MM 'as' HH:mm", { locale: ptBR })}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => handleOpenCalendar(true)}>
+                <CalendarPlus className="mr-2 h-4 w-4" />
+                Criar evento
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => handleOpenCalendar(false)}>
+                Ver agenda
+              </Button>
+            </div>
           </div>
 
           <div className="flex gap-2 pt-4 border-t">

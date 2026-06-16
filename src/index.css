@@ -349,6 +349,11 @@
     padding: 0;
   }
 
+  .app-main--calendar {
+    max-width: none;
+    padding: var(--space-4);
+  }
+
   .topbar {
     position: sticky;
     top: 0;
@@ -1658,6 +1663,10 @@
     padding: var(--space-6);
   }
 
+  .app-main--calendar {
+    padding: var(--space-3);
+  }
+
   .topbar {
     padding: 0 var(--space-3);
   }
@@ -1713,6 +1722,10 @@
 @media (max-width: 640px) {
   .app-main {
     padding: var(--space-4);
+  }
+
+  .app-main--calendar {
+    padding: var(--space-2);
   }
 
   .dashboard-kpi-grid,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Bot, Info } from "lucide-react";
+import { ArrowLeft, Bot, CalendarPlus, Info } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -20,6 +20,7 @@ interface ChatHeaderProps {
   showBackButton?: boolean;
   onBack?: () => void;
   onOpenDetails?: () => void;
+  onSchedule?: () => void;
   aiControl?: ChatAiControl | null;
 }
 
@@ -55,6 +56,7 @@ export function ChatHeader({
   showBackButton = false,
   onBack,
   onOpenDetails,
+  onSchedule,
   aiControl,
 }: ChatHeaderProps) {
   const initial = leadName.charAt(0).toUpperCase();
@@ -121,6 +123,17 @@ export function ChatHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        {onSchedule && (
+          <button
+            type="button"
+            aria-label="Agendar compromisso"
+            onClick={onSchedule}
+            className="chat-tool-button h-9 w-9 text-[var(--color-text-secondary)] focus-ring hover:text-foreground"
+          >
+            <CalendarPlus className="h-[18px] w-[18px]" />
+          </button>
+        )}
+
         {aiControl && (
           <Tooltip>
             <TooltipTrigger asChild>
