@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { type FormEvent, useState, useEffect } from "react";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { ConversationTags } from "@/components/chat/ConversationTags";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,10 @@ interface EditLeadModalProps {
 // STATUS_OPTIONS removed in favor of dynamic stages from usePipelineStages
 
 const CONNECTION_LEVELS = ["Baixa", "Média", "Alta"];
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Tente novamente.";
+}
 
 export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLeadModalProps) {
   const { user } = useAuth();
@@ -96,7 +101,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
       notifyLeadsUpdated();
       onSuccess();
       onClose();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao excluir lead:", error);
       toast.error("Erro ao excluir lead");
     } finally {
@@ -104,7 +109,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!lead) return;
 
@@ -145,9 +150,9 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
       notifyLeadsUpdated();
       onSuccess();
       onClose();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao atualizar lead:", error);
-      toast.error("Erro ao atualizar lead", { description: error.message });
+      toast.error("Erro ao atualizar lead", { description: getErrorMessage(error) });
     } finally {
       setLoading(false);
     }
@@ -289,6 +294,13 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
               />
             </div>
           </div>
+
+          {lead && (
+            <div className="space-y-2">
+              <Label>Tags</Label>
+              <ConversationTags leadId={lead.id} />
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="notes">Observações</Label>

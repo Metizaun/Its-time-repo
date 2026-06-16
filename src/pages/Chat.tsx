@@ -1,26 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLeads, Lead } from "@/hooks/useLeads";
-import { useChat } from "@/hooks/useChat";
-import { LeadSidebar } from "@/components/leads/LeadSidebar";
-import { ChatHeader } from "@/components/chat/ChatHeader";
-import { MessageList } from "@/components/chat/MessageList";
-import { ChatInput } from "@/components/chat/ChatInput";
 import { MessageSquare } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+
+import { ChatHeader } from "@/components/chat/ChatHeader";
+import { ChatInput } from "@/components/chat/ChatInput";
+import { MessageList } from "@/components/chat/MessageList";
+import { LeadSidebar } from "@/components/leads/LeadSidebar";
 import EditLeadModal from "@/components/modals/EditLeadModal";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useChat } from "@/hooks/useChat";
 import { useLeadAiControl } from "@/hooks/useLeadAiControl";
-import { useSearchParams } from "react-router-dom";
+import { type Lead, useLeads } from "@/hooks/useLeads";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cn } from "@/lib/utils";
+import type { ChatComposerPayload } from "@/types/chat";
 
 export default function Chat() {
   const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
   const { ui } = useApp();
   const { userRole } = useAuth();
+  const isMobile = useIsMobile();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
-  
-  // Hook de chat conectado ao lead selecionado
+
   const { messages, loading: messagesLoading, sendMessage } = useChat(selectedLeadId);
 
   const filteredLeads = useMemo(() => {
@@ -51,76 +56,91 @@ export default function Chat() {
     setSearchParams({});
   };
 
-  // Encontra o objeto Lead baseado no ID selecionado dentro da lista filtrada
-  const selectedLead = filteredLeads.find((l) => l.id === selectedLeadId);
+  const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
   const isAdmin = userRole === "ADMIN";
   const leadAiControl = useLeadAiControl(
     selectedLead?.id ?? null,
     selectedLead?.instance_name ?? null,
     { enabled: isAdmin }
   );
+  const showSidebar = !isMobile || !selectedLead;
+  const showChatPanel = !isMobile || Boolean(selectedLead);
+
+  const handleSendMessage = (payload: ChatComposerPayload) => {
+    if (!selectedLead) {
+      return Promise.resolve();
+    }
+
+    return sendMessage(payload, selectedLead.contact_phone || undefined, selectedLead.instance_name);
+  };
+
+  const handleSchedule = () => {
+    if (!selectedLead?.id) return;
+    navigate(`/calendar?leadId=${selectedLead.id}&new=1`);
+  };
 
   return (
-    <div className="h-[calc(100vh-4rem)] flex">
-      {/* Barra lateral com a lista de Leads */}
-      <LeadSidebar
-        leads={filteredLeads}
-        selectedLeadId={selectedLeadId}
-        onSelectLead={handleSelectLead}
-        loading={leadsLoading}
-      />
+    <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
+      {showSidebar && (
+        <div className={cn("h-full min-w-0 shrink-0", isMobile ? "w-full" : "w-[var(--chat-sidebar-width)]")}>
+          <LeadSidebar
+            leads={filteredLeads}
+            selectedLeadId={selectedLeadId}
+            onSelectLead={handleSelectLead}
+            loading={leadsLoading}
+          />
+        </div>
+      )}
 
-      {/* Área Principal do Chat */}
-      <div className="flex-1 flex flex-col">
-        {selectedLead ? (
-          <>
-            <ChatHeader
-              key={selectedLead.id}
-              leadName={selectedLead.lead_name}
-              instanceName={selectedLead.instance_name}
-              onOpenDetails={() => setEditingLead(selectedLead)}
-              aiControl={
-                isAdmin
-                  ? {
-                      enabled: leadAiControl.enabled,
-                      available: leadAiControl.available,
-                      reason: leadAiControl.reason,
-                      bypassingGlobalInactive: leadAiControl.bypassingGlobalInactive,
-                      loading: leadAiControl.loading,
-                      saving: leadAiControl.saving,
-                      onToggle: leadAiControl.toggle,
-                    }
-                  : null
-              }
-            />
-            
-            <MessageList messages={messages} loading={messagesLoading} />
-            
-            <ChatInput 
-              onSend={(msg) => sendMessage(
-                msg, 
-                selectedLead.contact_phone || undefined,
-                selectedLead.instance_name
-              )} 
-            />
-          </>
-        ) : (
-          // Estado vazio (nenhum chat selecionado)
-          <div className="flex-1 flex items-center justify-center">
-            <div className="flex flex-col items-center gap-5">
-              <div className="w-20 h-20 rounded-full bg-transparent border border-t-2 border-t-[var(--color-accent)] border-[var(--color-border-subtle)] flex items-center justify-center shadow-[0_8px_32px_rgba(229,57,58,0.08)]">
-                <MessageSquare className="w-9 h-9 text-[var(--color-text-secondary)]" />
-              </div>
-              <div className="text-center space-y-1">
-                <h2 className="text-xl font-bold text-foreground">Selecione uma conversa</h2>
-                <p className="text-sm text-[var(--color-text-secondary)] max-w-xs">Escolha um lead na barra lateral para começar</p>
+      {showChatPanel && (
+        <div className="flex min-w-0 flex-1 flex-col">
+          {selectedLead ? (
+            <>
+              <ChatHeader
+                key={selectedLead.id}
+                leadName={selectedLead.lead_name}
+                instanceName={selectedLead.instance_name}
+                showBackButton={isMobile}
+                onBack={() => handleSelectLead(null)}
+                onOpenDetails={() => setEditingLead(selectedLead)}
+                onSchedule={handleSchedule}
+                aiControl={
+                  isAdmin
+                    ? {
+                        enabled: leadAiControl.enabled,
+                        available: leadAiControl.available,
+                        reason: leadAiControl.reason,
+                        bypassingGlobalInactive: leadAiControl.bypassingGlobalInactive,
+                        loading: leadAiControl.loading,
+                        saving: leadAiControl.saving,
+                        onToggle: leadAiControl.toggle,
+                      }
+                    : null
+                }
+              />
+
+              <MessageList messages={messages} loading={messagesLoading} />
+
+              <ChatInput onSend={handleSendMessage} />
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="flex flex-col items-center gap-5">
+                <div className="flex h-20 w-20 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-sm">
+                  <MessageSquare className="h-9 w-9 text-[var(--color-text-secondary)]" />
+                </div>
+                <div className="space-y-1 text-center">
+                  <h2 className="text-xl font-bold text-foreground">Selecione uma conversa</h2>
+                  <p className="max-w-xs text-sm text-[var(--color-text-secondary)]">
+                    Escolha um lead na barra lateral para comecar
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      {/* Modal de Edição do Lead */}
       <EditLeadModal
         lead={editingLead}
         open={!!editingLead}

@@ -1,5 +1,6 @@
 import "./load-env.js";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { createClient } from "@supabase/supabase-js";
 import {
   AgentManager,
   DEFAULT_SYSTEM_MESSAGE,
@@ -19,6 +20,8 @@ type AuthenticatedRequest = Request & {
 type RawBodyRequest = Request & {
   rawBody?: Buffer;
 };
+
+type CrmUserRole = "NENHUM" | "VENDEDOR" | "ADMIN";
 
 function requireEnv(name: string) {
   const value = process.env[name];
@@ -40,10 +43,81 @@ function resolveEnvSecretRef(secretRef: string | undefined) {
   return secretRef?.trim() ? process.env[secretRef.trim()] ?? null : null;
 }
 
+function getSupabaseUrl() {
+  return requireEnv("SUPABASE_URL").replace(/\/$/, "");
+}
+
+function getSupabasePublicKey() {
+  return process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY");
+}
+
+function createUserScopedSupabaseClient(accessToken: string) {
+  return createClient(getSupabaseUrl(), getSupabasePublicKey(), {
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: "crm" },
+  });
+}
+
+function createServiceSupabaseClient() {
+  return createClient(getSupabaseUrl(), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
+    auth: { persistSession: false, autoRefreshToken: false },
+    db: { schema: "crm" },
+  });
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readBackendError(payload: unknown, fallback: string) {
+  const record = asRecord(payload);
+  return typeof record.error === "string"
+    ? record.error
+    : typeof record.message === "string"
+      ? record.message
+      : fallback;
+}
+
+async function forwardSupabaseFunction(functionName: string, accessToken: string, body: unknown) {
+  const response = await fetch(`${getSupabaseUrl()}/functions/v1/${functionName}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      apikey: getSupabasePublicKey(),
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+
+  const text = await response.text();
+  let payload: unknown = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      payload = { message: text };
+    }
+  }
+
+  if (!response.ok) {
+    throw new HttpError(
+      response.status,
+      readBackendError(payload, `Falha ao chamar funcao ${functionName}`),
+      payload
+    );
+  }
+
+  return payload;
+}
+
 function resolveMetaWebhookAppSecret() {
   const mode = (process.env.META_PROVIDER_MODE ?? "mock").trim().toLowerCase();
   return (
     process.env.META_WEBHOOK_APP_SECRET?.trim() ||
+    process.env.META_APP_SECRET?.trim() ||
     resolveEnvSecretRef(process.env.META_WEBHOOK_APP_SECRET_REF) ||
     (mode === "mock" ? "local-dev-app-secret" : null)
   );
@@ -73,6 +147,11 @@ const manager = new AgentManager({
     process.env.WEBHOOK_PUBLIC_BASE_URL ??
     process.env.VITE_CRM_BACKEND_URL ??
     process.env.CRM_BACKEND_URL,
+  chatCacheTtlSeconds: Number(process.env.CHAT_CACHE_TTL_SECONDS ?? 60),
+  chatSignedDownloadTtlSeconds: Number(process.env.CHAT_SIGNED_DOWNLOAD_TTL_SECONDS ?? 900),
+  chatAttachmentUploadIntentTtlMinutes: Number(
+    process.env.CHAT_ATTACHMENTS_UPLOAD_INTENT_TTL_MINUTES ?? 120
+  ),
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -281,18 +360,297 @@ app.get(
   })
 );
 
+app.get(
+  "/api/crm/profile",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    res.json({
+      success: true,
+      profile: {
+        id: context.crmUserId,
+        auth_user_id: context.authUserId,
+        aces_id: context.acesId,
+        role: context.role,
+        name: context.name,
+      },
+    });
+  })
+);
+
+app.get(
+  "/api/crm/instances",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    const supabaseAdmin = createServiceSupabaseClient();
+    let query = supabaseAdmin
+      .from("instance")
+      .select("instancia, color, aces_id, status, setup_status, created_by")
+      .eq("aces_id", context.acesId)
+      .or("setup_status.is.null,setup_status.neq.cancelled")
+      .order("instancia");
+
+    if (context.role !== "ADMIN") {
+      query = query.eq("created_by", context.crmUserId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar instancias", error);
+    }
+
+    res.json({ success: true, instances: data ?? [] });
+  })
+);
+
+app.post(
+  "/api/buscar-leads",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const payload = await forwardSupabaseFunction(
+      "buscar-leads",
+      req.authContext!.accessToken,
+      req.body
+    );
+    res.json(payload);
+  })
+);
+
+app.post(
+  "/api/leads/import-csv",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const payload = await forwardSupabaseFunction(
+      "import-leads-csv",
+      req.authContext!.accessToken,
+      req.body
+    );
+    res.json(payload);
+  })
+);
+
+app.get(
+  "/api/admin/users",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem listar usuarios");
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .select("id, auth_user_id, email, name, role, created_at")
+      .eq("aces_id", context.acesId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar usuarios", error);
+    }
+
+    res.json({ success: true, users: data ?? [] });
+  })
+);
+
+app.patch(
+  "/api/admin/users/:id/role",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem atualizar usuarios");
+    }
+
+    const role = String(req.body.role ?? "").toUpperCase();
+    if (role !== "ADMIN" && role !== "VENDEDOR" && role !== "NENHUM") {
+      throw new HttpError(400, "Role invalida");
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({ role: role as CrmUserRole })
+      .eq("id", getSingleParam(req.params.id))
+      .eq("aces_id", context.acesId)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel atualizar role", error);
+    }
+
+    if (!data) {
+      throw new HttpError(404, "Usuario nao encontrado");
+    }
+
+    res.json({ success: true });
+  })
+);
+
+app.get(
+  "/api/admin/invitations/pending",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem listar convites");
+    }
+
+    const supabaseUser = createUserScopedSupabaseClient(context.accessToken);
+    const { data, error } = await supabaseUser.rpc("get_pending_invitations");
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar convites", error);
+    }
+
+    res.json({ success: true, invitations: data ?? [] });
+  })
+);
+
+app.post(
+  "/api/admin/users/invite",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem convidar usuarios");
+    }
+
+    const email = String(req.body.email ?? "").trim();
+    const name = String(req.body.name ?? "").trim();
+    const role = String(req.body.role ?? "NENHUM").toUpperCase();
+
+    if (!email) {
+      throw new HttpError(400, "Email e obrigatorio");
+    }
+
+    if (role !== "ADMIN" && role !== "VENDEDOR" && role !== "NENHUM") {
+      throw new HttpError(400, "Role invalida");
+    }
+
+    const supabaseUser = createUserScopedSupabaseClient(context.accessToken);
+    const { data, error } = await supabaseUser.rpc("invite_user_to_company", {
+      p_email: email,
+      p_name: name,
+      p_role: role,
+    });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel criar convite", error);
+    }
+
+    const invitePayload = asRecord(data);
+    if (invitePayload.success === false) {
+      throw new HttpError(
+        400,
+        typeof invitePayload.error === "string" ? invitePayload.error : "Erro ao criar convite",
+        invitePayload
+      );
+    }
+
+    const invitationId = String(invitePayload.invitation_id ?? "");
+    if (!invitationId) {
+      throw new HttpError(500, "Convite criado sem identificador");
+    }
+
+    const edgePayload = await forwardSupabaseFunction(
+      "send-user-invitation",
+      context.accessToken,
+      { email, invitationId }
+    );
+
+    res.json({ success: true, invitationId, invitation: invitePayload, emailResult: edgePayload });
+  })
+);
+
+app.post(
+  "/api/admin/invitations/:id/cancel",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem cancelar convites");
+    }
+
+    const supabaseUser = createUserScopedSupabaseClient(context.accessToken);
+    const { data, error } = await supabaseUser.rpc("cancel_invitation", {
+      p_invitation_id: getSingleParam(req.params.id),
+    });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel cancelar convite", error);
+    }
+
+    const payload = asRecord(data);
+    if (payload.success === false) {
+      throw new HttpError(
+        400,
+        typeof payload.error === "string" ? payload.error : "Erro ao cancelar convite",
+        payload
+      );
+    }
+
+    res.json({ success: true });
+  })
+);
+
+app.post(
+  "/api/chat/attachments/upload-url",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.createChatAttachmentUploadUrl(req.authContext!, {
+      leadId: String(req.body.leadId ?? ""),
+      instanceName:
+        typeof req.body.instanceName === "string" ? req.body.instanceName : null,
+      fileName: String(req.body.fileName ?? ""),
+      mimeType: String(req.body.mimeType ?? ""),
+      fileSize: Number(req.body.fileSize ?? 0),
+      kind: String(req.body.kind ?? "") as "image" | "audio" | "document",
+    });
+
+    res.json(result);
+  })
+);
+
 app.post(
   "/api/chat/send-manual",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
+    const attachmentInput = asRecord(req.body.attachment);
     const result = await manager.sendManualMessage(context, {
       leadId: String(req.body.leadId ?? ""),
-      content: String(req.body.content ?? ""),
+      content: typeof req.body.content === "string" ? req.body.content : "",
       instanceName:
         typeof req.body.instanceName === "string" ? req.body.instanceName : null,
+      attachment: req.body.attachment
+        ? {
+            messageId: String(attachmentInput.messageId ?? ""),
+            attachmentId: String(attachmentInput.attachmentId ?? ""),
+            storagePath: String(attachmentInput.storagePath ?? ""),
+            fileName: String(attachmentInput.fileName ?? ""),
+            mimeType: String(attachmentInput.mimeType ?? ""),
+            fileSize: Number(attachmentInput.fileSize ?? 0),
+            kind: String(attachmentInput.kind ?? "") as "image" | "audio" | "document",
+          }
+        : null,
     });
 
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/chat/leads/:leadId/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.listChatMessages(
+      req.authContext!,
+      getSingleParam(req.params.leadId)
+    );
     res.json(result);
   })
 );

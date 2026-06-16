@@ -22,6 +22,34 @@ type ClaimedExecution = {
   attempt_count: number;
 };
 
+type ClaimedCalendarFollowup = {
+  event_id: string;
+  aces_id: number;
+  lead_id: string;
+  title: string;
+  description: string | null;
+  start_time: string;
+  end_time: string;
+  all_day: boolean;
+  location: string | null;
+  meeting_url: string | null;
+  metadata: Record<string, unknown> | null;
+  lead_name: string | null;
+  contact_phone: string | null;
+  instance_name: string | null;
+  attempt_count: number;
+};
+
+type ExpiredUploadIntent = {
+  id: string;
+  storage_path: string | null;
+};
+
+type ExpiredMessageAttachment = {
+  id: string;
+  storage_path: string | null;
+};
+
 type BrasilApiHoliday = {
   date?: string;
   name?: string;
@@ -36,6 +64,11 @@ type HumanizedDispatchPlan = {
 };
 
 type DispatchFailureKind = "transient" | "permanent";
+
+type WhatsAppSendResult = {
+  providerMessageId: string | null;
+  providerPayloadSummary: Record<string, unknown> | null;
+};
 
 class AutomationDispatchError extends Error {
   kind: DispatchFailureKind;
@@ -65,8 +98,14 @@ const TRANSIENT_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const PERMANENT_HTTP_STATUS_CODES = new Set([400]);
 const TRANSIENT_NETWORK_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"]);
 const MAX_TRANSIENT_RETRIES = 5;
+const CALENDAR_FOLLOWUP_MAX_TRANSIENT_RETRIES = 3;
+const CALENDAR_FOLLOWUP_CONVERSATION_PREFIX = "calendar_followup";
+const CALENDAR_FOLLOWUP_TIMEZONE = "America/Sao_Paulo";
+const CALENDAR_FOLLOWUP_DEFAULT_TEMPLATE =
+  'Ola, {nome}! Passando para lembrar do compromisso "{titulo}" hoje as {horario}.';
 const RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RETRY_DELAYS_MS = [5, 15, 30, 60, 120].map((minutes) => minutes * 60 * 1000);
+const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
 const GENERIC_NAME_PATTERNS = [
   /^clinica de estetica$/i,
   /^clinica odontologica$/i,
@@ -199,8 +238,94 @@ function renderExecutionMessage(execution: ClaimedExecution) {
   return renderedMessage;
 }
 
+function formatCalendarDate(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: CALENDAR_FOLLOWUP_TIMEZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
+function formatCalendarTime(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: CALENDAR_FOLLOWUP_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function buildCalendarFollowupConversationId(eventId: string) {
+  return `${CALENDAR_FOLLOWUP_CONVERSATION_PREFIX}:${eventId}`;
+}
+
+function renderCalendarFollowupMessage(followup: ClaimedCalendarFollowup, template: string) {
+  const renderedMessage = renderTemplate(template, {
+    nome: followup.lead_name ?? "",
+    empresa: normalizeBusinessName(followup.lead_name),
+    titulo: followup.title,
+    horario: followup.all_day ? "dia inteiro" : formatCalendarTime(followup.start_time),
+    data: formatCalendarDate(followup.start_time),
+    local: followup.location ?? "",
+    link: followup.meeting_url ?? "",
+  });
+
+  assertNoUnresolvedPlaceholders(renderedMessage);
+  return renderedMessage;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractProviderMessageId(value: unknown, depth = 0): string | null {
+  if (depth > 4 || !isRecord(value)) {
+    return null;
+  }
+
+  const directKeys = ["id", "messageId", "message_id", "providerMessageId", "wamid"];
+  for (const key of directKeys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  for (const key of ["key", "data", "message", "result"]) {
+    const candidate = extractProviderMessageId(value[key], depth + 1);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function summarizeProviderPayload(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (isRecord(value)) {
+    const summary: Record<string, unknown> = {};
+    for (const key of ["key", "id", "messageId", "status", "message", "instance", "data"]) {
+      if (key in value) {
+        summary[key] = value[key];
+      }
+    }
+
+    return Object.keys(summary).length > 0 ? summary : { payload: value };
+  }
+
+  if (typeof value === "string") {
+    return { payload: value.slice(0, 1000) };
+  }
+
+  try {
+    return { payload: JSON.stringify(value).slice(0, 1000) };
+  } catch {
+    return { payload: String(value).slice(0, 1000) };
+  }
 }
 
 function parseNumericValue(value: unknown) {
@@ -384,12 +509,12 @@ async function sendWhatsAppMessage(
   instanceName: string,
   phone: string,
   message: string
-) {
+): Promise<WhatsAppSendResult> {
   const cleanPhone = normalizePhone(phone);
   const finalNumber = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
 
   try {
-    await axios.post(
+    const response = await axios.post(
       `${evolutionApiUrl}/message/sendText/${instanceName}`,
       {
         number: `${finalNumber}@s.whatsapp.net`,
@@ -400,6 +525,11 @@ async function sendWhatsAppMessage(
         headers: { apikey: evolutionApiKey },
       }
     );
+
+    return {
+      providerMessageId: extractProviderMessageId(response.data),
+      providerPayloadSummary: summarizeProviderPayload(response.data),
+    };
   } catch (error) {
     const statusCode = axios.isAxiosError(error) ? error.response?.status ?? null : null;
     const errorCode =
@@ -426,13 +556,35 @@ export function startAutomationWorker() {
   const evolutionApiKey = requireEnv("EVOLUTION_API_KEY");
   const pollMs = Number(process.env.AUTOMATION_WORKER_POLL_MS ?? 15000);
   const batchSize = Number(process.env.AUTOMATION_WORKER_BATCH_SIZE ?? 50);
+  const chatAttachmentsCleanupIntervalMs = Number(
+    process.env.CHAT_ATTACHMENTS_CLEANUP_INTERVAL_MS ?? 3600000
+  );
+  const chatAttachmentsCleanupBatchSize = Number(
+    process.env.CHAT_ATTACHMENTS_CLEANUP_BATCH_SIZE ?? 100
+  );
+  const calendarFollowupEnabled = process.env.CALENDAR_FOLLOWUP_ENABLED === "true";
+  const calendarFollowupDryRun = process.env.CALENDAR_FOLLOWUP_DRY_RUN === "true";
+  const calendarFollowupBatchSizeRaw = Number(process.env.CALENDAR_FOLLOWUP_BATCH_SIZE ?? 25);
+  const calendarFollowupBatchSize = Number.isFinite(calendarFollowupBatchSizeRaw)
+    ? Math.max(1, Math.min(calendarFollowupBatchSizeRaw, 100))
+    : 25;
+  const calendarFollowupTemplate = process.env.CALENDAR_FOLLOWUP_1H_TEMPLATE?.trim()
+    ? process.env.CALENDAR_FOLLOWUP_1H_TEMPLATE
+    : CALENDAR_FOLLOWUP_DEFAULT_TEMPLATE;
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     db: { schema: "crm" },
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const calendarSupabase = createClient(supabaseUrl, serviceRoleKey, {
+    db: { schema: "calendar" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   let running = false;
+  let calendarFollowupRunning = false;
+  let chatCleanupRunning = false;
   const holidayCacheYears = new Set<number>();
   let lastFreezeRepairAt = 0;
 
@@ -587,6 +739,114 @@ export function startAutomationWorker() {
     });
   }
 
+  async function calendarFollowupHistoryExists(followup: ClaimedCalendarFollowup) {
+    const { data, error } = await supabase
+      .from("message_history")
+      .select("id")
+      .eq("lead_id", followup.lead_id)
+      .eq("conversation_id", buildCalendarFollowupConversationId(followup.event_id))
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return Boolean(data);
+  }
+
+  async function saveCalendarFollowupMessage(
+    followup: ClaimedCalendarFollowup,
+    content: string,
+    sentAt: string,
+    sendResult: WhatsAppSendResult
+  ) {
+    const { error } = await supabase.from("message_history").insert({
+      lead_id: followup.lead_id,
+      aces_id: followup.aces_id,
+      content,
+      direction: "outbound",
+      source_type: "automation",
+      conversation_id: buildCalendarFollowupConversationId(followup.event_id),
+      instance: followup.instance_name,
+      sent_at: sentAt,
+      provider: "evolution",
+      provider_message_id: sendResult.providerMessageId,
+      provider_status: "sent",
+      provider_payload_summary: sendResult.providerPayloadSummary,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function registerCalendarFollowupOutboundEcho(
+    followup: ClaimedCalendarFollowup,
+    content: string,
+    sentAt: string
+  ) {
+    if (!followup.instance_name || !followup.contact_phone) {
+      return;
+    }
+
+    await registerOutboundEcho({
+      client: supabase as any,
+      acesId: followup.aces_id,
+      leadId: followup.lead_id,
+      origin: "calendar_followup",
+      referenceId: followup.event_id,
+      conversationId: buildCalendarFollowupConversationId(followup.event_id),
+      instanceName: followup.instance_name,
+      phone: followup.contact_phone,
+      content,
+      sentAt,
+    });
+  }
+
+  async function markCalendarFollowupSent(
+    followup: ClaimedCalendarFollowup,
+    sentAt: string,
+    providerMessageId: string | null
+  ) {
+    const { error } = await calendarSupabase.rpc("rpc_mark_followup_sent", {
+      p_event_id: followup.event_id,
+      p_sent_at: sentAt,
+      p_provider_message_id: providerMessageId,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function markCalendarFollowupFailed(
+    followup: ClaimedCalendarFollowup,
+    reason: string,
+    retry: boolean
+  ) {
+    const { error } = await calendarSupabase.rpc("rpc_mark_followup_failed", {
+      p_event_id: followup.event_id,
+      p_error: reason,
+      p_retry: retry,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function skipCalendarFollowup(followup: ClaimedCalendarFollowup, reason: string) {
+    const { error } = await calendarSupabase.rpc("rpc_skip_followup", {
+      p_event_id: followup.event_id,
+      p_reason: reason,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
   async function deferExecution(
     executionId: string,
     dispatchAt: string,
@@ -712,6 +972,101 @@ export function startAutomationWorker() {
 
     if (error) {
       throw error;
+    }
+  }
+
+  async function removeChatAttachmentObject(storagePath: string | null) {
+    if (!storagePath) {
+      return true;
+    }
+
+    const { error } = await supabase.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .remove([storagePath]);
+
+    if (error) {
+      console.warn("[automation-worker] Falha ao remover objeto de anexo do chat:", {
+        storagePath,
+        error,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function cleanupExpiredChatAttachments() {
+    if (chatCleanupRunning) {
+      return;
+    }
+
+    chatCleanupRunning = true;
+
+    try {
+      const now = new Date().toISOString();
+      const { data: intentsData, error: intentsError } = await supabase
+        .from("message_attachment_upload_intents")
+        .select("id, storage_path")
+        .eq("status", "issued")
+        .lte("intent_expires_at", now)
+        .limit(chatAttachmentsCleanupBatchSize);
+
+      if (intentsError) {
+        throw intentsError;
+      }
+
+      for (const intent of (intentsData ?? []) as ExpiredUploadIntent[]) {
+        const removed = await removeChatAttachmentObject(intent.storage_path);
+        if (!removed) {
+          continue;
+        }
+
+        const { error } = await supabase
+          .from("message_attachment_upload_intents")
+          .update({ status: "expired", updated_at: new Date().toISOString() })
+          .eq("id", intent.id)
+          .eq("status", "issued");
+
+        if (error) {
+          console.warn("[automation-worker] Falha ao marcar intent de anexo como expirada:", {
+            intentId: intent.id,
+            error,
+          });
+        }
+      }
+
+      const { data: attachmentsData, error: attachmentsError } = await supabase
+        .from("message_attachments")
+        .select("id, storage_path")
+        .is("storage_deleted_at", null)
+        .lte("expires_at", now)
+        .limit(chatAttachmentsCleanupBatchSize);
+
+      if (attachmentsError) {
+        throw attachmentsError;
+      }
+
+      for (const attachment of (attachmentsData ?? []) as ExpiredMessageAttachment[]) {
+        const removed = await removeChatAttachmentObject(attachment.storage_path);
+        if (!removed) {
+          continue;
+        }
+
+        const { error } = await supabase
+          .from("message_attachments")
+          .update({ storage_deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq("id", attachment.id)
+          .is("storage_deleted_at", null);
+
+        if (error) {
+          console.warn("[automation-worker] Falha ao marcar anexo do chat como removido:", {
+            attachmentId: attachment.id,
+            error,
+          });
+        }
+      }
+    } finally {
+      chatCleanupRunning = false;
     }
   }
 
@@ -879,24 +1234,177 @@ export function startAutomationWorker() {
     }
   }
 
+  async function processDueCalendarFollowups() {
+    if (!calendarFollowupEnabled || calendarFollowupRunning) {
+      return;
+    }
+
+    calendarFollowupRunning = true;
+
+    try {
+      while (true) {
+        const { data, error } = await calendarSupabase.rpc("rpc_claim_due_followup_events", {
+          p_limit: calendarFollowupBatchSize,
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        const followups = (data as ClaimedCalendarFollowup[]) || [];
+        if (followups.length === 0) {
+          return;
+        }
+
+        for (const followup of followups) {
+          try {
+            const startsAtMs = Date.parse(followup.start_time);
+            if (Number.isFinite(startsAtMs) && startsAtMs <= Date.now()) {
+              await skipCalendarFollowup(followup, "Evento iniciou antes do lembrete ser enviado");
+              continue;
+            }
+
+            const alreadySent = await calendarFollowupHistoryExists(followup);
+            if (alreadySent) {
+              await markCalendarFollowupSent(followup, new Date().toISOString(), null);
+              continue;
+            }
+
+            if (!followup.instance_name) {
+              throw new AutomationDispatchError("Instancia de envio nao definida para o lead", {
+                kind: "permanent",
+              });
+            }
+
+            if (!followup.contact_phone) {
+              throw new AutomationDispatchError("Lead sem telefone para lembrete do calendario", {
+                kind: "permanent",
+              });
+            }
+
+            const renderedMessage = renderCalendarFollowupMessage(
+              followup,
+              calendarFollowupTemplate
+            );
+
+            if (calendarFollowupDryRun) {
+              console.log("[automation-worker] Dry-run do follow-up de calendario:", {
+                eventId: followup.event_id,
+                leadId: followup.lead_id,
+                instanceName: followup.instance_name,
+                message: renderedMessage,
+              });
+              await markCalendarFollowupFailed(
+                followup,
+                "Dry-run: mensagem validada sem envio",
+                true
+              );
+              continue;
+            }
+
+            const sentAt = new Date().toISOString();
+            await registerCalendarFollowupOutboundEcho(followup, renderedMessage, sentAt);
+            const sendResult = await sendWhatsAppMessage(
+              evolutionApiUrl,
+              evolutionApiKey,
+              followup.instance_name,
+              followup.contact_phone,
+              renderedMessage
+            );
+            await saveCalendarFollowupMessage(followup, renderedMessage, sentAt, sendResult);
+
+            try {
+              await repairAutomationAiFreezes(
+                followup.lead_id,
+                `calendar_followup:${followup.event_id}`
+              );
+            } catch (error) {
+              console.warn(
+                `[automation-worker] Falha ao reparar freeze apos follow-up do evento ${followup.event_id}:`,
+                error
+              );
+            }
+
+            await markCalendarFollowupSent(followup, sentAt, sendResult.providerMessageId);
+          } catch (error) {
+            const failure = classifyExecutionFailure(error);
+            const shouldRetry =
+              failure.kind === "transient" &&
+              followup.attempt_count < CALENDAR_FOLLOWUP_MAX_TRANSIENT_RETRIES;
+
+            console.error(
+              `[automation-worker] Falha ${failure.kind} no follow-up do evento ${followup.event_id}:`,
+              error
+            );
+
+            try {
+              await markCalendarFollowupFailed(followup, failure.message, shouldRetry);
+            } catch (recoveryError) {
+              console.error(
+                `[automation-worker] Falha adicional ao marcar follow-up ${followup.event_id}:`,
+                recoveryError
+              );
+            }
+          }
+        }
+      }
+    } finally {
+      calendarFollowupRunning = false;
+    }
+  }
+
   const timer = setInterval(() => {
     processDueExecutions().catch((error) => {
       console.error("[automation-worker] Erro no ciclo do worker:", error);
     });
   }, pollMs);
 
+  const calendarFollowupTimer = calendarFollowupEnabled
+    ? setInterval(() => {
+        processDueCalendarFollowups().catch((error) => {
+          console.error("[automation-worker] Erro no ciclo de follow-up do calendario:", error);
+        });
+      }, pollMs)
+    : null;
+
+  const chatCleanupTimer = setInterval(() => {
+    cleanupExpiredChatAttachments().catch((error) => {
+      console.error("[automation-worker] Erro na limpeza de anexos do chat:", error);
+    });
+  }, chatAttachmentsCleanupIntervalMs);
+
   processDueExecutions().catch((error) => {
     console.error("[automation-worker] Erro na execucao inicial:", error);
   });
 
+  if (calendarFollowupEnabled) {
+    processDueCalendarFollowups().catch((error) => {
+      console.error("[automation-worker] Erro na execucao inicial do follow-up do calendario:", error);
+    });
+  }
+
+  cleanupExpiredChatAttachments().catch((error) => {
+    console.error("[automation-worker] Erro na limpeza inicial de anexos do chat:", error);
+  });
+
   console.log(
-    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes`
+    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes; limpeza de anexos a cada ${chatAttachmentsCleanupIntervalMs}ms; follow-up calendario ${
+      calendarFollowupEnabled
+        ? `ativo com lote ${calendarFollowupBatchSize}${calendarFollowupDryRun ? " em dry-run" : ""}`
+        : "desativado"
+    }`
   );
 
   return {
     processDueExecutions,
+    processDueCalendarFollowups,
+    cleanupExpiredChatAttachments,
     stop() {
       clearInterval(timer);
+      if (calendarFollowupTimer) {
+        clearInterval(calendarFollowupTimer);
+      }
+      clearInterval(chatCleanupTimer);
     },
   };
 }

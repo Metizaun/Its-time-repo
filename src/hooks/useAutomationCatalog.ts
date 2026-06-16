@@ -9,11 +9,10 @@ import {
   NO_LEAD_SOURCE_VALUE,
   type AutomationLeadSourceOption,
   type AutomationOwnerOption,
-  type AutomationTagOption,
 } from "@/lib/automation";
+import { useTagsCatalog } from "@/hooks/useTagsCatalog";
 
 const EMPTY_OWNERS: AutomationOwnerOption[] = [];
-const EMPTY_TAGS: AutomationTagOption[] = [];
 const EMPTY_LEAD_SOURCES: AutomationLeadSourceOption[] = [];
 
 async function fetchLeadSources() {
@@ -87,13 +86,8 @@ async function fetchLeadSources() {
 }
 
 async function fetchAutomationCatalog() {
-  const [
-    { data: owners, error: ownersError },
-    { data: tags, error: tagsError },
-    leadSources,
-  ] = await Promise.all([
+  const [{ data: owners, error: ownersError }, leadSources] = await Promise.all([
     supabase.from("users").select("id, name").order("name"),
-    supabase.from("tags").select("id, name, urgencia").order("name"),
     fetchLeadSources(),
   ]);
 
@@ -101,18 +95,14 @@ async function fetchAutomationCatalog() {
     throw ownersError;
   }
 
-  if (tagsError) {
-    throw tagsError;
-  }
-
   return {
     owners: (owners ?? []) as AutomationOwnerOption[],
-    tags: (tags ?? []) as AutomationTagOption[],
     leadSources,
   };
 }
 
 export function useAutomationCatalog(enabled = true) {
+  const tagsCatalog = useTagsCatalog(enabled);
   const catalogQuery = useQuery({
     queryKey: ["automation", "catalog"],
     queryFn: fetchAutomationCatalog,
@@ -121,17 +111,12 @@ export function useAutomationCatalog(enabled = true) {
   });
 
   const owners = catalogQuery.data?.owners ?? EMPTY_OWNERS;
-  const tags = catalogQuery.data?.tags ?? EMPTY_TAGS;
+  const tags = tagsCatalog.tags;
   const leadSources = catalogQuery.data?.leadSources ?? EMPTY_LEAD_SOURCES;
 
   const ownersById = useMemo(
     () => Object.fromEntries(owners.map((owner) => [owner.id, owner.name])),
     [owners],
-  );
-
-  const tagsById = useMemo(
-    () => Object.fromEntries(tags.map((tag) => [tag.id, tag.name])),
-    [tags],
   );
 
   return {
@@ -142,9 +127,12 @@ export function useAutomationCatalog(enabled = true) {
     tags,
     leadSources,
     ownersById,
-    tagsById,
-    loading: catalogQuery.isLoading,
-    error: catalogQuery.error,
-    refetch: catalogQuery.refetch,
+    tagsById: tagsCatalog.tagsById,
+    loading: catalogQuery.isLoading || tagsCatalog.loading,
+    error: catalogQuery.error ?? tagsCatalog.error,
+    refetch: async () => {
+      const [catalogResult] = await Promise.all([catalogQuery.refetch(), tagsCatalog.refetch()]);
+      return catalogResult;
+    },
   };
 }

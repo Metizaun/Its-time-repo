@@ -1,16 +1,25 @@
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
+import { MessageAttachment } from "./MessageAttachment";
+import type { ChatAttachment } from "@/types/chat";
 
 interface MessageBubbleProps {
   content: string;
   sentAt: string;
   isOutbound: boolean;
   senderName?: string | null;
+  attachments?: ChatAttachment[];
 }
 
-export function MessageBubble({ content, sentAt, isOutbound, senderName }: MessageBubbleProps) {
+const ATTACHMENT_PLACEHOLDERS = new Set(["[imagem enviada]", "[audio enviado]", "[documento enviado]"]);
+
+export function MessageBubble({ content, sentAt, isOutbound, senderName, attachments = [] }: MessageBubbleProps) {
   const time = format(new Date(sentAt), "HH:mm", { locale: ptBR });
+  const normalizedContent = content.trim();
+  const visibleContent =
+    attachments.length > 0 && ATTACHMENT_PLACEHOLDERS.has(normalizedContent.toLowerCase()) ? "" : normalizedContent;
+  const hasAttachments = attachments.length > 0;
 
   return (
     <div className={cn(
@@ -18,20 +27,33 @@ export function MessageBubble({ content, sentAt, isOutbound, senderName }: Messa
       isOutbound ? "justify-end" : "justify-start"
     )}>
       <div className={cn(
-        "max-w-[70%] px-4 py-2.5",
-        isOutbound 
-          ? "bg-[var(--color-accent)] text-white rounded-[18px] rounded-br-[4px] shadow-[0_2px_8px_rgba(229,57,58,0.2)]" 
-          : "bg-[var(--color-border-subtle)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-[18px] rounded-bl-[4px]"
+        "max-w-[min(82%,36rem)] px-4 py-2.5 text-sm shadow-sm",
+        isOutbound
+          ? hasAttachments
+            ? "rounded-[18px] rounded-br-[4px] border border-[var(--color-primary-100)] bg-[var(--color-primary-50)] text-[var(--color-gray-800)]"
+            : "rounded-[18px] rounded-br-[4px] bg-[var(--color-primary-500)] text-[var(--color-surface-1)] shadow-primary"
+          : "rounded-[18px] rounded-bl-[4px] border border-[var(--border-default)] bg-[var(--color-surface-1)] text-[var(--color-gray-700)]"
       )}>
         {!isOutbound && senderName && (
-          <p className="text-[10px] uppercase tracking-wider text-[var(--color-accent)] font-semibold mb-1">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-primary-500)]">
             {senderName}
           </p>
         )}
-        <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{content}</p>
+        {attachments.length > 0 && (
+          <div className={cn("flex flex-col gap-2", visibleContent && "mb-2")}>
+            {attachments.map((attachment) => (
+              <MessageAttachment key={attachment.id} attachment={attachment} isOutbound={isOutbound} />
+            ))}
+          </div>
+        )}
+        {visibleContent && <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{visibleContent}</p>}
         <p className={cn(
           "text-[10px] mt-1 text-right",
-          isOutbound ? "text-white/50" : "text-[var(--color-text-secondary)]"
+          isOutbound
+            ? hasAttachments
+              ? "text-[var(--color-gray-500)]"
+              : "text-[var(--color-primary-100)]"
+            : "text-[var(--color-gray-500)]"
         )}>
           {time}
         </p>

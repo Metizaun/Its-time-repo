@@ -247,6 +247,8 @@
     --layout-topbar-height: 56px;
     --layout-sidebar-width: 240px;
     --layout-sidebar-collapsed: 64px;
+    --chat-sidebar-width: 320px;
+    --chat-header-height: 64px;
     --layout-content-padding: 32px;
     --layout-content-max-width: 1040px;
     --layout-section-gap: 32px;
@@ -347,10 +349,15 @@
     padding: 0;
   }
 
+  .app-main--calendar {
+    max-width: none;
+    padding: var(--space-4);
+  }
+
   .topbar {
     position: sticky;
     top: 0;
-    z-index: 100;
+    z-index: 30;
     display: flex;
     height: var(--layout-topbar-height);
     align-items: center;
@@ -639,7 +646,7 @@
     position: fixed;
     top: 50vh;
     left: var(--sidebar-toggle-left);
-    z-index: 50;
+    z-index: 45;
     display: none;
     width: 30px;
     height: 30px;
@@ -861,7 +868,32 @@
   }
 
   .dashboard-filter--instance {
-    width: 210px;
+    width: 240px;
+    min-width: 240px;
+  }
+
+  .dashboard-filter-content {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+  }
+
+  .dashboard-filter-icon {
+    width: var(--space-4);
+    height: var(--space-4);
+    flex-shrink: 0;
+  }
+
+  .dashboard-filter-value {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .dashboard-filter--period {
@@ -1365,6 +1397,165 @@
     outline: none;
   }
 
+  .chat-tool-button {
+    display: inline-flex;
+    width: var(--height-input-md);
+    height: var(--height-input-md);
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background-color: transparent;
+    color: var(--color-gray-600);
+    transition: var(--transition-colors), box-shadow var(--duration-fast) var(--ease-out);
+  }
+
+  .chat-tool-button:hover:not(:disabled),
+  .chat-tool-button--active {
+    background-color: var(--color-bg-subtle);
+    color: var(--color-gray-900);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .chat-tool-button:disabled {
+    cursor: not-allowed;
+    color: var(--color-gray-400);
+    opacity: 0.6;
+  }
+
+  .chat-tag-pill {
+    display: inline-flex;
+    max-width: 100%;
+    align-items: center;
+    gap: var(--space-1);
+    border: var(--border-width-sm) solid var(--border-default);
+    border-radius: var(--radius-full);
+    background-color: var(--color-surface-3);
+    color: var(--color-gray-700);
+    padding: 2px var(--space-2);
+    font-family: var(--font-family-mono);
+    font-size: var(--text-xs);
+    font-weight: var(--font-medium);
+    letter-spacing: var(--tracking-wide);
+    line-height: var(--leading-none);
+    white-space: nowrap;
+  }
+
+  .chat-tag-delete-item {
+    border-radius: var(--radius-md);
+    color: var(--color-gray-700);
+    cursor: pointer;
+    transition: var(--transition-colors);
+  }
+
+  .chat-tag-delete-item svg {
+    color: var(--color-gray-500);
+    transition: var(--transition-colors);
+  }
+
+  .select-content .chat-tag-delete-item:hover,
+  .select-content .chat-tag-delete-item:focus,
+  .select-content .chat-tag-delete-item:focus-visible,
+  .select-content .chat-tag-delete-item[data-highlighted] {
+    background-color: transparent;
+    color: var(--color-error-600);
+  }
+
+  .select-content .chat-tag-delete-item:hover svg,
+  .select-content .chat-tag-delete-item:focus svg,
+  .select-content .chat-tag-delete-item:focus-visible svg,
+  .select-content .chat-tag-delete-item[data-highlighted] svg {
+    color: var(--color-error-600);
+  }
+
+  .chat-tags-row {
+    display: flex;
+    min-width: 0;
+    max-width: min(42vw, 360px);
+    align-items: center;
+    gap: var(--space-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .chat-tags-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chat-attachment-tile {
+    border: var(--border-width-sm) solid var(--border-default);
+    border-radius: var(--radius-xl);
+    background-color: var(--color-surface-1);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .chat-voice-inline {
+    display: flex;
+    min-height: var(--height-input-md);
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+  }
+
+  .chat-voice-waveform {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 3px;
+    overflow: hidden;
+  }
+
+  .chat-voice-waveform--button {
+    border: 0;
+    border-radius: var(--radius-lg);
+    background-color: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .chat-voice-waveform--button:focus-visible {
+    box-shadow: var(--shadow-focus);
+    outline: none;
+  }
+
+  .chat-voice-waveform__bar {
+    width: 3px;
+    min-width: 3px;
+    border-radius: var(--radius-full);
+    background-color: var(--color-gray-400);
+    opacity: 0.75;
+    transition: height var(--duration-fast) var(--ease-out), background-color var(--duration-fast) var(--ease-out),
+      opacity var(--duration-fast) var(--ease-out);
+  }
+
+  .chat-voice-waveform--live .chat-voice-waveform__bar {
+    background-color: var(--color-error-500);
+    opacity: 1;
+  }
+
+  .chat-voice-waveform__bar--played {
+    background-color: var(--color-primary-500);
+    opacity: 1;
+  }
+
+  .chat-voice-waveform--active .chat-voice-waveform__bar {
+    animation: chat-voice-wave 1s var(--ease-in-out) infinite;
+    background-color: var(--color-primary-500);
+    opacity: 1;
+    transform-origin: center;
+  }
+
+  .chat-voice-waveform--playing .chat-voice-waveform__bar--cursor {
+    animation: chat-voice-preview-cursor 0.72s var(--ease-in-out) infinite;
+    background-color: var(--color-primary-600);
+    opacity: 1;
+    transform-origin: center;
+  }
+
   .transition-width {
     transition-property: width;
     transition-duration: var(--duration-slow);
@@ -1472,6 +1663,10 @@
     padding: var(--space-6);
   }
 
+  .app-main--calendar {
+    padding: var(--space-3);
+  }
+
   .topbar {
     padding: 0 var(--space-3);
   }
@@ -1493,6 +1688,7 @@
   .dashboard-filter--instance,
   .dashboard-filter--period {
     width: 100%;
+    min-width: 0;
   }
 
   .funnel-wrapper {
@@ -1517,11 +1713,19 @@
   .funnel-connector {
     height: var(--space-5);
   }
+
+  .chat-tags-row {
+    max-width: calc(100vw - 180px);
+  }
 }
 
 @media (max-width: 640px) {
   .app-main {
     padding: var(--space-4);
+  }
+
+  .app-main--calendar {
+    padding: var(--space-2);
   }
 
   .dashboard-kpi-grid,
@@ -1565,6 +1769,26 @@ body.sidebar-mobile-open {
   }
   50% {
     opacity: 0.5;
+  }
+}
+
+@keyframes chat-voice-wave {
+  0%,
+  100% {
+    transform: scaleY(0.65);
+  }
+  50% {
+    transform: scaleY(1.15);
+  }
+}
+
+@keyframes chat-voice-preview-cursor {
+  0%,
+  100% {
+    transform: scaleY(0.85);
+  }
+  50% {
+    transform: scaleY(1.2);
   }
 }
 

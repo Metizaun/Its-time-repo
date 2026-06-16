@@ -19,9 +19,6 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
   try {
-    // Log headers for debugging
-    console.log("REQ HEADERS:", Object.fromEntries(req.headers.entries()));
-
     // Try to parse JSON safely
     let body: any = null;
     const ct = req.headers.get("content-type") ?? "";
@@ -33,13 +30,10 @@ Deno.serve(async (req) => {
         return new Response(JSON.stringify({ success: false, error: "Invalid JSON body" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }});
       }
     } else {
-      // If content-type missing or different, read text for diagnosis
-      const text = await req.text();
-      console.warn("Non-JSON body:", text);
+      await req.text();
+      console.warn("Non-JSON body received by send-user-invitation");
       return new Response(JSON.stringify({ success: false, error: "Content-Type must be application/json" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }});
     }
-
-    console.log("REQ BODY:", body);
 
     const { email, invitationId } = body ?? {};
     if (!email || !invitationId) {

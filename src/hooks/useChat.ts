@@ -1,97 +1,125 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
-import { sendToWebhook } from "@/services/webhookService";
+import {
+  createAttachmentUploadUrl,
+  listChatMessages,
+  normalizeMimeType,
+  sendManualMessage,
+} from "@/services/chatService";
+import type { ChatComposerPayload, ChatMessage } from "@/types/chat";
 
-export interface ChatMessage {
-  id: string;
-  lead_id: string;
-  content: string;
-  direction: string;
-  direction_code: number;
-  sent_at: string;
-  lead_name: string;
-  sender_name: string | null;
-}
+export type { ChatMessage } from "@/types/chat";
 
 export function useChat(leadId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchMessages = async () => {
+  const fetchMessages = useCallback(async () => {
     if (!leadId) return;
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc("rpc_get_chat", {
-        p_lead_id: leadId,
-      });
-
-      if (error) throw error;
-      setMessages(data || []);
-    } catch (error: any) {
+      const nextMessages = await listChatMessages(leadId);
+      setMessages(nextMessages);
+    } catch (error: unknown) {
       console.error("Erro ao carregar mensagens:", error);
       toast.error("Erro ao carregar chat", {
-        description: error.message,
+        description: error instanceof Error ? error.message : "Tente novamente.",
       });
     } finally {
       setLoading(false);
     }
-  };
+  }, [leadId]);
 
   const sendMessage = async (
-    content: string,
+    payload: ChatComposerPayload,
     _leadPhone?: string,
     instanceName?: string | null
   ) => {
-    if (!leadId || !content.trim()) return;
+    if (!leadId) return;
 
-    const tempMessage: ChatMessage = {
-      id: `temp-${Date.now()}`,
-      lead_id: leadId,
-      content: content.trim(),
-      direction: "outbound",
-      direction_code: 2,
-      sent_at: new Date().toISOString(),
-      lead_name: "",
-      sender_name: "Voce",
-    };
+    const content = payload.content.trim();
+    const attachment = payload.attachment ?? null;
+    if (!content && !attachment) return;
 
-    setMessages((prev) => [...prev, tempMessage]);
+    const shouldUseOptimisticText = !attachment;
+    const tempMessage: ChatMessage | null = shouldUseOptimisticText
+      ? {
+          id: `temp-${Date.now()}`,
+          lead_id: leadId,
+          content,
+          direction: "outbound",
+          direction_code: 2,
+          sent_at: new Date().toISOString(),
+          lead_name: "",
+          sender_name: "Voce",
+          provider_status: null,
+          attachments: [],
+        }
+      : null;
+
+    if (tempMessage) {
+      setMessages((prev) => [...prev, tempMessage]);
+    }
 
     try {
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) throw sessionError;
-
-      const accessToken = sessionData.session?.access_token;
-      if (!accessToken) {
-        throw new Error("Sessao expirada. Faca login novamente para enviar mensagens.");
-      }
-
-      await sendToWebhook({
-        accessToken,
-        leadId,
-        message: content.trim(),
-        instanceName: instanceName || null,
-      });
-
-      setTimeout(async () => {
-        const { data } = await supabase.rpc("rpc_get_chat", {
-          p_lead_id: leadId,
+      if (attachment) {
+        const mimeType = normalizeMimeType(attachment.file.type);
+        const uploadIntent = await createAttachmentUploadUrl({
+          leadId,
+          instanceName: instanceName || null,
+          fileName: attachment.file.name,
+          mimeType,
+          fileSize: attachment.file.size,
+          kind: attachment.kind,
         });
 
-        if (data) {
-          setMessages(data);
+        const { error: uploadError } = await supabase.storage
+          .from(uploadIntent.bucket)
+          .uploadToSignedUrl(uploadIntent.storagePath, uploadIntent.uploadToken, attachment.file, {
+            contentType: mimeType,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          throw uploadError;
         }
+
+        await sendManualMessage(leadId, {
+          content,
+          instanceName: instanceName || null,
+          attachment: {
+            messageId: uploadIntent.messageId,
+            attachmentId: uploadIntent.attachmentId,
+            storagePath: uploadIntent.storagePath,
+            fileName: attachment.file.name,
+            mimeType: uploadIntent.mimeType,
+            fileSize: attachment.file.size,
+            kind: uploadIntent.kind,
+          },
+        });
+      } else {
+        await sendManualMessage(leadId, {
+          content,
+          instanceName: instanceName || null,
+        });
+      }
+
+      setTimeout(async () => {
+        await fetchMessages();
       }, 500);
-    } catch (error: any) {
-      setMessages((prev) => prev.filter((message) => message.id !== tempMessage.id));
+    } catch (error: unknown) {
+      if (tempMessage) {
+        setMessages((prev) => prev.filter((message) => message.id !== tempMessage.id));
+      }
 
       console.error("Erro ao enviar mensagem:", error);
       toast.error("Erro ao enviar mensagem", {
-        description: error.message,
+        description: error instanceof Error ? error.message : "Tente novamente.",
       });
+      throw error;
     }
   };
 
@@ -118,13 +146,7 @@ export function useChat(leadId: string | null) {
 
           const newMessage = payload.new as { direction?: string };
           if (newMessage.direction === "inbound" || newMessage.direction === "outbound") {
-            const { data } = await supabase.rpc("rpc_get_chat", {
-              p_lead_id: leadId,
-            });
-
-            if (data) {
-              setMessages(data);
-            }
+            await fetchMessages();
           }
         }
       )
@@ -133,7 +155,7 @@ export function useChat(leadId: string | null) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [leadId]);
+  }, [fetchMessages, leadId]);
 
   return { messages, loading, sendMessage, refetch: fetchMessages };
 }

@@ -4,15 +4,27 @@ import { toast } from "sonner";
 import { PipelineStage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
 import { notifyLeadsUpdated } from "./useLeads";
+import { getCrmBackend } from "@/services/crmBackend";
 
 const PIPELINE_STAGES_UPDATED_EVENT = "pipeline-stages-updated";
 const MAX_FUNNEL_STAGES = 5;
+
+type CrmProfileResponse = {
+  profile?: {
+    aces_id: number;
+  };
+};
 
 export function usePipelineStages() {
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [loading, setLoading] = useState(true);
   const { session } = useAuth();
   const isAuthenticated = !!session;
+
+  const fetchCurrentAcesId = useCallback(async () => {
+    const { profile } = await getCrmBackend<CrmProfileResponse>("/api/crm/profile");
+    return profile?.aces_id ?? null;
+  }, []);
 
   const notifyStagesUpdated = useCallback(() => {
     if (typeof window !== "undefined") {
@@ -29,17 +41,8 @@ export function usePipelineStages() {
     try {
       setLoading(true);
 
-      const { data: userData, error: userError } = await supabase
-        .from("users")
-        .select("aces_id")
-        .eq("auth_user_id", session?.user?.id)
-        .maybeSingle();
-
-      if (userError) {
-        throw userError;
-      }
-
-      if (!userData?.aces_id) {
+      const acesId = await fetchCurrentAcesId();
+      if (!acesId) {
         setStages([]);
         return;
       }
@@ -47,7 +50,7 @@ export function usePipelineStages() {
       const { data, error } = await supabase
         .from("pipeline_stages")
         .select("*")
-        .eq("aces_id", userData.aces_id)
+        .eq("aces_id", acesId)
         .order("position", { ascending: true });
 
       if (error) throw error;
@@ -58,7 +61,7 @@ export function usePipelineStages() {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, session?.user?.id]);
+  }, [fetchCurrentAcesId, isAuthenticated]);
 
   useEffect(() => {
     fetchStages();
@@ -102,13 +105,8 @@ export function usePipelineStages() {
     try {
       const maxPosition = stages.length > 0 ? Math.max(...stages.map((s) => s.position)) : -1;
 
-      const { data: userData, error: userError } = await supabase
-        .from("users")
-        .select("aces_id")
-        .eq("auth_user_id", session?.user?.id)
-        .single();
-
-      if (userError || !userData) throw new Error("Nao foi possivel encontrar a empresa do usuario logado.");
+      const acesId = await fetchCurrentAcesId();
+      if (!acesId) throw new Error("Nao foi possivel encontrar a empresa do usuario logado.");
 
       const { data, error } = await supabase
         .from("pipeline_stages")
@@ -117,7 +115,7 @@ export function usePipelineStages() {
           color: stageData.color,
           category: stageData.category,
           position: maxPosition + 1,
-          aces_id: userData.aces_id,
+          aces_id: acesId,
           is_funnel_stage: false,
         })
         .select()

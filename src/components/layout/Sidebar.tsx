@@ -6,6 +6,7 @@ import {
   Kanban,
   Users,
   MessageSquare,
+  CalendarDays,
   Settings,
   Search,
   Workflow,
@@ -21,6 +22,7 @@ const navigation = [
   { name: "Leads", path: "/leads", icon: Users },
   { name: "Buscar", path: "/buscar", icon: Search },
   { name: "Chat", path: "/chat", icon: MessageSquare },
+  { name: "Calendario", path: "/calendar", icon: CalendarDays },
 ];
 
 const STORAGE_KEY = "Crm_sidebar_collapsed_v1";

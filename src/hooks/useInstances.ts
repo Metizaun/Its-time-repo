@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { getCrmBackend } from "@/services/crmBackend";
 
 export interface Instance {
   instancia: string;
@@ -21,60 +21,13 @@ export function useInstances() {
       setLoading(true);
       setError(null);
 
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        setError("Usuário não autenticado.");
-        setInstances([]);
-        return;
-      }
-
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('id, aces_id, role')
-        .eq('auth_user_id', user.id)
-        .maybeSingle();
-
-      if (userError) {
-        console.error("Erro ao buscar user Crm:", userError);
-        setError(`Erro ao buscar dados do usuário: ${userError.message}`);
-        setInstances([]);
-        return;
-      }
-
-      if (!userData?.aces_id) {
-        console.warn("Usuário sem aces_id vinculado.");
-        setError("Seu usuário não possui um ID de organização (aces_id) vinculado.");
-        setInstances([]);
-        return;
-      }
-
-      const { data: instanceData, error: instanceError } = await supabase
-        .from('instance')
-        .select('instancia, color, aces_id, status, setup_status, created_by')
-        .eq('aces_id', userData.aces_id)
-        .or('setup_status.is.null,setup_status.neq.cancelled')
-        .order('instancia');
-
-      if (instanceError) {
-        console.error("Erro ao buscar instâncias:", instanceError);
-        throw instanceError;
-      }
-
-      const normalizedInstances = (instanceData || []).filter((instance) => {
-        if (instance.setup_status === "cancelled") {
-          return false;
-        }
-
-        return instance.created_by === userData.id;
-      });
-
-      setInstances(normalizedInstances);
+      const { instances: nextInstances } = await getCrmBackend<{ instances: Instance[] }>("/api/crm/instances");
+      setInstances(nextInstances ?? []);
     } catch (error: any) {
-      console.error("Erro ao carregar instâncias:", error);
+      console.error("Erro ao carregar instancias:", error);
       setError(error.message);
       setInstances([]);
-      toast.error("Erro ao carregar instâncias", { description: error.message });
+      toast.error("Erro ao carregar instancias", { description: error.message });
     } finally {
       setLoading(false);
     }

@@ -1,18 +1,68 @@
 import axios from "axios";
 import Redis from "ioredis";
+import { randomUUID } from "node:crypto";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
 import {
   matchOutboundEcho,
   registerOutboundEcho,
   type OutboundEchoOrigin,
 } from "./outbound-echo-registry.js";
+import {
+  summarizeProviderPayload,
+  type SendMediaInput,
+  type SendResult,
+  WhatsAppProviderError,
+} from "./whatsapp-provider.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
 export const DEFAULT_USER_MESSAGE_TEMPLATE = `Analise a conversa e retorne JSON valido seguindo o schema solicitado.`;
+
+const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
+const CHAT_ATTACHMENT_MAX_FILE_SIZE = 104857600;
+const CHAT_IMAGE_RETENTION_DAYS = 7;
+const CHAT_ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/aac",
+  "audio/ogg",
+  "audio/opus",
+  "audio/wav",
+  "audio/webm",
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
+]);
+
+const DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
+]);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -122,6 +172,85 @@ type MessageRow = {
   created_by: string | null;
   sent_at: string;
   conversation_id: string | null;
+  provider?: "evolution" | "meta" | null;
+  provider_message_id?: string | null;
+  provider_status?: string | null;
+  provider_error_code?: string | null;
+  provider_error_message?: string | null;
+  provider_payload_summary?: unknown;
+};
+
+type ChatAttachmentKind = "image" | "audio" | "document";
+
+type ChatAttachmentUploadUrlInput = {
+  leadId: string;
+  instanceName?: string | null;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  kind: ChatAttachmentKind;
+};
+
+type ChatAttachmentSendInput = {
+  messageId: string;
+  attachmentId: string;
+  storagePath: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  kind: ChatAttachmentKind;
+};
+
+type ChatMessageAttachmentResponse = {
+  id: string;
+  kind: ChatAttachmentKind;
+  mimeType: string;
+  fileName: string;
+  fileSize: number;
+  downloadUrl: string | null;
+  expiresAt: string | null;
+  storageDeletedAt: string | null;
+};
+
+type ChatMessageResponse = {
+  id: string;
+  leadId: string;
+  content: string;
+  direction: string;
+  directionCode: number;
+  sentAt: string;
+  leadName: string;
+  senderName: string | null;
+  providerStatus?: string | null;
+  attachments: ChatMessageAttachmentResponse[];
+};
+
+type UploadIntentRow = {
+  id: string;
+  message_id: string;
+  attachment_id: string;
+  aces_id: number;
+  lead_id: string;
+  kind: ChatAttachmentKind;
+  mime_type: string;
+  storage_bucket: string;
+  storage_path: string;
+  file_name: string;
+  file_size: number;
+  status: "issued" | "consumed" | "failed" | "expired";
+  intent_expires_at: string;
+};
+
+type MessageAttachmentRow = {
+  id: string;
+  message_id: string;
+  kind: ChatAttachmentKind;
+  mime_type: string;
+  file_name: string | null;
+  file_size: number | null;
+  storage_path: string;
+  expires_at: string | null;
+  storage_deleted_at: string | null;
 };
 
 type AiRunRow = {
@@ -218,8 +347,9 @@ type StageRuleInput = {
 
 type SendManualMessageInput = {
   leadId: string;
-  content: string;
+  content?: string;
   instanceName?: string | null;
+  attachment?: ChatAttachmentSendInput | null;
 };
 
 type TestHandoffInput = {
@@ -289,6 +419,9 @@ type ServiceConfig = {
   evolutionApiKey: string;
   evolutionWebhookSecret?: string;
   webhookPublicBaseUrl?: string;
+  chatCacheTtlSeconds?: number;
+  chatSignedDownloadTtlSeconds?: number;
+  chatAttachmentUploadIntentTtlMinutes?: number;
 };
 
 export class HttpError extends Error {
@@ -369,6 +502,34 @@ function normalizePhone(phone: string): string {
   return clean;
 }
 
+function normalizeLeadDisplayName(value: string | null | undefined) {
+  const name = value?.trim().replace(/\s+/g, " ") ?? "";
+  if (!name || name.length < 2) {
+    return null;
+  }
+
+  const lower = name.toLowerCase();
+  if (lower === "unknown" || lower === "desconhecido" || lower === "sem nome") {
+    return null;
+  }
+
+  if (/^\+?\d{8,15}$/.test(name.replace(/\s/g, ""))) {
+    return null;
+  }
+
+  return name.slice(0, 120);
+}
+
+function isFallbackLeadName(value: string | null | undefined, phone: string) {
+  const current = value?.trim() ?? "";
+  if (!current) {
+    return true;
+  }
+
+  const normalizedPhone = normalizePhone(phone);
+  return current === `Lead ${normalizedPhone}` || current === normalizedPhone || current === `Lead ${phone}`;
+}
+
 function resolveWhatsappRecipient(phone: string) {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 10 || digits.length > 15) {
@@ -406,6 +567,93 @@ function wait(ms: number) {
 
 function addHours(date: Date, hours: number) {
   return new Date(date.getTime() + hours * 60 * 60 * 1000);
+}
+
+function addMinutes(date: Date, minutes: number) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function parsePositiveInteger(value: number | undefined, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+function normalizeMimeType(value: string) {
+  return value.trim().toLowerCase().split(";")[0] ?? "";
+}
+
+function resolveAttachmentKind(mimeType: string): ChatAttachmentKind | null {
+  const normalized = normalizeMimeType(mimeType);
+  if (!CHAT_ALLOWED_MIME_TYPES.has(normalized)) {
+    return null;
+  }
+
+  if (normalized.startsWith("image/")) {
+    return "image";
+  }
+
+  if (normalized.startsWith("audio/")) {
+    return "audio";
+  }
+
+  if (DOCUMENT_MIME_TYPES.has(normalized)) {
+    return "document";
+  }
+
+  return null;
+}
+
+function sanitizeStorageFileName(value: string) {
+  const sanitized = value
+    .trim()
+    .replace(/[\\/?%*:|"<>]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^\.+/, "")
+    .slice(0, 120);
+
+  return sanitized || "attachment";
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function buildAttachmentStoragePath(params: {
+  acesId: number;
+  leadId: string;
+  messageId: string;
+  attachmentId: string;
+  fileName: string;
+}) {
+  return [
+    String(params.acesId),
+    params.leadId,
+    params.messageId,
+    `${params.attachmentId}-${sanitizeStorageFileName(params.fileName)}`,
+  ].join("/");
+}
+
+function buildAttachmentContent(kind: ChatAttachmentKind, caption: string) {
+  if (caption.trim()) {
+    return caption.trim();
+  }
+
+  if (kind === "image") {
+    return "[imagem enviada]";
+  }
+
+  if (kind === "audio") {
+    return "[audio enviado]";
+  }
+
+  return "[documento enviado]";
 }
 
 function parseStructuredJson(text: string): StructuredModelResponse {
@@ -528,6 +776,24 @@ function buildExternalRequestError(error: unknown, fallbackMessage: string) {
   return new HttpError(resolvedStatus, message, responsePayload ?? error.message);
 }
 
+function summarizeWhatsAppProviderFailure(error: unknown) {
+  if (error instanceof WhatsAppProviderError) {
+    return {
+      statusCode: error.statusCode ?? 502,
+      errorCode: error.errorCode,
+      errorMessage: error.message,
+      payloadSummary: error.payloadSummary,
+    };
+  }
+
+  return {
+    statusCode: 502,
+    errorCode: null,
+    errorMessage: error instanceof Error ? error.message : "Falha desconhecida no provider",
+    payloadSummary: summarizeProviderPayload(error),
+  };
+}
+
 function isTransientGeminiError(error: unknown) {
   const message = extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : "");
   return /\b(429|500|503|504)\b/i.test(message) || /high demand|temporar|try again later|unavailable|timeout/i.test(message);
@@ -542,6 +808,9 @@ export class AgentManager {
   private static readonly DEFAULT_GEMINI_MAX_RETRIES = 3;
   private static readonly DEFAULT_GEMINI_RETRY_BASE_DELAY_MS = 1000;
   private static readonly FROM_ME_ECHO_LOOKBACK_MINUTES = 15;
+  private static readonly DEFAULT_CHAT_CACHE_TTL_SECONDS = 60;
+  private static readonly DEFAULT_CHAT_SIGNED_DOWNLOAD_TTL_SECONDS = 900;
+  private static readonly DEFAULT_CHAT_UPLOAD_INTENT_TTL_MINUTES = 120;
 
   private readonly authClient: SupabaseClient<any, any, any>;
   private readonly serviceClient: SupabaseClient<any, any, any>;
@@ -555,6 +824,10 @@ export class AgentManager {
   private readonly openai: OpenAI | null;
   private readonly openaiTranscriptionModel: string;
   private readonly openaiVisionModel: string;
+  private readonly evolutionMediaProvider: EvolutionWhatsAppProvider;
+  private readonly chatCacheTtlSeconds: number;
+  private readonly chatSignedDownloadTtlSeconds: number;
+  private readonly chatUploadIntentTtlMinutes: number;
 
   constructor(private readonly config: ServiceConfig) {
     this.authClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -578,6 +851,22 @@ export class AgentManager {
     this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
     this.openaiTranscriptionModel = config.openaiTranscriptionModel?.trim() || "gpt-4o-mini-transcribe";
     this.openaiVisionModel = config.openaiVisionModel?.trim() || "gpt-4.1-mini";
+    this.evolutionMediaProvider = new EvolutionWhatsAppProvider({
+      evolutionApiUrl: config.evolutionApiUrl,
+      evolutionApiKey: config.evolutionApiKey,
+    });
+    this.chatCacheTtlSeconds = parsePositiveInteger(
+      config.chatCacheTtlSeconds,
+      AgentManager.DEFAULT_CHAT_CACHE_TTL_SECONDS
+    );
+    this.chatSignedDownloadTtlSeconds = parsePositiveInteger(
+      config.chatSignedDownloadTtlSeconds,
+      AgentManager.DEFAULT_CHAT_SIGNED_DOWNLOAD_TTL_SECONDS
+    );
+    this.chatUploadIntentTtlMinutes = parsePositiveInteger(
+      config.chatAttachmentUploadIntentTtlMinutes,
+      AgentManager.DEFAULT_CHAT_UPLOAD_INTENT_TTL_MINUTES
+    );
   }
 
   async authenticate(authHeader?: string): Promise<AuthContext> {
@@ -2160,6 +2449,70 @@ export class AgentManager {
     return null;
   }
 
+  private outboundSourceTypeFromEcho(origin: OutboundEchoOrigin): "human" | "ai" | "automation" {
+    if (origin === "manual") {
+      return "human";
+    }
+
+    if (origin === "calendar_followup") {
+      return "automation";
+    }
+
+    return origin;
+  }
+
+  private async ensureOutboundEchoVisible(params: {
+    acesId: number;
+    leadId: string | null;
+    instanceName: string;
+    content: string;
+    sentAt: string;
+    conversationId: string | null;
+    origin: OutboundEchoOrigin;
+  }) {
+    if (!params.leadId) {
+      return;
+    }
+
+    const sourceType = this.outboundSourceTypeFromEcho(params.origin);
+    const sentAtMs = Date.parse(params.sentAt);
+    const since = new Date((Number.isFinite(sentAtMs) ? sentAtMs : Date.now()) - 10 * 60_000).toISOString();
+
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("id")
+      .eq("lead_id", params.leadId)
+      .eq("aces_id", params.acesId)
+      .eq("direction", "outbound")
+      .eq("source_type", sourceType)
+      .eq("instance", params.instanceName)
+      .eq("content", params.content)
+      .gte("sent_at", since)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel verificar echo outbound no historico", error);
+    }
+
+    if (data) {
+      await this.invalidateChatMessagesCache(params.acesId, params.leadId);
+      return;
+    }
+
+    await this.saveMessage({
+      leadId: params.leadId,
+      acesId: params.acesId,
+      content: params.content,
+      direction: "outbound",
+      sourceType,
+      instanceName: params.instanceName,
+      conversationId: params.conversationId,
+      sentAt: params.sentAt,
+    });
+  }
+
   private async repairAutomationFreezeForLead(leadId: string | null, reference: string) {
     if (!leadId) {
       return;
@@ -2185,7 +2538,63 @@ export class AgentManager {
     return stored !== "OK";
   }
 
+  private chatMessagesCacheKey(acesId: number, leadId: string) {
+    return `crm-chat:messages:${acesId}:${leadId}`;
+  }
+
+  private async invalidateChatMessagesCache(acesId: number, leadId: string) {
+    if (!this.redis) {
+      return;
+    }
+
+    try {
+      await this.redis.del(this.chatMessagesCacheKey(acesId, leadId));
+    } catch (error) {
+      console.warn("[crm-ai] Falha ao invalidar cache de mensagens do chat:", {
+        acesId,
+        leadId,
+        error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : error),
+      });
+    }
+  }
+
+  private async createSignedDownloadUrl(storagePath: string) {
+    const { data, error } = await this.serviceClient.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .createSignedUrl(storagePath, this.chatSignedDownloadTtlSeconds);
+
+    if (error || !data?.signedUrl) {
+      throw new HttpError(500, "Nao foi possivel gerar URL assinada do anexo", error);
+    }
+
+    return data.signedUrl;
+  }
+
+  private async assertStorageObjectExists(storagePath: string) {
+    const pathParts = storagePath.split("/").filter(Boolean);
+    const fileName = pathParts.pop();
+    const directory = pathParts.join("/");
+
+    if (!fileName || !directory) {
+      throw new HttpError(400, "Caminho de storage invalido");
+    }
+
+    const { data, error } = await this.serviceClient.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .list(directory, { limit: 100, search: fileName });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar o objeto no Storage", error);
+    }
+
+    const found = (data ?? []).some((item) => item.name === fileName);
+    if (!found) {
+      throw new HttpError(400, "Upload assinado ainda nao foi concluido");
+    }
+  }
+
   private async saveMessage(params: {
+    id?: string;
     leadId: string;
     acesId: number;
     content: string;
@@ -2195,8 +2604,15 @@ export class AgentManager {
     createdBy?: string | null;
     conversationId?: string | null;
     sentAt?: string;
+    provider?: "evolution" | "meta" | null;
+    providerMessageId?: string | null;
+    providerStatus?: "accepted" | "sent" | "failed" | null;
+    providerErrorCode?: string | null;
+    providerErrorMessage?: string | null;
+    providerPayloadSummary?: unknown;
   }) {
-    const payload = {
+    const sentAt = params.sentAt ?? new Date().toISOString();
+    const payload: Record<string, unknown> = {
       lead_id: params.leadId,
       aces_id: params.acesId,
       content: params.content,
@@ -2205,8 +2621,21 @@ export class AgentManager {
       instance: params.instanceName,
       created_by: params.createdBy ?? null,
       conversation_id: params.conversationId ?? null,
-      sent_at: params.sentAt ?? new Date().toISOString(),
+      sent_at: sentAt,
     };
+
+    if (params.id) {
+      payload.id = params.id;
+    }
+
+    if (params.provider !== undefined) {
+      payload.provider = params.provider;
+      payload.provider_message_id = params.providerMessageId ?? null;
+      payload.provider_status = params.providerStatus ?? null;
+      payload.provider_error_code = params.providerErrorCode ?? null;
+      payload.provider_error_message = params.providerErrorMessage ?? null;
+      payload.provider_payload_summary = params.providerPayloadSummary ?? null;
+    }
 
     const { data, error } = await this.serviceClient
       .from("message_history")
@@ -2221,12 +2650,14 @@ export class AgentManager {
     await this.serviceClient
       .from("leads")
       .update({
-        last_message_at: payload.sent_at,
+        last_message_at: sentAt,
         updated_at: new Date().toISOString(),
         instancia: params.instanceName,
       })
       .eq("id", params.leadId)
       .eq("aces_id", params.acesId);
+
+    await this.invalidateChatMessagesCache(params.acesId, params.leadId);
 
     return data as MessageRow;
   }
@@ -2299,9 +2730,29 @@ export class AgentManager {
     ownerId?: string | null
   ) {
     const found = await this.findLeadByPhone(acesId, phone);
+    const payloadName = normalizeLeadDisplayName(pushName);
     if (found) {
       if (ownerId && found.owner_id !== ownerId) {
         throw new HttpError(403, "Lead pertence a outro responsavel");
+      }
+
+      if (payloadName && isFallbackLeadName(found.name, phone)) {
+        const { data, error } = await this.serviceClient
+          .from("leads")
+          .update({
+            name: payloadName,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", found.id)
+          .eq("aces_id", acesId)
+          .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+          .single();
+
+        if (error) {
+          throw new HttpError(500, "Nao foi possivel atualizar o nome do lead", error);
+        }
+
+        return data as LeadRow;
       }
 
       return found;
@@ -2310,7 +2761,7 @@ export class AgentManager {
     const stages = await this.getStagesForAccount(acesId);
     const defaultStage = stages.find((stage) => stage.category === "Aberto") ?? stages[0] ?? null;
     const preferredPhone = normalizePhone(phone);
-    const name = pushName?.trim() || `Lead ${preferredPhone}`;
+    const name = payloadName || `Lead ${preferredPhone}`;
     const resolvedOwnerId = ownerId ?? await this.getDefaultLeadOwnerId(acesId);
 
     const { data, error } = await this.serviceClient
@@ -2544,7 +2995,22 @@ export class AgentManager {
       asString(asRecord(root.apikey).instance);
 
     const remoteJid = asString(key.remoteJid) ?? asString(data.remoteJid) ?? asString(root.remoteJid);
-    const pushName = asString(data.pushName) ?? asString(root.pushName) ?? asString(asRecord(data.sender).pushName);
+    const sender = asRecord(data.sender);
+    const contact = asRecord(data.contact);
+    const pushName = normalizeLeadDisplayName(
+      asString(data.pushName) ??
+        asString(data.pushname) ??
+        asString(data.senderName) ??
+        asString(data.notifyName) ??
+        asString(data.verifiedBizName) ??
+        asString(root.pushName) ??
+        asString(root.senderName) ??
+        asString(root.notifyName) ??
+        asString(sender.pushName) ??
+        asString(sender.name) ??
+        asString(contact.pushName) ??
+        asString(contact.name)
+    );
     const messageId = asString(key.id) ?? asString(root.messageId) ?? asString(data.messageId);
     const fromMe = Boolean(key.fromMe ?? data.fromMe ?? root.fromMe);
     const sentAtRaw = data.messageTimestamp ?? root.messageTimestamp ?? root.timestamp ?? Date.now();
@@ -3390,6 +3856,16 @@ export class AgentManager {
         normalizedContent,
       );
       if (matchedOutbound) {
+        await this.ensureOutboundEchoVisible({
+          acesId: instance.aces_id,
+          leadId: matchedOutbound.leadId,
+          instanceName: message.instanceName,
+          content: normalizedContent,
+          sentAt: message.sentAt,
+          conversationId: matchedOutbound.conversationId ?? message.conversationId,
+          origin: matchedOutbound.origin,
+        });
+
         if (matchedOutbound.origin !== "manual") {
           await this.repairAutomationFreezeForLead(
             matchedOutbound.leadId,
@@ -3404,7 +3880,9 @@ export class AgentManager {
               ? "Echo de mensagem manual do backend"
               : matchedOutbound.origin === "automation"
                 ? "Echo de mensagem da automacao ignorado"
-                : "Echo de mensagem da IA ignorado",
+                : matchedOutbound.origin === "calendar_followup"
+                  ? "Echo de follow-up do calendario ignorado"
+                  : "Echo de mensagem da IA ignorado",
         };
       }
 
@@ -3412,7 +3890,7 @@ export class AgentManager {
         instance.aces_id,
         message.phone,
         message.instanceName,
-        message.pushName,
+        null,
         agent?.created_by ?? null
       );
 
@@ -3422,6 +3900,8 @@ export class AgentManager {
         normalizedContent,
       );
       if (fallbackMatch) {
+        await this.invalidateChatMessagesCache(instance.aces_id, lead.id);
+
         if (fallbackMatch.sourceType !== "manual") {
           await this.repairAutomationFreezeForLead(
             lead.id,
@@ -3559,8 +4039,506 @@ export class AgentManager {
     };
   }
 
+  async createChatAttachmentUploadUrl(context: AuthContext, input: ChatAttachmentUploadUrlInput) {
+    const leadId = String(input.leadId ?? "").trim();
+    if (!isUuid(leadId)) {
+      throw new HttpError(400, "leadId invalido");
+    }
+
+    const fileName = String(input.fileName ?? "").trim();
+    if (!fileName) {
+      throw new HttpError(400, "fileName e obrigatorio");
+    }
+
+    const mimeType = normalizeMimeType(String(input.mimeType ?? ""));
+    const resolvedKind = resolveAttachmentKind(mimeType);
+    if (!resolvedKind) {
+      throw new HttpError(400, "MIME type nao permitido para anexos do chat");
+    }
+
+    if (input.kind !== resolvedKind) {
+      throw new HttpError(400, "kind nao corresponde ao MIME type informado");
+    }
+
+    const fileSize = Number(input.fileSize);
+    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
+      throw new HttpError(400, "Tamanho do arquivo invalido para anexos do chat");
+    }
+
+    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId);
+    const instanceName = input.instanceName?.trim() || lead.instancia;
+    if (!instanceName) {
+      throw new HttpError(400, "Nenhuma instancia de envio foi definida para este lead");
+    }
+
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+
+    const now = new Date();
+    const messageId = randomUUID();
+    const attachmentId = randomUUID();
+    const intentId = randomUUID();
+    const storagePath = buildAttachmentStoragePath({
+      acesId: context.acesId,
+      leadId,
+      messageId,
+      attachmentId,
+      fileName,
+    });
+    const intentExpiresAt = addMinutes(now, this.chatUploadIntentTtlMinutes).toISOString();
+
+    const { error: insertError } = await this.serviceClient
+      .from("message_attachment_upload_intents")
+      .insert({
+        id: intentId,
+        message_id: messageId,
+        attachment_id: attachmentId,
+        aces_id: context.acesId,
+        lead_id: leadId,
+        kind: resolvedKind,
+        mime_type: mimeType,
+        storage_bucket: CHAT_ATTACHMENTS_BUCKET,
+        storage_path: storagePath,
+        file_name: sanitizeStorageFileName(fileName),
+        file_size: Math.floor(fileSize),
+        status: "issued",
+        intent_expires_at: intentExpiresAt,
+      });
+
+    if (insertError) {
+      throw new HttpError(500, "Nao foi possivel registrar a intencao de upload", insertError);
+    }
+
+    const { data, error } = await this.serviceClient.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .createSignedUploadUrl(storagePath);
+
+    if (error || !data?.signedUrl) {
+      await this.markUploadIntentStatus(intentId, "failed");
+      throw new HttpError(500, "Nao foi possivel gerar URL assinada de upload", error);
+    }
+
+    return {
+      success: true,
+      bucket: CHAT_ATTACHMENTS_BUCKET,
+      storagePath,
+      messageId,
+      attachmentId,
+      uploadUrl: data.signedUrl,
+      uploadToken: data.token,
+      intentExpiresAt,
+      maxFileSize: CHAT_ATTACHMENT_MAX_FILE_SIZE,
+      mimeType,
+      kind: resolvedKind,
+    };
+  }
+
+  async listChatMessages(context: AuthContext, leadIdInput: string) {
+    const leadId = String(leadIdInput ?? "").trim();
+    if (!isUuid(leadId)) {
+      throw new HttpError(400, "leadId invalido");
+    }
+
+    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId);
+    const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id);
+
+    if (this.redis) {
+      try {
+        const cached = await this.redis.get(cacheKey);
+        if (cached) {
+          try {
+            return { success: true, messages: JSON.parse(cached) as ChatMessageResponse[] };
+          } catch {
+            await this.redis.del(cacheKey);
+          }
+        }
+      } catch (error) {
+        console.warn("[crm-ai] Falha ao consultar cache de mensagens do chat:", {
+          acesId: context.acesId,
+          leadId: lead.id,
+          error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : error),
+        });
+      }
+    }
+
+    const { data: messagesData, error: messagesError } = await this.serviceClient
+      .from("message_history")
+      .select(
+        "id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, provider_status"
+      )
+      .eq("lead_id", lead.id)
+      .eq("aces_id", context.acesId)
+      .order("sent_at", { ascending: true })
+      .order("id", { ascending: true });
+
+    if (messagesError) {
+      throw new HttpError(500, "Nao foi possivel carregar mensagens do chat", messagesError);
+    }
+
+    const messages = (messagesData ?? []) as MessageRow[];
+    const messageIds = messages.map((message) => message.id);
+    const createdByIds = Array.from(
+      new Set(messages.map((message) => message.created_by).filter((value): value is string => Boolean(value)))
+    );
+    const userNames = new Map<string, string | null>();
+
+    if (createdByIds.length > 0) {
+      const { data: usersData, error: usersError } = await this.serviceClient
+        .from("users")
+        .select("id, name")
+        .in("id", createdByIds);
+
+      if (usersError) {
+        throw new HttpError(500, "Nao foi possivel carregar remetentes do chat", usersError);
+      }
+
+      for (const user of (usersData ?? []) as Array<{ id: string; name: string | null }>) {
+        userNames.set(user.id, user.name);
+      }
+    }
+
+    const attachmentsByMessageId = new Map<string, ChatMessageAttachmentResponse[]>();
+    if (messageIds.length > 0) {
+      const { data: attachmentsData, error: attachmentsError } = await this.serviceClient
+        .from("message_attachments")
+        .select("id, message_id, kind, mime_type, file_name, file_size, storage_path, expires_at, storage_deleted_at")
+        .eq("lead_id", lead.id)
+        .eq("aces_id", context.acesId)
+        .in("message_id", messageIds)
+        .order("created_at", { ascending: true });
+
+      if (attachmentsError) {
+        throw new HttpError(500, "Nao foi possivel carregar anexos do chat", attachmentsError);
+      }
+
+      const nowMs = Date.now();
+      for (const attachment of (attachmentsData ?? []) as MessageAttachmentRow[]) {
+        const expired = attachment.expires_at ? new Date(attachment.expires_at).getTime() <= nowMs : false;
+        let downloadUrl: string | null = null;
+
+        if (!attachment.storage_deleted_at && !expired) {
+          try {
+            downloadUrl = await this.createSignedDownloadUrl(attachment.storage_path);
+          } catch (error) {
+            console.warn("[crm-ai] Falha ao gerar URL assinada de anexo do chat:", {
+              attachmentId: attachment.id,
+              messageId: attachment.message_id,
+              error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : error),
+            });
+          }
+        }
+
+        const current = attachmentsByMessageId.get(attachment.message_id) ?? [];
+        current.push({
+          id: attachment.id,
+          kind: attachment.kind,
+          mimeType: attachment.mime_type,
+          fileName: attachment.file_name ?? "attachment",
+          fileSize: attachment.file_size ?? 0,
+          downloadUrl,
+          expiresAt: attachment.expires_at,
+          storageDeletedAt: attachment.storage_deleted_at,
+        });
+        attachmentsByMessageId.set(attachment.message_id, current);
+      }
+    }
+
+    const responseMessages: ChatMessageResponse[] = messages.map((message) => ({
+      id: message.id,
+      leadId: message.lead_id,
+      content: message.content,
+      direction: message.direction,
+      directionCode: message.direction.toLowerCase() === "outbound" ? 2 : 1,
+      sentAt: message.sent_at,
+      leadName: lead.name ?? "",
+      senderName: message.created_by ? userNames.get(message.created_by) ?? null : null,
+      providerStatus: message.provider_status ?? null,
+      attachments: attachmentsByMessageId.get(message.id) ?? [],
+    }));
+
+    if (this.redis) {
+      try {
+        await this.redis.set(cacheKey, JSON.stringify(responseMessages), "EX", this.chatCacheTtlSeconds);
+      } catch (error) {
+        console.warn("[crm-ai] Falha ao gravar cache de mensagens do chat:", {
+          acesId: context.acesId,
+          leadId: lead.id,
+          error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : error),
+        });
+      }
+    }
+
+    return { success: true, messages: responseMessages };
+  }
+
+  private async loadIssuedUploadIntent(params: {
+    acesId: number;
+    leadId: string;
+    messageId: string;
+    attachmentId: string;
+    storagePath: string;
+  }) {
+    const { data, error } = await this.serviceClient
+      .from("message_attachment_upload_intents")
+      .select(
+        "id, message_id, attachment_id, aces_id, lead_id, kind, mime_type, storage_bucket, storage_path, file_name, file_size, status, intent_expires_at"
+      )
+      .eq("aces_id", params.acesId)
+      .eq("lead_id", params.leadId)
+      .eq("message_id", params.messageId)
+      .eq("attachment_id", params.attachmentId)
+      .eq("storage_path", params.storagePath)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar a intencao de upload", error);
+    }
+
+    if (!data) {
+      throw new HttpError(404, "Intencao de upload nao encontrada");
+    }
+
+    const intent = data as UploadIntentRow;
+    if (intent.status !== "issued") {
+      throw new HttpError(409, "Intencao de upload nao esta disponivel para envio");
+    }
+
+    if (new Date(intent.intent_expires_at).getTime() <= Date.now()) {
+      await this.markUploadIntentStatus(intent.id, "expired");
+      throw new HttpError(410, "Intencao de upload expirada");
+    }
+
+    return intent;
+  }
+
+  private async markUploadIntentStatus(
+    intentId: string,
+    status: UploadIntentRow["status"]
+  ) {
+    const { error } = await this.serviceClient
+      .from("message_attachment_upload_intents")
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq("id", intentId);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel atualizar a intencao de upload", error);
+    }
+  }
+
+  private async insertMessageAttachment(params: {
+    attachmentId: string;
+    messageId: string;
+    acesId: number;
+    leadId: string;
+    intent: UploadIntentRow;
+  }) {
+    const { error } = await this.serviceClient
+      .from("message_attachments")
+      .insert({
+        id: params.attachmentId,
+        message_id: params.messageId,
+        aces_id: params.acesId,
+        lead_id: params.leadId,
+        kind: params.intent.kind,
+        mime_type: params.intent.mime_type,
+        storage_bucket: CHAT_ATTACHMENTS_BUCKET,
+        storage_path: params.intent.storage_path,
+        file_name: params.intent.file_name,
+        file_size: params.intent.file_size,
+        expires_at:
+          params.intent.kind === "image"
+            ? addDays(new Date(), CHAT_IMAGE_RETENTION_DAYS).toISOString()
+            : null,
+      });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel registrar o anexo da mensagem", error);
+    }
+  }
+
+  private buildManualFallbackAgent(context: AuthContext, instanceName: string): AgentRow {
+    return {
+      id: "manual",
+      aces_id: context.acesId,
+      instance_name: instanceName,
+      name: "Envio manual",
+      system_prompt: DEFAULT_SYSTEM_MESSAGE,
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      is_active: false,
+      buffer_wait_ms: 15000,
+      human_pause_minutes: 60,
+      auto_apply_threshold: 0.85,
+      handoff_enabled: false,
+      handoff_prompt: null,
+      handoff_target_phone: null,
+      created_by: context.crmUserId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  private async pauseAgentAfterManualSend(params: {
+    context: AuthContext;
+    configuredAgent: AgentRow | null;
+    lead: LeadRow;
+    aiState: { reason: LeadAiReason } | null;
+  }) {
+    if (!params.configuredAgent || params.aiState?.reason === "manual_off") {
+      return;
+    }
+
+    const freezeUntil = await this.freezeLead(
+      params.configuredAgent,
+      params.lead.id,
+      "manual_send",
+      params.context.crmUserId,
+    );
+    await this.createRun({
+      agentId: params.configuredAgent.id,
+      leadId: params.lead.id,
+      inputSnapshot: {
+        source: "manual_send",
+        crm_user_id: params.context.crmUserId,
+      },
+      outputSnapshot: {
+        freeze_until: freezeUntil,
+      },
+      actionTaken: "manual_pause",
+    });
+  }
+
+  private async sendManualAttachmentMessage(params: {
+    context: AuthContext;
+    lead: LeadRow;
+    instanceName: string;
+    configuredAgent: AgentRow | null;
+    aiState: { reason: LeadAiReason } | null;
+    content: string;
+    attachment: ChatAttachmentSendInput;
+  }) {
+    const attachment = params.attachment;
+    if (!isUuid(attachment.messageId) || !isUuid(attachment.attachmentId)) {
+      throw new HttpError(400, "Identificadores do anexo invalidos");
+    }
+
+    const mimeType = normalizeMimeType(attachment.mimeType);
+    const resolvedKind = resolveAttachmentKind(mimeType);
+    if (!resolvedKind || resolvedKind !== attachment.kind) {
+      throw new HttpError(400, "MIME type do anexo invalido");
+    }
+
+    const intent = await this.loadIssuedUploadIntent({
+      acesId: params.context.acesId,
+      leadId: params.lead.id,
+      messageId: attachment.messageId,
+      attachmentId: attachment.attachmentId,
+      storagePath: attachment.storagePath,
+    });
+
+    if (
+      intent.kind !== attachment.kind ||
+      intent.mime_type !== mimeType ||
+      intent.file_size !== Math.floor(Number(attachment.fileSize)) ||
+      intent.file_name !== sanitizeStorageFileName(attachment.fileName)
+    ) {
+      throw new HttpError(400, "Dados do anexo nao conferem com a intencao de upload");
+    }
+
+    await this.assertStorageObjectExists(intent.storage_path);
+    const mediaUrl = await this.createSignedDownloadUrl(intent.storage_path);
+    const phone = requireValue(params.lead.contact_phone, "Lead sem telefone para envio");
+    const caption = params.content.trim();
+    const messageContent = buildAttachmentContent(intent.kind, caption);
+    const sentAt = new Date().toISOString();
+    const conversationId = `manual-media:${Date.now()}`;
+    const providerInput: SendMediaInput = {
+      instanceName: params.instanceName,
+      to: phone,
+      mediaUrl,
+      mimeType: intent.mime_type,
+      fileName: intent.file_name,
+      kind: intent.kind,
+      caption: caption || null,
+      sourceType: "manual",
+    };
+
+    let providerResult: SendResult;
+    try {
+      providerResult = await this.evolutionMediaProvider.sendMedia(providerInput);
+    } catch (error) {
+      const providerFailure = summarizeWhatsAppProviderFailure(error);
+      await this.saveMessage({
+        id: intent.message_id,
+        leadId: params.lead.id,
+        acesId: params.context.acesId,
+        content: messageContent,
+        direction: "outbound",
+        sourceType: "human",
+        instanceName: params.instanceName,
+        createdBy: params.context.crmUserId,
+        conversationId,
+        sentAt,
+        provider: "evolution",
+        providerMessageId: null,
+        providerStatus: "failed",
+        providerErrorCode: providerFailure.errorCode,
+        providerErrorMessage: providerFailure.errorMessage,
+        providerPayloadSummary: providerFailure.payloadSummary,
+      });
+      await this.insertMessageAttachment({
+        attachmentId: intent.attachment_id,
+        messageId: intent.message_id,
+        acesId: params.context.acesId,
+        leadId: params.lead.id,
+        intent,
+      });
+      await this.markUploadIntentStatus(intent.id, "failed");
+      await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id);
+      throw new HttpError(
+        providerFailure.statusCode,
+        `Falha ao enviar midia na Evolution: ${providerFailure.errorMessage}`,
+        providerFailure.payloadSummary
+      );
+    }
+
+    await this.saveMessage({
+      id: intent.message_id,
+      leadId: params.lead.id,
+      acesId: params.context.acesId,
+      content: messageContent,
+      direction: "outbound",
+      sourceType: "human",
+      instanceName: params.instanceName,
+      createdBy: params.context.crmUserId,
+      conversationId,
+      sentAt,
+      provider: providerResult.provider,
+      providerMessageId: providerResult.providerMessageId,
+      providerStatus: providerResult.providerStatus,
+      providerPayloadSummary: providerResult.raw ?? null,
+    });
+    await this.insertMessageAttachment({
+      attachmentId: intent.attachment_id,
+      messageId: intent.message_id,
+      acesId: params.context.acesId,
+      leadId: params.lead.id,
+      intent,
+    });
+    await this.markUploadIntentStatus(intent.id, "consumed");
+    await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id);
+    await this.pauseAgentAfterManualSend({
+      context: params.context,
+      configuredAgent: params.configuredAgent,
+      lead: params.lead,
+      aiState: params.aiState,
+    });
+
+    return { success: true, messageId: intent.message_id, attachmentId: intent.attachment_id };
+  }
+
   async sendManualMessage(context: AuthContext, input: SendManualMessageInput) {
-    if (!input.content?.trim()) {
+    const content = input.content?.trim() ?? "";
+    if (!content && !input.attachment) {
       throw new HttpError(400, "Mensagem vazia");
     }
 
@@ -3578,54 +4556,27 @@ export class AgentManager {
       ? await this.resolveLeadAiState(lead.id, configuredAgent, instanceName)
       : null;
 
+    if (input.attachment) {
+      return this.sendManualAttachmentMessage({
+        context,
+        lead,
+        instanceName,
+        configuredAgent,
+        aiState,
+        content,
+        attachment: input.attachment,
+      });
+    }
+
     await this.sendReplyBlocks({
-      agent:
-        configuredAgent ??
-        ({
-          id: "manual",
-          aces_id: context.acesId,
-          instance_name: instanceName,
-          name: "Envio manual",
-          system_prompt: DEFAULT_SYSTEM_MESSAGE,
-          provider: "gemini",
-          model: "gemini-2.5-flash",
-          is_active: false,
-          buffer_wait_ms: 15000,
-          human_pause_minutes: 60,
-          auto_apply_threshold: 0.85,
-          handoff_enabled: false,
-          handoff_prompt: null,
-          handoff_target_phone: null,
-          created_by: context.crmUserId,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        } satisfies AgentRow),
+      agent: configuredAgent ?? this.buildManualFallbackAgent(context, instanceName),
       lead,
-      blocks: [input.content.trim()],
+      blocks: [content],
       sourceType: "human",
       createdBy: context.crmUserId,
     });
 
-    if (configuredAgent && aiState?.reason !== "manual_off") {
-      const freezeUntil = await this.freezeLead(
-        configuredAgent,
-        lead.id,
-        "manual_send",
-        context.crmUserId,
-      );
-      await this.createRun({
-        agentId: configuredAgent.id,
-        leadId: lead.id,
-        inputSnapshot: {
-          source: "manual_send",
-          crm_user_id: context.crmUserId,
-        },
-        outputSnapshot: {
-          freeze_until: freezeUntil,
-        },
-        actionTaken: "manual_pause",
-      });
-    }
+    await this.pauseAgentAfterManualSend({ context, configuredAgent, lead, aiState });
 
     return { success: true };
   }

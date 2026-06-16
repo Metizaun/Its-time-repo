@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Shield, UserCheck, User, Plus, Clock, X } from "lucide-react";
+import { Shield, UserCheck, User, Plus, Clock, X, type LucideIcon } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -37,7 +37,7 @@ export default function Admin() {
   }
 
   const getRoleBadge = (role: string, isPending: boolean) => {
-    const variants: Record<string, { variant: "default" | "secondary" | "outline", icon: any }> = {
+    const variants: Record<string, { variant: "default" | "secondary" | "outline"; icon: LucideIcon }> = {
       ADMIN: { variant: isPending ? "outline" : "default", icon: Shield },
       VENDEDOR: { variant: isPending ? "outline" : "secondary", icon: UserCheck },
       NENHUM: { variant: "outline", icon: User },
@@ -95,7 +95,7 @@ export default function Admin() {
             {/* Botão Criar Usuário */}
             <Button 
               onClick={() => setIsModalOpen(true)}
-              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+              className="bg-orange-500 text-white hover:bg-orange-600"
             >
               <Plus className="w-4 h-4 mr-2" />
               Criar Usuário

@@ -15,7 +15,7 @@ interface LeadSidebarProps {
 export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: LeadSidebarProps) {
   if (loading && leads.length === 0) {
     return (
-      <div className="h-full border-r border-[var(--color-border-subtle)] bg-transparent p-4 space-y-3">
+      <div className="h-full min-w-0 overflow-hidden border-r border-[var(--color-border-subtle)] bg-transparent p-4 space-y-3">
         {[1, 2, 3, 4, 5].map((i) => (
           <div key={i} className="h-16 w-full rounded-xl bg-[var(--color-border-subtle)] animate-pulse" />
         ))}
@@ -25,23 +25,23 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
 
   if (leads.length === 0) {
     return (
-      <div className="h-full border-r border-[var(--color-border-subtle)] bg-transparent p-4">
+      <div className="h-full min-w-0 overflow-hidden border-r border-[var(--color-border-subtle)] bg-transparent p-4">
         <p className="text-[var(--color-text-secondary)] text-center text-sm">Nenhum lead encontrado</p>
       </div>
     );
   }
 
   return (
-    <div className="h-full border-r border-[var(--color-border-subtle)] bg-transparent flex flex-col">
-      <div className="p-4 border-b border-[var(--color-border-subtle)] flex-shrink-0">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden border-r border-[var(--color-border-subtle)] bg-transparent">
+      <div className="flex h-[var(--chat-header-height)] flex-shrink-0 flex-col justify-center border-b border-[var(--color-border-subtle)] px-4">
         <h2 className="font-bold text-foreground text-lg">Conversas</h2>
         <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
           {leads.length} lead{leads.length !== 1 ? 's' : ''}
         </p>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="p-2 space-y-1">
+      <ScrollArea className="min-w-0 flex-1">
+        <div className="min-w-0 p-2 space-y-1">
           {leads.map((lead) => {
             const initial = lead.lead_name.charAt(0).toUpperCase();
             const isSelected = lead.id === selectedLeadId;
@@ -58,9 +58,9 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
                 key={lead.id}
                 onClick={() => onSelectLead(lead.id)}
                 className={cn(
-                  "w-full p-3 rounded-xl flex items-center gap-3 transition-all duration-200",
+                  "flex w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl p-3 transition-all duration-200",
                   isSelected
-                    ? "bg-[var(--color-border-subtle)] border border-[var(--color-border-medium)] border-t-2 border-t-[var(--color-accent)] shadow-[0_4px_16px_rgba(229,57,58,0.06)]"
+                    ? "bg-[var(--color-surface-1)] border border-[var(--color-primary-200)] shadow-sm"
                     : "border border-transparent hover:bg-[var(--color-border-subtle)]"
                 )}
               >
@@ -76,21 +76,21 @@ export function LeadSidebar({ leads, selectedLeadId, onSelectLead, loading }: Le
 
                 <div className="flex-1 text-left overflow-hidden min-w-0">
                   {/* Linha 1: Nome + Data */}
-                  <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="mb-1 grid min-w-0 grid-cols-[minmax(0,1fr)_5rem] items-center gap-2">
                     <p className={cn(
-                      "font-medium truncate max-w-[180px] text-sm",
+                      "min-w-0 truncate text-sm font-medium",
                       isSelected ? "text-foreground" : "text-[var(--color-text-primary)]"
                     )}>
                       {lead.lead_name}
                     </p>
-                    <span className="text-[10px] text-[var(--color-text-secondary)] shrink-0">
+                    <span className="shrink-0 text-right text-[10px] text-[var(--color-text-secondary)]">
                       {lastMessageDate}
                     </span>
                   </div>
                   
                   {/* Linha 2: Instância • Source (texto simples) */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs truncate">
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1 truncate text-xs">
                       {lead.instance_name && lead.source ? (
                         <>
                           <span className={cn("font-medium", instanceColor)}>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Info } from "lucide-react";
+import { ArrowLeft, Bot, CalendarPlus, Info } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,10 @@ type ChatAiControl = {
 interface ChatHeaderProps {
   leadName: string;
   instanceName?: string | null;
+  showBackButton?: boolean;
+  onBack?: () => void;
   onOpenDetails?: () => void;
+  onSchedule?: () => void;
   aiControl?: ChatAiControl | null;
 }
 
@@ -50,7 +53,10 @@ function getAiTooltipText(aiControl: ChatAiControl) {
 export function ChatHeader({
   leadName,
   instanceName,
+  showBackButton = false,
+  onBack,
   onOpenDetails,
+  onSchedule,
   aiControl,
 }: ChatHeaderProps) {
   const initial = leadName.charAt(0).toUpperCase();
@@ -90,22 +96,44 @@ export function ChatHeader({
   const aiToggleDisabled = !aiControl || aiControl.loading || aiControl.saving || !aiControl.available;
 
   return (
-    <div className="border-b border-[var(--color-border-subtle)] px-5 py-3 flex items-center justify-between bg-transparent">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 flex items-center justify-center">
+    <div className="flex h-[var(--chat-header-height)] shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 md:px-5">
+      <div className="flex min-w-0 items-center gap-3">
+        {showBackButton && onBack && (
+          <button
+            type="button"
+            aria-label="Voltar para conversas"
+            onClick={onBack}
+            className="chat-tool-button focus-ring md:hidden"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+        )}
+
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10">
           <span className="text-sm font-bold text-[var(--color-accent)]">{initial}</span>
         </div>
-        <div>
-          <h2 className="font-bold text-foreground text-base leading-tight">{leadName}</h2>
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-bold leading-tight text-foreground">{leadName}</h2>
           {instanceName && (
-            <span className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-widest font-semibold">
+            <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
               {instanceName}
             </span>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
+        {onSchedule && (
+          <button
+            type="button"
+            aria-label="Agendar compromisso"
+            onClick={onSchedule}
+            className="chat-tool-button h-9 w-9 text-[var(--color-text-secondary)] focus-ring hover:text-foreground"
+          >
+            <CalendarPlus className="h-[18px] w-[18px]" />
+          </button>
+        )}
+
         {aiControl && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -136,8 +164,10 @@ export function ChatHeader({
 
         {onOpenDetails && (
           <button
+            type="button"
+            aria-label="Abrir detalhes do lead"
             onClick={onOpenDetails}
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-[var(--color-text-secondary)] hover:text-foreground hover:bg-[var(--color-border-subtle)] transition-all duration-200"
+            className="chat-tool-button h-9 w-9 text-[var(--color-text-secondary)] focus-ring hover:text-foreground"
           >
             <Info className="w-[18px] h-[18px]" />
           </button>
