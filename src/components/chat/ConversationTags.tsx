@@ -139,7 +139,14 @@ function TagRow({
         className="flex min-w-0 flex-1 items-center gap-3 text-left focus-ring"
       >
         <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none" />
-        <span className={cn("chat-tag-pill", getTagToneClass(tag.urgencia))}>{tag.name}</span>
+        <span className="min-w-0">
+          <span className={cn("chat-tag-pill", getTagToneClass(tag.urgencia))}>{tag.name}</span>
+          {tag.usage_description ? (
+            <span className="mt-1 block truncate text-xs text-[var(--color-text-secondary)]">
+              {tag.usage_description}
+            </span>
+          ) : null}
+        </span>
         {pendingToggle && <Loader2 className="ml-auto h-4 w-4 animate-spin text-[var(--color-primary-500)]" />}
       </button>
 
@@ -157,6 +164,7 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [createValue, setCreateValue] = useState("");
+  const [createDescription, setCreateDescription] = useState("");
   const [pendingTagId, setPendingTagId] = useState<string | null>(null);
   const [pendingDeleteTagId, setPendingDeleteTagId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -177,13 +185,15 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
   }, [availableTags, searchQuery]);
 
   const createName = normalizeTagName(createValue);
+  const createUsageDescription = createDescription.trim().replace(/\s+/g, " ");
   const matchedExistingTag = useMemo(
     () => availableTags.find((tag) => tag.name.trim().toLowerCase() === createName.toLowerCase()) ?? null,
     [availableTags, createName]
   );
 
   const isBusy = loading || saving || isCreating || pendingTagId !== null || pendingDeleteTagId !== null;
-  const canCreate = Boolean(createName) && !isBusy;
+  const canCreate =
+    Boolean(createName) && (Boolean(matchedExistingTag) || Boolean(createUsageDescription)) && !isBusy;
 
   const handleToggleTag = async (tagId: string) => {
     setPendingTagId(tagId);
@@ -237,6 +247,7 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
       }
 
       setCreateValue("");
+      setCreateDescription("");
       return;
     }
 
@@ -255,8 +266,9 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
           aces_id: acesId,
           name: createName,
           urgencia: null,
+          usage_description: createUsageDescription,
         })
-        .select("id, name, urgencia")
+        .select("id, name, urgencia, usage_description")
         .single();
 
       if (error) {
@@ -266,6 +278,7 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
       await addTag(data.id);
       toast.success("Tag criada e vinculada ao lead.");
       setCreateValue("");
+      setCreateDescription("");
       setSearchQuery("");
     } catch (error) {
       toast.error("Erro ao criar tag", {
@@ -292,6 +305,7 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
         if (!nextOpen) {
           setSearchQuery("");
           setCreateValue("");
+          setCreateDescription("");
         }
       }}
     >
@@ -389,12 +403,19 @@ export function ConversationTags({ leadId }: ConversationTagsProps) {
             <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
               Criar tag
             </div>
-            <div className="flex gap-2">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]">
               <Input
                 value={createValue}
                 onChange={(event) => setCreateValue(event.target.value)}
                 onKeyDown={handleCreateKeyDown}
                 placeholder="Nome da nova tag"
+                className="h-9"
+              />
+              <Input
+                value={createDescription}
+                onChange={(event) => setCreateDescription(event.target.value)}
+                onKeyDown={handleCreateKeyDown}
+                placeholder="Quando usar"
                 className="h-9"
               />
               <Button

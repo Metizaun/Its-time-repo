@@ -410,6 +410,13 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       serviceClient,
+      "tags",
+      ["id", "name", "urgencia", "usage_description"],
+      "crm.tags.usage_description",
+      "supabase/migrations/20260617123000_add_ai_crm_management_v1.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "automation_funnels",
       [
         "id",

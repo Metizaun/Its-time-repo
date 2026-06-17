@@ -64,6 +64,10 @@ const DOCUMENT_MIME_TYPES = new Set([
   "application/rtf",
 ]);
 
+const AI_SUMMARY_START = "<!-- AI_ATTENDANCE_SUMMARY_START -->";
+const AI_SUMMARY_END = "<!-- AI_ATTENDANCE_SUMMARY_END -->";
+const AI_SUMMARY_MAX_LENGTH = 1200;
+
 type JsonRecord = Record<string, unknown>;
 
 type AuthContext = {
@@ -117,6 +121,14 @@ type StageRow = {
   position: number;
 };
 
+type TagRow = {
+  id: string;
+  aces_id: number;
+  name: string;
+  urgencia: number | null;
+  usage_description: string | null;
+};
+
 type InstanceSetupStatus = "pending_qr" | "connected" | "expired" | "cancelled";
 type InstanceAction = "continue_setup" | "reconnect" | "sync_status" | "disconnect" | "delete";
 
@@ -158,6 +170,9 @@ type LeadRow = {
   stage_id: string | null;
   instancia: string | null;
   last_city: string | null;
+  notes: string | null;
+  check: string | null;
+  last_message_at: string | null;
   updated_at: string | null;
 };
 
@@ -388,6 +403,21 @@ type StructuredModelResponse = {
     stage_id: string | null;
     reason: string;
   };
+  tag_decisions: Array<{
+    tag_id: string | null;
+    should_apply: boolean;
+    reason: string;
+    confidence: number;
+  }>;
+  attendance_summary: {
+    text: string;
+    reason: string;
+    confidence: number;
+  };
+  lead_verification: {
+    checked: boolean;
+    reason: string;
+  };
   confidence: number;
   reason: string;
   should_apply_stage: boolean;
@@ -401,6 +431,17 @@ type HandoffExecutionResult = {
   targetPhone: string | null;
   reason: string;
   notification: string | null;
+};
+
+type CrmDecisionApplication = {
+  appliedStageId: string | null;
+  stageChanged: boolean;
+  appliedTagIds: string[];
+  rejectedTagIds: string[];
+  summaryUpdated: boolean;
+  leadCheckedAt: string | null;
+  changed: boolean;
+  audit: JsonRecord;
 };
 
 type ServiceConfig = {
@@ -656,9 +697,17 @@ function buildAttachmentContent(kind: ChatAttachmentKind, caption: string) {
   return "[documento enviado]";
 }
 
+function clampConfidence(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : 0;
+}
+
 function parseStructuredJson(text: string): StructuredModelResponse {
   const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
   const parsed = JSON.parse(cleaned) as Partial<StructuredModelResponse>;
+  const attendanceSummary = asRecord(parsed.attendance_summary);
+  const leadVerification = asRecord(parsed.lead_verification);
 
   return {
     reply_blocks: Array.isArray(parsed.reply_blocks)
@@ -668,10 +717,31 @@ function parseStructuredJson(text: string): StructuredModelResponse {
       stage_id: parsed.stage_decision?.stage_id ? String(parsed.stage_decision.stage_id) : null,
       reason: parsed.stage_decision?.reason ? String(parsed.stage_decision.reason) : "",
     },
-    confidence:
-      typeof parsed.confidence === "number"
-        ? Math.min(1, Math.max(0, parsed.confidence))
-        : 0,
+    tag_decisions: Array.isArray(parsed.tag_decisions)
+      ? parsed.tag_decisions
+          .map((item) => {
+            const record = asRecord(item);
+            return {
+              tag_id: record.tag_id ? String(record.tag_id) : null,
+              should_apply: Boolean(record.should_apply),
+              reason: record.reason ? String(record.reason) : "",
+              confidence: clampConfidence(record.confidence),
+            };
+          })
+          .slice(0, 20)
+      : [],
+    attendance_summary: {
+      text: attendanceSummary.text
+        ? truncateText(String(attendanceSummary.text).trim(), AI_SUMMARY_MAX_LENGTH)
+        : "",
+      reason: attendanceSummary.reason ? String(attendanceSummary.reason) : "",
+      confidence: clampConfidence(attendanceSummary.confidence),
+    },
+    lead_verification: {
+      checked: leadVerification.checked === false ? false : true,
+      reason: leadVerification.reason ? String(leadVerification.reason) : "",
+    },
+    confidence: clampConfidence(parsed.confidence),
     reason: parsed.reason ? String(parsed.reason) : "",
     should_apply_stage: Boolean(parsed.should_apply_stage),
     should_pause: Boolean(parsed.should_pause),
@@ -686,6 +756,35 @@ function truncateText(text: string, maxLength: number) {
   }
 
   return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function buildAiSummaryBlock(summary: string, checkedAt: string) {
+  return [
+    AI_SUMMARY_START,
+    `Resumo IA (${checkedAt}):`,
+    summary.trim(),
+    AI_SUMMARY_END,
+  ].join("\n");
+}
+
+function upsertAiSummaryBlock(existingNotes: string | null, summary: string, checkedAt: string) {
+  const trimmedSummary = truncateText(summary.trim(), AI_SUMMARY_MAX_LENGTH);
+  if (!trimmedSummary) {
+    return existingNotes ?? null;
+  }
+
+  const currentNotes = existingNotes?.trimEnd() ?? "";
+  const nextBlock = buildAiSummaryBlock(trimmedSummary, checkedAt);
+  const blockPattern = new RegExp(
+    `${AI_SUMMARY_START}[\\s\\S]*?${AI_SUMMARY_END}`,
+    "m"
+  );
+
+  if (blockPattern.test(currentNotes)) {
+    return currentNotes.replace(blockPattern, nextBlock).trim();
+  }
+
+  return [currentNotes, nextBlock].filter(Boolean).join("\n\n").trim();
 }
 
 function requireValue<T>(value: T | null | undefined, message: string): T {
@@ -802,12 +901,14 @@ function isTransientGeminiError(error: unknown) {
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
+  private static readonly DEFAULT_CRM_AGENT_MODEL = "gemini-3.1-flash-lite";
   private static readonly DEFAULT_GEMINI_FALLBACK_MODELS = [
     "gemini-2.5-flash-lite",
   ];
   private static readonly DEFAULT_GEMINI_MAX_RETRIES = 3;
   private static readonly DEFAULT_GEMINI_RETRY_BASE_DELAY_MS = 1000;
   private static readonly FROM_ME_ECHO_LOOKBACK_MINUTES = 15;
+  private static readonly CRM_ANALYSIS_INACTIVITY_MS = 3 * 60 * 60 * 1000;
   private static readonly DEFAULT_CHAT_CACHE_TTL_SECONDS = 60;
   private static readonly DEFAULT_CHAT_SIGNED_DOWNLOAD_TTL_SECONDS = 900;
   private static readonly DEFAULT_CHAT_UPLOAD_INTENT_TTL_MINUTES = 120;
@@ -817,6 +918,7 @@ export class AgentManager {
   private readonly redis: Redis | null;
   private readonly memoryBuffers = new Map<string, ParsedWebhookMessage[]>();
   private readonly memoryTimers = new Map<string, NodeJS.Timeout>();
+  private readonly idleAnalysisTimers = new Map<string, NodeJS.Timeout>();
   private readonly gemini: GoogleGenerativeAI | null;
   private readonly geminiFallbackModels: string[];
   private readonly geminiMaxRetries: number;
@@ -1467,6 +1569,20 @@ export class AgentManager {
     return ((data ?? []) as StageRow[]).sort((a, b) => a.position - b.position);
   }
 
+  private async getTagsForAccount(acesId: number) {
+    const { data, error } = await this.serviceClient
+      .from("tags")
+      .select("id, aces_id, name, urgencia, usage_description")
+      .eq("aces_id", acesId)
+      .order("name", { ascending: true });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar as tags do CRM", error);
+    }
+
+    return (data ?? []) as TagRow[];
+  }
+
   private async syncMissingStageRules(agent: AgentRow) {
     const stages = await this.getStagesForAccount(agent.aces_id);
     const { data: currentRules, error } = await this.serviceClient
@@ -1552,7 +1668,7 @@ export class AgentManager {
       name: input.name.trim(),
       system_prompt: input.systemPrompt?.trim() || DEFAULT_SYSTEM_MESSAGE,
       provider: input.provider ?? "gemini",
-      model: input.model?.trim() || "gemini-2.5-flash",
+      model: input.model?.trim() || AgentManager.DEFAULT_CRM_AGENT_MODEL,
       is_active: input.isActive ?? true,
       buffer_wait_ms: input.bufferWaitMs ?? 15000,
       human_pause_minutes: input.humanPauseMinutes ?? 60,
@@ -2665,7 +2781,7 @@ export class AgentManager {
   private async loadLeadById(leadId: string, acesId: number, ownerId?: string | null) {
     let query = this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
       .eq("id", leadId)
       .eq("aces_id", acesId);
 
@@ -2691,7 +2807,7 @@ export class AgentManager {
     const variants = phoneVariants(phone);
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
       .eq("aces_id", acesId)
       .in("contact_phone", variants)
       .order("updated_at", { ascending: false })
@@ -2745,7 +2861,7 @@ export class AgentManager {
           })
           .eq("id", found.id)
           .eq("aces_id", acesId)
-          .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+          .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
           .single();
 
         if (error) {
@@ -2776,7 +2892,7 @@ export class AgentManager {
         owner_id: resolvedOwnerId,
         view: true,
       })
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
       .single();
 
     if (error) {
@@ -2799,6 +2915,71 @@ export class AgentManager {
     }
 
     return ((data ?? []) as MessageRow[]).reverse();
+  }
+
+  private async fetchLatestLeadInboundMessage(leadId: string) {
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("id, sent_at")
+      .eq("lead_id", leadId)
+      .eq("source_type", "lead")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar a ultima mensagem do lead", error);
+    }
+
+    return (data as { id: string; sent_at: string } | null) ?? null;
+  }
+
+  private shouldAnalyzeLead(latestInboundAt: string | null, lastProcessedAt: string | null) {
+    if (!latestInboundAt) {
+      return false;
+    }
+
+    if (!lastProcessedAt) {
+      return true;
+    }
+
+    const latestInboundMs = Date.parse(latestInboundAt);
+    const lastProcessedMs = Date.parse(lastProcessedAt);
+
+    return Number.isFinite(latestInboundMs) && Number.isFinite(lastProcessedMs)
+      ? latestInboundMs > lastProcessedMs
+      : true;
+  }
+
+  private getCrmAnalysisInactivityRemainingMs(latestInboundAt: string | null) {
+    if (!latestInboundAt) {
+      return 0;
+    }
+
+    const latestInboundMs = Date.parse(latestInboundAt);
+    if (!Number.isFinite(latestInboundMs)) {
+      return 0;
+    }
+
+    const elapsedMs = Date.now() - latestInboundMs;
+    return Math.max(0, AgentManager.CRM_ANALYSIS_INACTIVITY_MS - elapsedMs);
+  }
+
+  private scheduleCrmAnalysisAfterInactivity(agentId: string, leadId: string, delayMs: number) {
+    const timerKey = `${agentId}:${leadId}`;
+    const existingTimer = this.idleAnalysisTimers.get(timerKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.idleAnalysisTimers.delete(timerKey);
+      this.flushBufferedConversation(agentId, leadId).catch((error) => {
+        console.error("[crm-ai] Falha ao processar analise apos inatividade:", error);
+      });
+    }, Math.max(1000, delayMs));
+
+    this.idleAnalysisTimers.set(timerKey, timer);
   }
 
   private async getLeadState(agentId: string, leadId: string) {
@@ -2950,7 +3131,7 @@ export class AgentManager {
     suggestedStageId?: string | null;
     appliedStageId?: string | null;
     confidence?: number | null;
-    actionTaken?: "none" | "reply_only" | "stage_applied" | "manual_pause" | "failed" | "freeze_repair";
+    actionTaken?: "none" | "reply_only" | "stage_applied" | "manual_pause" | "failed" | "freeze_repair" | "crm_updated";
     error?: string | null;
     tokensIn?: number | null;
     tokensOut?: number | null;
@@ -3139,7 +3320,7 @@ export class AgentManager {
       return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
     }
 
-    const modelName = agent?.model?.trim() || "gemini-2.5-flash";
+    const modelName = agent?.model?.trim() || AgentManager.DEFAULT_CRM_AGENT_MODEL;
     const prompt =
       message.mediaKind === "audio"
         ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
@@ -3578,7 +3759,13 @@ export class AgentManager {
     };
   }
 
-  private async classifyConversation(agent: AgentRow, lead: LeadRow, rules: Array<{ stage: StageRow; rule: StageRuleRow }>, messages: MessageRow[]) {
+  private async classifyConversation(
+    agent: AgentRow,
+    lead: LeadRow,
+    rules: Array<{ stage: StageRow; rule: StageRuleRow }>,
+    tags: TagRow[],
+    messages: MessageRow[]
+  ) {
     const handoffConfig = this.getHandoffConfig(agent);
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
@@ -3596,13 +3783,24 @@ export class AgentManager {
       terminal: rule.is_terminal,
     }));
 
+    const tagCatalog = tags.map((tag) => ({
+      id: tag.id,
+      nome: tag.name,
+      urgencia: tag.urgencia,
+      quando_usar: tag.usage_description ?? "",
+    }));
+
     const prompt = [
       agent.system_prompt,
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
       "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas de WhatsApp.",
       "stage_decision deve conter stage_id e reason.",
+      "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
+      "attendance_summary deve conter text, reason e confidence. text deve resumir o ultimo atendimento em ate 700 caracteres.",
+      "lead_verification deve conter checked=true quando a conversa foi analisada.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
+      "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
       "handoff_reason deve explicar objetivamente por que o handoff foi acionado. Se nao houver handoff, deixe handoff_reason vazio.",
       "",
@@ -3616,6 +3814,8 @@ export class AgentManager {
       })}`,
       "",
       `Etapas disponiveis: ${JSON.stringify(stages)}`,
+      "",
+      `Tags disponiveis: ${JSON.stringify(tagCatalog)}`,
       "",
       `Configuracao de handoff: ${JSON.stringify({
         enabled: handoffConfig.enabled,
@@ -3642,17 +3842,42 @@ export class AgentManager {
     };
   }
 
-  private async applyStageDecision(agent: AgentRow, lead: LeadRow, response: StructuredModelResponse) {
+  private async applyStageDecision(
+    agent: AgentRow,
+    lead: LeadRow,
+    response: StructuredModelResponse,
+    validStageIds: Set<string>
+  ) {
     if (!response.should_apply_stage || !response.stage_decision.stage_id) {
-      return null;
+      return {
+        appliedStageId: null,
+        changed: false,
+        skippedReason: "stage_not_requested",
+      };
+    }
+
+    if (!validStageIds.has(response.stage_decision.stage_id)) {
+      return {
+        appliedStageId: null,
+        changed: false,
+        skippedReason: "invalid_stage_id",
+      };
     }
 
     if (response.confidence < agent.auto_apply_threshold) {
-      return null;
+      return {
+        appliedStageId: null,
+        changed: false,
+        skippedReason: "below_threshold",
+      };
     }
 
     if (lead.stage_id === response.stage_decision.stage_id) {
-      return lead.stage_id;
+      return {
+        appliedStageId: lead.stage_id,
+        changed: false,
+        skippedReason: "already_in_stage",
+      };
     }
 
     const { error } = await this.serviceClient.rpc("service_move_lead_to_stage", {
@@ -3671,7 +3896,148 @@ export class AgentManager {
       status: response.should_pause ? "paused" : "active",
     });
 
-    return response.stage_decision.stage_id;
+    return {
+      appliedStageId: response.stage_decision.stage_id,
+      changed: true,
+      skippedReason: null,
+    };
+  }
+
+  private async applyCrmDecisions(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    response: StructuredModelResponse;
+    tags: TagRow[];
+    validStageIds: Set<string>;
+  }): Promise<CrmDecisionApplication> {
+    const { agent, lead, response, tags, validStageIds } = params;
+    const checkedAt = new Date().toISOString();
+    const stageResult = await this.applyStageDecision(agent, lead, response, validStageIds);
+    const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+    const selectedTagIds = new Set<string>();
+    const rejectedTagIds = new Set<string>();
+    const skippedTagDecisions: JsonRecord[] = [];
+
+    for (const decision of response.tag_decisions) {
+      if (!decision.tag_id || !tagById.has(decision.tag_id)) {
+        if (decision.tag_id) {
+          rejectedTagIds.add(decision.tag_id);
+        }
+        skippedTagDecisions.push({
+          tag_id: decision.tag_id,
+          reason: "invalid_tag_id",
+          model_reason: decision.reason,
+          confidence: decision.confidence,
+        });
+        continue;
+      }
+
+      if (!decision.should_apply) {
+        skippedTagDecisions.push({
+          tag_id: decision.tag_id,
+          reason: "not_requested",
+          model_reason: decision.reason,
+          confidence: decision.confidence,
+        });
+        continue;
+      }
+
+      if (decision.confidence < agent.auto_apply_threshold) {
+        rejectedTagIds.add(decision.tag_id);
+        skippedTagDecisions.push({
+          tag_id: decision.tag_id,
+          reason: "below_threshold",
+          model_reason: decision.reason,
+          confidence: decision.confidence,
+        });
+        continue;
+      }
+
+      selectedTagIds.add(decision.tag_id);
+    }
+
+    const appliedTagIds = Array.from(selectedTagIds);
+    if (appliedTagIds.length > 0) {
+      const { error } = await this.serviceClient
+        .from("lead_tags")
+        .upsert(
+          appliedTagIds.map((tagId) => ({
+            lead_id: lead.id,
+            tag_id: tagId,
+          })),
+          { onConflict: "lead_id,tag_id", ignoreDuplicates: true }
+        );
+
+      if (error) {
+        throw new HttpError(500, "Nao foi possivel aplicar as tags sugeridas pela IA", error);
+      }
+    }
+
+    const nextNotes = upsertAiSummaryBlock(
+      lead.notes,
+      response.attendance_summary.text,
+      checkedAt
+    );
+    const summaryUpdated = nextNotes !== (lead.notes ?? null);
+
+    const leadUpdate: JsonRecord = {
+      check: checkedAt,
+      updated_at: checkedAt,
+    };
+
+    if (summaryUpdated) {
+      leadUpdate.notes = nextNotes;
+    }
+
+    const { error: leadUpdateError } = await this.serviceClient
+      .from("leads")
+      .update(leadUpdate)
+      .eq("id", lead.id)
+      .eq("aces_id", lead.aces_id);
+
+    if (leadUpdateError) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel atualizar resumo/verificacao do lead pela IA",
+        leadUpdateError
+      );
+    }
+
+    const audit = {
+      stage: {
+        suggested_stage_id: response.stage_decision.stage_id,
+        applied_stage_id: stageResult.appliedStageId,
+        changed: stageResult.changed,
+        skipped_reason: stageResult.skippedReason,
+        reason: response.stage_decision.reason,
+        confidence: response.confidence,
+      },
+      tags: {
+        applied_tag_ids: appliedTagIds,
+        rejected_tag_ids: Array.from(rejectedTagIds),
+        skipped: skippedTagDecisions,
+      },
+      attendance_summary: {
+        updated: summaryUpdated,
+        reason: response.attendance_summary.reason,
+        confidence: response.attendance_summary.confidence,
+      },
+      lead_verification: {
+        checked_at: checkedAt,
+        reason: response.lead_verification.reason,
+      },
+    };
+
+    return {
+      appliedStageId: stageResult.appliedStageId,
+      stageChanged: stageResult.changed,
+      appliedTagIds,
+      rejectedTagIds: Array.from(rejectedTagIds),
+      summaryUpdated,
+      leadCheckedAt: checkedAt,
+      changed: stageResult.changed || appliedTagIds.length > 0 || summaryUpdated || Boolean(checkedAt),
+      audit,
+    };
   }
 
   private async queueBufferedProcessing(agent: AgentRow, leadId: string, message: ParsedWebhookMessage) {
@@ -3725,9 +4091,6 @@ export class AgentManager {
   private async flushBufferedConversation(agentId: string, leadId: string) {
     const agent = await this.getAgentById(agentId);
     const bufferedEntries = await this.consumeBufferedEntries(agentId, leadId);
-    if (bufferedEntries.length === 0) {
-      return;
-    }
 
     const lead = await this.loadLeadById(leadId, agent.aces_id, agent.created_by);
     const aiState = await this.resolveLeadAiState(lead.id, agent, lead.instancia);
@@ -3735,16 +4098,52 @@ export class AgentManager {
       return;
     }
 
+    const leadState = await this.getLeadState(agent.id, lead.id);
+    const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id);
+    if (
+      !this.shouldAnalyzeLead(
+        latestInbound?.sent_at ?? null,
+        leadState?.last_processed_message_at ?? null
+      )
+    ) {
+      return;
+    }
+
+    const inactivityRemainingMs = this.getCrmAnalysisInactivityRemainingMs(latestInbound?.sent_at ?? null);
+    if (inactivityRemainingMs > 0) {
+      this.scheduleCrmAnalysisAfterInactivity(agent.id, lead.id, inactivityRemainingMs);
+      return;
+    }
+
     const rules = await this.getStageRulesForAgent(agent);
+    const tags = await this.getTagsForAccount(agent.aces_id);
     const conversation = await this.fetchRecentConversation(lead.id);
-    const inboundMessages = bufferedEntries.map((entry) => entry.messageId).filter((item): item is string => Boolean(item));
+    const inboundMessages = bufferedEntries
+      .map((entry) => entry.messageId)
+      .filter((item): item is string => Boolean(item));
+    if (inboundMessages.length === 0 && latestInbound?.id) {
+      inboundMessages.push(latestInbound.id);
+    }
 
     try {
-      const result = await this.classifyConversation(agent, lead, rules, conversation);
-      const appliedStageId = await this.applyStageDecision(agent, lead, result.parsed);
+      const result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+      const validStageIds = new Set(rules.map(({ stage }) => stage.id));
+      const suggestedStageId =
+        result.parsed.stage_decision.stage_id && validStageIds.has(result.parsed.stage_decision.stage_id)
+          ? result.parsed.stage_decision.stage_id
+          : null;
+      const crmApplication = await this.applyCrmDecisions({
+        agent,
+        lead,
+        response: result.parsed,
+        tags,
+        validStageIds,
+      });
       const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
       const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
       let freezeUntil: string | null = null;
+      const processedAt = latestInbound?.sent_at ?? bufferedEntries[bufferedEntries.length - 1]?.sentAt ?? new Date().toISOString();
+      const lastAiReplyAt = result.parsed.reply_blocks.length > 0 ? new Date().toISOString() : null;
 
       if (result.parsed.reply_blocks.length > 0) {
         await this.sendReplyBlocks({
@@ -3762,12 +4161,20 @@ export class AgentManager {
           "ai_policy",
           bufferedEntries[bufferedEntries.length - 1]?.messageId ?? null,
         );
+        await this.upsertLeadState(agent.id, lead.id, {
+          last_processed_message_at: processedAt,
+          last_inbound_at: processedAt,
+          last_ai_reply_at: lastAiReplyAt,
+          last_classified_stage_id: crmApplication.appliedStageId ?? null,
+          last_confidence: result.parsed.confidence,
+          status: "paused",
+        });
       } else {
         await this.upsertLeadState(agent.id, lead.id, {
-          last_processed_message_at: bufferedEntries[bufferedEntries.length - 1]?.sentAt ?? new Date().toISOString(),
-          last_inbound_at: bufferedEntries[bufferedEntries.length - 1]?.sentAt ?? new Date().toISOString(),
-          last_ai_reply_at: result.parsed.reply_blocks.length > 0 ? new Date().toISOString() : null,
-          last_classified_stage_id: appliedStageId ?? null,
+          last_processed_message_at: processedAt,
+          last_inbound_at: processedAt,
+          last_ai_reply_at: lastAiReplyAt,
+          last_classified_stage_id: crmApplication.appliedStageId ?? null,
           last_confidence: result.parsed.confidence,
           status: "active",
         });
@@ -3781,6 +4188,9 @@ export class AgentManager {
           lead,
           bufferedEntries,
           rules,
+          tags,
+          latest_inbound: latestInbound,
+          previous_ai_state: leadState,
         },
         outputSnapshot: {
           raw_model_response: result.rawText,
@@ -3788,19 +4198,22 @@ export class AgentManager {
           used_fallback_model: result.usedFallback,
           generation_attempt: result.attempt,
           structured: result.parsed,
+          crm_application: crmApplication.audit,
           handoff: handoffResult,
           freeze_until: freezeUntil,
         },
-        suggestedStageId: result.parsed.stage_decision.stage_id,
-        appliedStageId,
+        suggestedStageId,
+        appliedStageId: crmApplication.appliedStageId,
         confidence: result.parsed.confidence,
-        actionTaken: appliedStageId
+        actionTaken: crmApplication.stageChanged
           ? "stage_applied"
-          : result.parsed.reply_blocks.length > 0
-            ? "reply_only"
-            : handoffResult.triggered
-              ? "manual_pause"
-              : "none",
+          : handoffResult.triggered
+            ? "manual_pause"
+            : result.parsed.reply_blocks.length > 0
+              ? "reply_only"
+              : crmApplication.changed
+                ? "crm_updated"
+                : "none",
         tokensIn: result.tokensIn,
         tokensOut: result.tokensOut,
       });
@@ -4363,7 +4776,7 @@ export class AgentManager {
       name: "Envio manual",
       system_prompt: DEFAULT_SYSTEM_MESSAGE,
       provider: "gemini",
-      model: "gemini-2.5-flash",
+      model: AgentManager.DEFAULT_CRM_AGENT_MODEL,
       is_active: false,
       buffer_wait_ms: 15000,
       human_pause_minutes: 60,

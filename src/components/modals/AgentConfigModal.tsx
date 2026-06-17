@@ -50,7 +50,7 @@ const PERSONALITY_LEVELS = [
   },
 ] as const;
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 const PERSONALITY_SECTION_TITLE = "## Estilo de Comunicacao";
 const PERSONALITY_SECTION_PATTERN = /\n*## Estilo de Comunica(?:cao|\u00e7\u00e3o)\n[\s\S]*$/u;
 

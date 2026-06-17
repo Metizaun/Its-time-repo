@@ -7,12 +7,16 @@ export interface TagsCatalogItem {
   id: string;
   name: string;
   urgencia: number | null;
+  usage_description: string | null;
 }
 
 const EMPTY_TAGS: TagsCatalogItem[] = [];
 
 async function fetchTagsCatalog() {
-  const { data, error } = await supabase.from("tags").select("id, name, urgencia").order("name");
+  const { data, error } = await supabase
+    .from("tags")
+    .select("id, name, urgencia, usage_description")
+    .order("name");
 
   if (error) {
     throw error;
