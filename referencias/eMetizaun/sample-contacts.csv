@@ -1,0 +1,12 @@
+first_name,last_name,email,phone,company,position,notes
+John,Doe,john.doe@example.com,+1-555-1111,Acme Corporation,CTO,Primary technical contact
+Jane,Smith,jane.smith@example.com,+1-555-2222,"Global Solutions, Inc.",VP Sales,Interested – call next week
+Alex,O'Neil,alex.oneil@example.com,,Smith & Partners,Counsel,Prefers email
+Priya,Patel,priya.patel@example.com,+44 20 7946 0958,Green Energy Co.,Head of Procurement,"Budget cycle Q4"
+Lars,Mikkelsen,lars.mikkelsen@example.com,+45 33 11 22 33,DataTech Solutions,Engineering Manager,Looking for demo
+María,García,maria.garcia@example.com,+34 91 123 45 67,Retail World,Director of E‑commerce,"Speaks ES/EN"
+François,Dupont,francois.dupont@example.fr,+33 1 23 45 67 89,Marketing Masters,CMO,"Uses commas, quotes, and accents"
+Aiko,Tanaka,aiko.tanaka@example.jp,+81 3-1234-5678,Healthcare Innovations,Product Manager,
+Noah,Johnson,noah.johnson@example.com,,Finance Plus,Analyst,New contact from conference
+Zoe,Lee,zoe.lee@example.com,+1-555-3333,Construction Pro,Project Lead,Follow up in 2 weeks
+

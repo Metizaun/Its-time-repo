@@ -33,6 +33,23 @@ Sombras não demarcam fronteiras — elas **elevam**. O sistema usa sombras Soft
 
 ---
 
+## Sofisticacao Operacional
+
+A sofisticacao do CRM nao deve parecer landing page, slideshow ou painel editorial explicativo. Em telas de trabalho, a referencia de acabamento e o `src/components/calendar/`: superficie silenciosa, borda sutil, sombra leve, radius generoso, densidade controlada e interacao precisa.
+
+Regras:
+
+- A UI deve comunicar pelo arranjo, hierarquia e acabamento antes de explicar por texto.
+- Dashboards devem ser superficies de leitura rapida, nao narrativas em blocos heroicos.
+- Use cards apenas para unidades reais de informacao; nao transforme secoes inteiras em cards flutuantes.
+- Prefira ritmo modular: header compacto, filtros persistentes, KPI grid, graficos e listas em containers consistentes.
+- Microcopy deve ser curta e operacional. Evite frases longas dentro da tela.
+- Estados neutros e ausencias de dado devem parecer informacao, nao erro.
+- Acentos laranja indicam foco, serie principal ou estado atual; nunca decoracao abundante.
+- Densidade analitica e permitida quando reduz espaco vazio improdutivo: grades, heatmaps e tabelas compactas devem comunicar padrao e ritmo, nao decorar.
+
+---
+
 ## Identidade Visual
 
 | Atributo | Valor |

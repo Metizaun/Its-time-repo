@@ -14,6 +14,16 @@
 4. **Sem molduras supérfluas** — O card já cria o container; não adicionar bordas extras em volta do gráfico
 5. **Animação de entrada** — Nenhum gráfico renderiza bruscamente
 
+### Sofisticacao em Dashboards
+
+Dashboards nao devem parecer slides empilhados. A experiencia deve ser uma superficie operacional escaneavel: primeiro os filtros e KPIs, depois comparacao, tendencia e detalhe. A narrativa existe na ordem dos modulos, nao em textos explicativos longos.
+
+- Use section labels como marcadores discretos, nao como titulos heroicos.
+- Cada grafico deve responder uma pergunta operacional clara, mas a pergunta nao precisa aparecer inteira na UI.
+- Prefira barras horizontais, tabelas compactas e linhas limpas quando nomes ou categorias variam muito.
+- Evite competicao visual entre graficos. Um unico grafico por secao pode ser protagonista; os demais devem apoiar.
+- Receitas, perdas, erros e ausencias devem ficar em tratamento secundario quando nao forem a tese da tela.
+
 ---
 
 ## Paleta de Gráficos
@@ -32,7 +42,11 @@ var(--color-primary-500)   /* #E8511A — laranja, destaque máximo */
 | Série D | Roxo | `#7C3AED` |
 | Série E | Cinza grafite | `#5C5C58` |
 
-> Pink/Magenta (`#E83560`) **nunca** usado em séries de gráfico — reservado para badges e ilustrações.
+> Pink/Magenta (`#E83560`) nao entra como serie comum. Uso permitido apenas para intensidade maxima em heatmaps ou tensao explicitamente documentada.
+
+### Restricao Do Dashboard Operacional
+
+No Dashboard principal, evitar azul, verde e roxo como series padrao. A paleta deve ficar restrita a laranja, grafite, neutros quentes e pink apenas para intensidade maxima ou tensao documentada.
 
 ---
 
@@ -196,6 +210,44 @@ var(--color-primary-500)  /* #E8511A — segmento de destaque */
 
 .bar:hover {
   opacity: 0.80;
+}
+```
+
+---
+
+## Heatmap Operacional
+
+### Uso
+
+Use heatmap quando a pergunta principal for frequencia, recorrencia ou ritmo em uma janela de tempo. Em dashboards operacionais, ele deve ocupar espaco que ficaria vazio em graficos com pouca serie, ajudando o usuario a perceber dias quentes, dias silenciosos e padroes semanais.
+
+### Visual
+
+- Geometria inspirada em contribution grids: celulas pequenas, alinhadas por semana e dia da semana.
+- Fundo permanece claro; nao copiar paleta dark/verde do GitHub.
+- Escala de intensidade: neutro quente -> laranja -> pink restrito apenas no nivel maximo.
+- Labels de mes e dias uteis devem ser discretos, mono, 10px.
+- A legenda deve ser compacta: `Menos` -> celulas -> `Mais`.
+- Hover pode elevar a celula, mas sem tooltip grande ou card aninhado.
+- A matriz deve ocupar a largura util do container. Use distribuicao de semanas, nao um bloco estreito centralizado.
+- Janelas longas demais devem ser evitadas: em filtros totais, prefira recorte recente para nao parecer calendario anual.
+
+### CSS Base
+
+```css
+.lead-heatmap__cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  background-color: var(--color-bg-subtle);
+}
+
+.lead-heatmap__cell[data-intensity="3"] {
+  background-color: var(--color-primary-500);
+}
+
+.lead-heatmap__cell[data-intensity="4"] {
+  background-color: var(--color-secondary-500);
 }
 ```
 

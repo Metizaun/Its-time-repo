@@ -8,7 +8,9 @@
 
 ## Estrutura Visual — Pirâmide Invertida Vertical
 
-O funil é exibido **verticalmente**, com largura **decrescente** a cada etapa. Cada stage é um card branco com elevação Soft UI.
+O funil é exibido **verticalmente**, com largura **proporcional ao volume real de leads** de cada etapa. A maior etapa visível ocupa 100%; as demais escalam em relação a ela com mínimo visual para não desaparecerem. Cada stage é um card branco com elevação Soft UI.
+
+> O desenho abaixo e apenas esquematico. A geometria real do produto nunca deve ser fixa por posicao; ela vem de `--funnel-stage-width`.
 
 ```
 ┌─────────────────────────────────────────────┐   ← 100% de largura
@@ -59,12 +61,10 @@ O funil é exibido **verticalmente**, com largura **decrescente** a cada etapa. 
   transition: var(--transition-shadow);
 }
 
-/* Larguras decrescentes — INEGOCIÁVEIS */
-.funnel-stage:nth-child(1) { width: 100%; }
-.funnel-stage:nth-child(2) { width: 80%;  }
-.funnel-stage:nth-child(3) { width: 65%;  }
-.funnel-stage:nth-child(4) { width: 55%;  }
-.funnel-stage:nth-child(5) { width: 45%;  }
+/* Largura orientada por dado real */
+.funnel-stage {
+  width: clamp(164px, var(--funnel-stage-width), 100%);
+}
 
 /* Label da etapa */
 .funnel-stage__label {
@@ -207,7 +207,7 @@ Ficam **FORA** dos stage blocks, nas laterais. Usar `.card-kpi` de `02-component
 
 ## Regras Críticas de Fidelidade
 
-1. ✅ **Larguras decrescentes são INEGOCIÁVEIS** — cada stage visivelmente menor
+1. ✅ **Larguras proporcionais são obrigatórias** — cada stage representa o volume real de leads daquela etapa
 2. ✅ **Valor numérico centralizado**, label (mono uppercase) acima, delta abaixo
 3. ✅ **Metric cards FORA do funil**, nas laterais com linhas conectoras `border-subtle`
 4. ✅ **Connector vertical fino** entre cada stage — `border-default`, 1px
@@ -221,6 +221,6 @@ Ficam **FORA** dos stage blocks, nas laterais. Usar `.card-kpi` de `02-component
 ## Adaptação Mobile (< 768px)
 
 - Métricas laterais se desacoplam do funil e migram para **abaixo** do stage correspondente
-- Cada stage ocupa 100% da largura em mobile
-- Larguras decrescentes são mantidas proporcionalmente em tablet (`640px–1023px`)
+- Cada stage mantém a largura proporcional em mobile, respeitando um mínimo legível
+- Larguras proporcionais ao volume são mantidas em tablet (`640px–1023px`)
 - Linhas conectoras laterais desaparecem em mobile

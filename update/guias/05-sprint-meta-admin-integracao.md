@@ -7,7 +7,7 @@ Sprint focada em dar autonomia operacional ao Admin para gerenciar canais/instan
 Tarefas de referencia:
 
 - 5.1 Desenvolver interface Admin para gerenciamento de instancias.
-- 5.2 Implementar integracao para criacao automatizada de instancias pela API da Meta.
+- 5.2 Implementar fluxo assistido de criacao/ativacao Meta via Embedded Signup e Graph API.
 
 ## 2. Diagnostico do codigo atual
 
@@ -25,9 +25,9 @@ Tarefas de referencia:
 
 ### Lacunas
 
-- Criacao real de numero/canal pela Meta pode depender de Business Manager, WABA, phone number e aprovacao externa.
+- Criacao real de numero/canal pela Meta depende do fluxo oficial de Embedded Signup, Business Manager, WABA, phone number e aprovacoes externas quando aplicavel.
 - O provider registry nao aparece consumido pelos fluxos principais de envio.
-- Interface atual configura canal, mas nao cobre fluxo guiado completo de criacao/ativacao.
+- Interface atual configura canal, mas nao cobre fluxo guiado completo de criacao/ativacao dentro do ecossistema Meta.
 - Segredos sao referenciados por nome de env (`accessTokenSecretRef`), mas a operacao precisa de convencao clara.
 
 ## 3. Arquivos provaveis
@@ -50,19 +50,28 @@ Tarefas de referencia:
 - Evoluir de "configurar canal" para "assistente de ativacao".
 - O Admin deve conseguir:
   - selecionar instancia existente;
-  - informar WABA ID, Phone Number ID, Business ID e refs de segredo;
+  - iniciar fluxo assistido Meta/Embedded Signup quando disponivel;
+  - informar ou confirmar WABA ID, Phone Number ID, Business ID e refs de segredo;
   - testar configuracao em modo mock/live;
   - sincronizar templates;
   - visualizar status e ultima sincronizacao;
   - alternar provider da instancia quando canal estiver ativo.
 
-### Criacao automatizada pela Meta
+### Criacao assistida pela Meta
 
-- Antes de codar criacao real, mapear a permissao Graph API disponivel.
-- Se a API/conta nao permitir criar ativos automaticamente, o v1 deve tratar como cadastro assistido e validacao operacional.
+- Nao tratar a criacao como provisionamento automatico total. O modelo esperado e semelhante ao de BSPs como Gupshup: a plataforma orquestra o onboarding, mas etapas criticas acontecem dentro do Embedded Signup/Business Manager da Meta.
+- Antes de codar qualquer criacao real, mapear permissoes Graph API, app review, tipo de conta e ativos disponiveis para o app Meta.
+- Se a API/conta nao permitir criar ativos automaticamente, o v1 deve tratar como criacao/ativacao assistida e validacao operacional.
+- Apos o numero ser criado/registrado no WABA, o envio deve ocorrer pela WhatsApp Cloud API usando o `phone_number_id` autorizado. A Business Manager sustenta ownership/permissoes, mas nao e o sender direto.
+- Capturar e persistir os identificadores retornados/autorizados pelo fluxo:
+  - `business_id`: Business Manager do cliente;
+  - `waba_id`: WhatsApp Business Account autorizada;
+  - `phone_number_id`: numero usado como remetente na Cloud API;
+  - `accessTokenSecretRef`: referencia segura para o token/permissao.
 - Separar claramente:
   - `draft`: dados cadastrados, sem envio;
-  - `active`: canal valido e provider pode enviar;
+  - `pending_meta`: aguardando conclusao/verificacao no fluxo Meta;
+  - `active`: canal valido, numero registrado e provider pode enviar pela Cloud API;
   - `error`: falha de validacao/sync;
   - `disabled`: canal pausado.
 
@@ -74,20 +83,22 @@ Tarefas de referencia:
 
 ## 5. Ordem de execucao
 
-1. Mapear permissao real da conta/app Meta e decidir se v1 sera criacao automatica ou ativacao assistida.
-2. Atualizar documentacao/envs de segredos Meta.
-3. Criar endpoints de validacao/teste de canal Meta.
-4. Integrar provider registry no envio manual primeiro.
-5. Integrar provider registry em automacoes e IA.
-6. Evoluir UI do `InstanceManager` para fluxo guiado.
-7. Validar webhook Meta inbound/status com fixtures e ambiente real quando disponivel.
+1. Mapear permissao real da conta/app Meta, Embedded Signup, app review e ativos disponiveis.
+2. Definir contrato do assistente: inicio do onboarding, retorno/callback, captura de `business_id`, `waba_id` e `phone_number_id`.
+3. Atualizar documentacao/envs de segredos Meta.
+4. Criar endpoints de validacao/teste de canal Meta.
+5. Integrar provider registry no envio manual primeiro.
+6. Integrar provider registry em automacoes e IA.
+7. Evoluir UI do `InstanceManager` para fluxo guiado.
+8. Validar webhook Meta inbound/status com fixtures e ambiente real quando disponivel.
 
 ## 6. Criterios de aceite
 
 - Admin visualiza canais Meta por instancia.
+- Admin inicia ou conclui fluxo assistido de criacao/ativacao Meta quando a conta/app permitir.
 - Admin cadastra/edita dados de canal Meta sem expor tokens.
 - Admin sincroniza templates e ve resultado.
-- Instancia ativa com provider Meta envia mensagem por Meta quando configurada.
+- Instancia ativa com provider Meta envia mensagem pela WhatsApp Cloud API usando o `phone_number_id` autorizado.
 - Instancia sem canal ativo continua usando Evolution.
 - Erros Graph API aparecem com mensagem operacional e log backend seguro.
 - Webhook Meta registra status/inbound sem duplicidade.
@@ -96,7 +107,8 @@ Tarefas de referencia:
 
 | Risco | Probabilidade | Mitigacao |
 |---|---|---|
-| Meta nao permitir criacao automatica total | Alta | Implementar ativacao assistida e validar permissao antes |
+| Meta nao permitir criacao automatica total | Alta | Implementar criacao/ativacao assistida via Embedded Signup e validar permissao antes |
+| Embedded Signup retornar ativos incompletos ou pendentes | Media | Manter status `pending_meta` e permitir completar dados manualmente |
 | Token vazar no frontend/log | Media | Usar secret refs e mascarar logs |
 | Provider registry nao cobrir todos envios | Alta | Integrar envio manual primeiro, depois automacao/IA |
 | Rate limit Graph API | Media | Retries com backoff e classificacao de erro |
@@ -109,12 +121,14 @@ Tarefas de referencia:
 - Testar modo mock Meta com fixtures.
 - Testar listagem/salvamento de canal no Admin.
 - Testar fallback Evolution quando Meta nao esta ativo.
-- Testar envio texto Meta em modo live apenas com credenciais validas.
+- Testar fluxo assistido com retorno/captura de Business ID, WABA ID e Phone Number ID quando ambiente Meta estiver disponivel.
+- Testar envio texto Meta em modo live apenas com credenciais validas e numero registrado na Cloud API.
 - Testar webhook status enviado/entregue/lido/falhou.
 
 ## 9. Pontos de atencao
 
-- Nao assumir que a Graph API cria tudo automaticamente; confirmar permissao real.
+- Nao assumir que a Graph API cria tudo automaticamente; confirmar permissao real, app review e disponibilidade do Embedded Signup.
+- Nao vender "disparo pela BM" como sender tecnico. O sender real e o `phone_number_id` registrado no WABA e usado via WhatsApp Cloud API.
 - Nao salvar token diretamente no banco quando o padrao for `secretRef`.
 - Nao remover fluxo Evolution; Meta deve conviver como provider alternativo.
 

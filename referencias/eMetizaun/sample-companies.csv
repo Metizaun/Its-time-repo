@@ -1,0 +1,11 @@
+name,industry,website,phone,email,address,city,state,country,postal_code,employee_count,annual_revenue,notes
+"Acme Corporation",Technology,https://acme.com,+1-555-0100,contact@acme.com,"123 Tech Lane",San Francisco,CA,USA,94105,500,10000000,"Leading tech company"
+"Global Solutions, Inc.",Consulting,https://globalsolutions.com,+1-555-0200,info@globalsolutions.com,"456 Business Ave",New York,NY,USA,10001,"1,000","25,000,000","International consulting firm"
+"Smith & Partners",Legal,https://smithpartners.com,+1-555-0300,legal@smithpartners.com,"789 Law Street",Boston,MA,USA,02108,50,5000000,"Corporate law specialists"
+"Green Energy Co.",Energy,https://greenenergy.com,+1-555-0400,hello@greenenergy.com,"321 Solar Blvd",Austin,TX,USA,78701,200,15000000,"Renewable energy provider"
+"DataTech Solutions",Software,https://datatech.com,+1-555-0500,sales@datatech.com,"654 Code Drive",Seattle,WA,USA,98101,75,8000000,"Data analytics platform"
+"Marketing Masters",Marketing,https://marketingmasters.com,+1-555-0600,team@marketingmasters.com,"987 Creative Way",Los Angeles,CA,USA,90001,30,3000000,"Digital marketing agency"
+"Finance Plus",Financial Services,https://financeplus.com,+1-555-0700,support@financeplus.com,"246 Money Lane",Chicago,IL,USA,60601,150,12000000,"Investment management"
+"Healthcare Innovations",Healthcare,https://healthinno.com,+1-555-0800,care@healthinno.com,"135 Medical Park",Miami,FL,USA,33101,300,20000000,"Medical technology"
+"Retail World",Retail,https://retailworld.com,+1-555-0900,shop@retailworld.com,"864 Commerce St",Dallas,TX,USA,75201,2000,50000000,"E-commerce platform"
+"Construction Pro",Construction,https://constructionpro.com,+1-555-1000,build@constructionpro.com,"579 Builder Ave",Denver,CO,USA,80201,100,7500000,"Commercial construction"

@@ -1,16 +1,16 @@
 import { useMemo, useState } from "react";
-import { Building2, Check, DollarSign, Filter, Target, TrendingUp, Users } from "lucide-react";
+import { BadgeDollarSign, Check, Clock3, Filter, Send, Target } from "lucide-react";
 
-import { useLeads } from "@/hooks/useLeads";
-import { useInstances } from "@/hooks/useInstances";
-import { usePipelineStages } from "@/hooks/usePipelineStages";
-import { useAuth } from "@/contexts/AuthContext";
-import { useApp } from "@/context/AppContext";
-import { KPICard } from "@/components/KPICard";
-import { LineChart } from "@/components/charts/LineChart";
-import { BarChart } from "@/components/charts/BarChart";
+import { ChartCard } from "@/components/charts/ChartCard";
 import { FunnelChart } from "@/components/charts/FunnelChart";
-import { RevenueByVendorChart } from "@/components/charts/RevenueByVendorChart";
+import { ConversationActivityChart } from "@/components/dashboard/ConversationActivityChart";
+import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
+import { DashboardInsightList } from "@/components/dashboard/DashboardInsightList";
+import { DashboardInstancePerformance } from "@/components/dashboard/DashboardInstancePerformance";
+import { DashboardMetricGrid } from "@/components/dashboard/DashboardMetricGrid";
+import { DashboardPipelineMovement } from "@/components/dashboard/DashboardPipelineMovement";
+import { DashboardSection } from "@/components/dashboard/DashboardSection";
+import { KPICard } from "@/components/KPICard";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,16 +19,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useApp } from "@/context/AppContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useDashboardConversationMetrics } from "@/hooks/useDashboardConversationMetrics";
+import { useDashboardInstanceMetrics } from "@/hooks/useDashboardInstanceMetrics";
+import { useDashboardMetrics } from "@/hooks/useDashboardMetrics";
+import { useInstances } from "@/hooks/useInstances";
+import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { cn } from "@/lib/utils";
-import { filterLeadsByPeriod } from "@/lib/utils/filters";
-import {
-  computeFunnelDataFromStages,
-  groupLeadsByDay,
-  groupLeadsByOrigin,
-  groupRevenueByVendor,
-} from "@/lib/utils/metrics";
-import { Lead, PeriodFilter, PipelineStage } from "@/types";
+import type { FunnelStep } from "@/lib/utils/metrics";
+import type { DashboardFilters } from "@/types/dashboard";
+import type { PeriodFilter, PipelineStage } from "@/types";
 
 const MAX_FUNNEL_STAGES = 5;
 
@@ -42,21 +43,28 @@ function getEffectiveFunnelStages(stages: PipelineStage[]) {
   return stages.slice(0, MAX_FUNNEL_STAGES);
 }
 
-function SectionLabel({ children }: { children: string }) {
+function formatCurrency(value: number) {
+  return value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
+}
+
+function ChartSkeleton({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="section-label">
-      <span className="section-label__text">{children}</span>
-    </div>
+    <ChartCard title={title} subtitle={subtitle}>
+      <div className="dashboard-chart-skeleton" />
+    </ChartCard>
   );
 }
 
-function normalizeConnection(value?: string | null): Lead["conexao"] {
-  if (value === "Baixa" || value === "Alta") return value;
-  return "Média";
-}
-
 export default function Dashboard() {
-  const { leads, loading } = useLeads({ enableRealtime: false });
   const { stages, toggleFunnelStage } = usePipelineStages();
   const { instances, loading: instancesLoading } = useInstances();
   const { userRole } = useAuth();
@@ -64,64 +72,42 @@ export default function Dashboard() {
   const [selectedInstance, setSelectedInstance] = useState<string>("todas");
   const isAdmin = userRole === "ADMIN";
 
-  const normalizedLeads = useMemo<Lead[]>(() => {
-    return leads.map((lead) => ({
-      ...lead,
-      nome: lead.lead_name || "Sem nome",
-      cidade: lead.last_city || "",
-      email: lead.email || "",
-      telefone: lead.contact_phone || "",
-      origem: lead.source || "Desconhecido",
-      conexao: normalizeConnection(lead.connection_level),
-      valor: lead.value || 0,
-      dataCriacao: lead.created_at,
-      responsavel: lead.owner_name || "Sem responsavel",
-      observacoes: "",
-    }));
-  }, [leads]);
-
-  const periodFilteredLeads = useMemo(
-    () => filterLeadsByPeriod(normalizedLeads, ui.periodFilter, ui.customRange),
-    [normalizedLeads, ui.periodFilter, ui.customRange]
+  const filters = useMemo<DashboardFilters>(
+    () => ({
+      period: ui.periodFilter,
+      customRange: ui.customRange,
+      instance: selectedInstance,
+    }),
+    [selectedInstance, ui.customRange, ui.periodFilter]
   );
 
-  const filteredLeads = useMemo(() => {
-    if (selectedInstance === "todas") return periodFilteredLeads;
-
-    return periodFilteredLeads.filter((lead) => {
-      return lead.instance_name === selectedInstance;
-    });
-  }, [periodFilteredLeads, selectedInstance]);
+  const dashboardMetrics = useDashboardMetrics(filters);
+  const conversationQuery = useDashboardConversationMetrics(filters);
+  const instanceQuery = useDashboardInstanceMetrics(filters);
 
   const selectedFunnelStages = useMemo(() => getEffectiveFunnelStages(stages), [stages]);
   const selectedFunnelStageIds = useMemo(() => selectedFunnelStages.map((stage) => stage.id), [selectedFunnelStages]);
+
+  const displayedFunnelData = useMemo<FunnelStep[]>(() => {
+    const source = dashboardMetrics.pipeline.funnel;
+
+    if (selectedFunnelStageIds.length > 0) {
+      const selected = source.filter((stage) => stage.id && selectedFunnelStageIds.includes(stage.id));
+      if (selected.length > 0) return selected.slice(0, MAX_FUNNEL_STAGES);
+    }
+
+    const rpcSelected = source.filter((stage) => stage.is_funnel_stage);
+    if (rpcSelected.length > 0 && rpcSelected.length <= MAX_FUNNEL_STAGES) {
+      return rpcSelected;
+    }
+
+    return source.slice(0, MAX_FUNNEL_STAGES);
+  }, [dashboardMetrics.pipeline.funnel, selectedFunnelStageIds]);
 
   const handleFunnelStageToggle = async (stageId: string, nextEnabled: boolean) => {
     if (!isAdmin) return;
     await toggleFunnelStage(stageId, nextEnabled);
   };
-
-  const kpis = useMemo(() => {
-    const totalLeads = filteredLeads.length;
-    const negociosGanhos = filteredLeads.filter((lead) => lead.status === "Fechado").length;
-    const valorTotal = filteredLeads
-      .filter((lead) => lead.status === "Fechado")
-      .reduce((sum, lead) => sum + (lead.valor || 0), 0);
-    const taxaConversao = totalLeads > 0 ? (negociosGanhos / totalLeads) * 100 : 0;
-
-    return { totalLeads, negociosGanhos, valorTotal, taxaConversao };
-  }, [filteredLeads]);
-
-  const dailyData = useMemo(() => groupLeadsByDay(filteredLeads), [filteredLeads]);
-  const originData = useMemo(() => groupLeadsByOrigin(filteredLeads), [filteredLeads]);
-  const funnelData = useMemo(() => {
-    if (!stages.length || selectedFunnelStageIds.length === 0) {
-      return [];
-    }
-
-    return computeFunnelDataFromStages(filteredLeads, stages, selectedFunnelStageIds);
-  }, [filteredLeads, selectedFunnelStageIds, stages]);
-  const revenueByVendor = useMemo(() => groupRevenueByVendor(filteredLeads), [filteredLeads]);
 
   const funnelHeaderAction = (
     <DropdownMenu>
@@ -178,120 +164,106 @@ export default function Dashboard() {
     </DropdownMenu>
   );
 
-  if (loading) {
-    return (
-      <div className="dashboard-page">
-        <div>
-          <SectionLabel>Dashboard</SectionLabel>
-          <h1 className="dashboard-title">Dashboard</h1>
-          <p className="dashboard-description">Carregando metricas de vendas...</p>
-        </div>
-      </div>
-    );
-  }
+  const conversation = conversationQuery.conversation ?? dashboardMetrics.metrics.conversation;
+  const instanceMetrics = instanceQuery.instances;
+  const loading = dashboardMetrics.loading;
 
   return (
     <div className="dashboard-page">
-      <header className="dashboard-header">
-        <div>
-          <SectionLabel>Dashboard</SectionLabel>
-          <h1 className="dashboard-title">Dashboard</h1>
-          <p className="dashboard-description">Visao geral do desempenho de vendas</p>
-        </div>
+      <DashboardHeader
+        selectedInstance={selectedInstance}
+        onInstanceChange={setSelectedInstance}
+        instances={instances}
+        instancesLoading={instancesLoading}
+        period={ui.periodFilter}
+        onPeriodChange={(value: PeriodFilter) => setPeriodFilter(value)}
+      />
 
-        <div className="dashboard-filters">
-          <Select value={selectedInstance} onValueChange={setSelectedInstance} disabled={instancesLoading}>
-            <SelectTrigger className="dashboard-filter-trigger dashboard-filter--instance">
-              <div className="dashboard-filter-content">
-                <Building2 className="dashboard-filter-icon" />
-                <span className="dashboard-filter-value">
-                  <SelectValue placeholder="Todas as instancias" />
-                </span>
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todas">Todas as instancias</SelectItem>
-              {instances.map((instance) => (
-                <SelectItem key={instance.instancia} value={instance.instancia}>
-                  {instance.instancia}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select value={ui.periodFilter} onValueChange={(value: PeriodFilter) => setPeriodFilter(value)}>
-            <SelectTrigger className="dashboard-filter-trigger dashboard-filter--period">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="hoje">Hoje</SelectItem>
-              <SelectItem value="7d">Ultimos 7 dias</SelectItem>
-              <SelectItem value="30d">Ultimos 30 dias</SelectItem>
-              <SelectItem value="total">Total</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </header>
-
-      {selectedInstance !== "todas" && (
+      {selectedInstance !== "todas" ? (
         <div className="dashboard-filter-note">
           <strong>Filtrando por instancia:</strong> {selectedInstance}
         </div>
-      )}
+      ) : null}
 
-      <section className="dashboard-section">
-        <SectionLabel>Consolidado Geral</SectionLabel>
+      {!dashboardMetrics.rpcEnabled ? (
+        <div className="dashboard-data-note">
+          Metricas agregadas desativadas neste ambiente. Ative VITE_ENABLE_DASHBOARD_RPC=true no
+          ambiente local de desenvolvimento ou teste para validar dados reais.
+        </div>
+      ) : dashboardMetrics.error ? (
+        <div className="dashboard-data-note">
+          Metricas agregadas indisponiveis no momento. Verifique a migration da RPC e tente novamente.
+        </div>
+      ) : null}
 
-        <div className="dashboard-kpi-grid">
-          <KPICard title="Total de Leads" value={kpis.totalLeads} icon={Users} subtitle="leads no periodo" />
-          <KPICard title="Negocios Ganhos" value={kpis.negociosGanhos} icon={Target} subtitle="vendas fechadas" />
+      <DashboardSection label="Consolidado Operacional">
+        <DashboardMetricGrid kpis={dashboardMetrics.kpis} loading={loading} />
+      </DashboardSection>
+
+      <DashboardSection label="Movimento Do Pipeline">
+        <div className="dashboard-pipeline-grid">
+          {loading ? (
+            <ChartSkeleton title="Funil do Pipeline" />
+          ) : (
+            <FunnelChart
+              data={displayedFunnelData}
+              title="Funil do Pipeline"
+              headerAction={funnelHeaderAction}
+              totalLeads={dashboardMetrics.kpis.leads_period}
+            />
+          )}
+
+          {loading ? (
+            <ChartSkeleton title="Evolucao de Leads" subtitle="entrada diaria e densidade por semana" />
+          ) : (
+            <DashboardPipelineMovement
+              evolution={dashboardMetrics.pipeline.evolution}
+              heatmap={dashboardMetrics.pipeline.heatmap}
+              loading={loading}
+            />
+          )}
+        </div>
+      </DashboardSection>
+
+      <DashboardSection label="Conversas E IA">
+        <div className="dashboard-wide-grid">
+          <ConversationActivityChart data={conversation.evolution} loading={conversationQuery.loading} />
+          <DashboardInsightList leads={conversation.stale_leads_list} loading={conversationQuery.loading} />
+        </div>
+      </DashboardSection>
+
+      <DashboardSection label="Performance Por Instancia">
+        <DashboardInstancePerformance instances={instanceMetrics} loading={instanceQuery.loading} />
+      </DashboardSection>
+
+      <DashboardSection label="Indicadores Opcionais">
+        <div className="dashboard-secondary-grid">
           <KPICard
-            title="Receita Total"
-            value={
-              <>
-                R${" "}
-                <span className="whitespace-nowrap">
-                  {kpis.valorTotal.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-              </>
-            }
-            icon={DollarSign}
-            subtitle="valor total fechado"
+            title="Conversao do Pipeline"
+            value={formatPercent(dashboardMetrics.pipeline.conversion_rate)}
+            icon={Target}
+            subtitle={`${dashboardMetrics.pipeline.won_leads} leads chegaram em ganho`}
           />
           <KPICard
-            title="Taxa de Conversao"
-            value={`${kpis.taxaConversao.toFixed(1)}%`}
-            icon={TrendingUp}
-            subtitle="leads para vendas"
+            title="Receita Registrada"
+            value={formatCurrency(dashboardMetrics.optional.revenue_registered)}
+            icon={BadgeDollarSign}
+            subtitle={`${dashboardMetrics.optional.leads_with_revenue} leads com receita`}
+          />
+          <KPICard
+            title="Disparos Enviados"
+            value={dashboardMetrics.optional.dispatches_sent}
+            icon={Send}
+            subtitle="mensagens automaticas concluidas"
+          />
+          <KPICard
+            title="Disparos Pendentes"
+            value={dashboardMetrics.optional.dispatches_pending}
+            icon={Clock3}
+            subtitle="automacoes em fila ou processamento"
           />
         </div>
-      </section>
-
-      <section className="dashboard-section">
-        <SectionLabel>Aquisicao De Clientes</SectionLabel>
-
-        <div className="dashboard-chart-grid">
-          <LineChart data={dailyData} title="Evolucao de Leads" />
-          <BarChart data={originData} title="Leads por Origem" />
-        </div>
-      </section>
-
-      <section className="dashboard-section">
-        <SectionLabel>Funil E Receita</SectionLabel>
-
-        <div className="dashboard-chart-grid">
-          <FunnelChart
-            data={funnelData}
-            title="Funil de Vendas"
-            headerAction={funnelHeaderAction}
-            totalLeads={filteredLeads.length}
-          />
-          <RevenueByVendorChart data={revenueByVendor} title="Receita por Vendedor" />
-        </div>
-      </section>
+      </DashboardSection>
     </div>
   );
 }

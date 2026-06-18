@@ -125,6 +125,16 @@ body.sidebar-mobile-open {
 
 ## Agrupamento de Conteúdo (Information Architecture)
 
+### Experiencia Operacional Sofisticada
+
+Telas de produto devem se comportar como ferramentas de trabalho, nao como apresentacoes. A referencia visual e o calendario: uma superficie continua, modular e silenciosa, com informacao densa mas respiravel.
+
+- Header compacto: label, titulo, descricao curta e filtros.
+- Secoes sao faixas de conteudo com `section-label`; nao usar blocos heroicos para explicar a narrativa.
+- A ordem da tela deve criar leitura progressiva: pulso, movimento, conversa, instancia, detalhe opcional.
+- Em desktop, priorize leitura em grid; em mobile, preserve a mesma ordem sem esconder metricas principais.
+- Evite grandes espacos vazios decorativos. Whitespace deve melhorar escaneabilidade, nao dramatizar a tela.
+
 ### Blocos Temáticos com Section Label
 Cada bloco analítico começa com um `section-label` (barra laranja + label mono uppercase):
 

@@ -1,0 +1,240 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CRM Template Design System - Professional & Modern */
+
+@layer base {
+  :root {
+    /* Core Colors */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+    
+    /* Cards & Surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+    
+    /* Brand Colors */
+    --brand-dark: 0 0% 6%;
+    --brand-light: 0 0% 98%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+    
+    /* Interactive States */
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 46%;
+    --accent: 0 0% 9%;
+    --accent-foreground: 0 0% 98%;
+
+    /* Inbox Accent Tokens */
+    --accent-orange: #081852;
+    --accent-orange-hover: #0A1E66;
+    --accent-orange-light: rgb(8 24 82 / 10%);
+    --status-unread: #FF4500;
+    --inbox-surface: hsl(var(--muted));
+    --inbox-sidebar-bg: #292D36;
+    --inbox-sidebar-fg: #FFFFFF;
+    
+    /* Status Colors */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    
+    /* Form Elements */
+    --border: 0 0% 89%;
+    --input: 0 0% 89%;
+    --ring: 0 0% 9%;
+    
+    /* Charts */
+    --chart-1: 202 100% 78%;
+    --chart-2: 202 100% 68%;
+    --chart-3: 202 100% 58%;
+    --chart-4: 202 100% 48%;
+    --chart-5: 202 100% 38%;
+    
+    /* Sidebar */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 0 0% 45%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 0 0% 45%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 0 0% 9%;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --radius: 0.625rem;
+    --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+    --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+    --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+    --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+    --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+    --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+    --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+    --tracking-normal: 0em;
+    --spacing: 0.25rem;
+  }
+
+  .dark {
+    /* ChatGPT-inspired dark palette */
+    --background: 0 0% 13%;          /* #212121 */
+    --foreground: 0 0% 100%;         /* #ffffff */
+    
+    --card: 0 0% 19%;                /* #303030 */
+    --card-foreground: 0 0% 95%;     /* #f3f3f3 */
+    --popover: 0 0% 19%;             /* #303030 */
+    --popover-foreground: 0 0% 95%;  /* #f3f3f3 */
+    
+    --primary: 0 0% 100%;            /* interactive primary */
+    --primary-foreground: 0 0% 5%;   /* #0d0d0d */
+    --secondary: 0 0% 25%;           /* #414141 */
+    --secondary-foreground: 0 0% 95%;
+    
+    --muted: 0 0% 19%;               /* elevated/muted surfaces */
+    --muted-foreground: 0 0% 69%;    /* #afafaf */
+    --accent: 214 72% 72%;           /* blue-ish accent */
+    --accent-foreground: 0 0% 5%;
+    
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    
+    --border: 0 0% 24%;              /* approximates #ffffff26 */
+    --input: 0 0% 24%;
+    --ring: 0 0% 80%;
+    
+    --chart-1: 202 100% 78%;
+    --chart-2: 202 100% 68%;
+    --chart-3: 202 100% 58%;
+    --chart-4: 202 100% 48%;
+    --chart-5: 202 100% 38%;
+    
+    --sidebar-background: 0 0% 9%;   /* #181818 */
+    --sidebar-foreground: 0 0% 95%;
+    --sidebar-primary: 214 72% 72%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 19%;      /* #303030 */
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 0 0% 24%;
+    --sidebar-ring: 0 0% 80%;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --radius: 0.625rem;
+    --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+    --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+    --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+    --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+    --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+    --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+    --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+  }
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+  --color-sidebar: hsl(var(--sidebar-background));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --shadow-2xs: var(--shadow-2xs);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow: var(--shadow);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-2xl: var(--shadow-2xl);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  .inbox-theme {
+    caret-color: var(--accent-orange);
+  }
+
+  .inbox-theme ::selection {
+    background: var(--accent-orange-light);
+    color: inherit;
+  }
+
+  .inbox-sidebar {
+    background: var(--inbox-sidebar-bg);
+    color: var(--inbox-sidebar-fg);
+  }
+
+}
+
+/* Custom Utility Classes for CRM Template */
+@layer components {
+  .brand-surface {
+    @apply bg-brand-dark text-brand-light;
+  }
+  
+  .surface-elevated {
+    @apply bg-surface shadow-lg border border-border;
+  }
+  
+  .input-field {
+    @apply bg-input-background border border-input-border rounded-lg px-4 py-3 text-foreground placeholder:text-muted-foreground focus:border-input-focus focus:ring-2 focus:ring-input-focus/20 focus:outline-none transition-colors;
+  }
+  
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg px-6 py-3 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary/20;
+  }
+  
+  .btn-google {
+    @apply bg-surface border border-border hover:bg-surface-muted text-foreground rounded-lg px-6 py-3 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-border/20 flex items-center justify-center gap-3;
+  }
+}

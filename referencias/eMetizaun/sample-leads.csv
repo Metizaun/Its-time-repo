@@ -1,0 +1,12 @@
+first_name,last_name,email,company,phone,website,title,industry,location,source,status,score,notes
+Emily,Clark,emily.clark@example.com,Acme Corporation,+1-555-4100,https://acme.com,Director IT,Technology,San Francisco,Inbound,Qualified,85,"Requested pricing"
+Michael,Brown,michael.brown@example.com,"Global Solutions, Inc.",+1-555-4200,https://globalsolutions.com,Sales Director,Consulting,New York,Outbound,New,20,"Cold outreach – interested"
+Sara,Lopez,sara.lopez@example.com,DataTech Solutions,+1-555-4300,https://datatech.com,Head of Data,Software,Seattle,Referral,Contacted,60,"Demo scheduled"
+Tom,O'Connor,tom.oconnor@example.com,Construction Pro,+1-555-4400,https://constructionpro.com,Operations Manager,Construction,Denver,Event,New,35,"Met at Expo"
+Yuki,Sato,yuki.sato@example.jp,Healthcare Innovations,+81 3-3333-4444,https://healthinno.com,Product Lead,Healthcare,Tokyo,Inbound,Qualified,78,"Needs security review"
+Ana,Morales,ana.morales@example.com,Retail World,+34 91 222 33 44,https://retailworld.com,E‑commerce Lead,Retail,Madrid,Partner,Contacted,55,"Evaluating features"
+Peter,Nguyen,peter.nguyen@example.com,Finance Plus,+1-555-4500,https://financeplus.com,Analyst,Financial Services,Chicago,Outbound,New,15,"Intro call pending"
+Nora,Schmidt,nora.schmidt@example.de,Marketing Masters,+49 30 123456,https://marketingmasters.com,CMO,Marketing,Berlin,Inbound,Qualified,82,"Wants case studies"
+Ravi,Kumar,ravi.kumar@example.in,Green Energy Co.,+91 22 2345 6789,https://greenenergy.com,Procurement Lead,Energy,Mumbai,Referral,Contacted,50,"RFP expected"
+Hannah,Williams,hannah.williams@example.com,Smith & Partners,+1-555-4600,https://smithpartners.com,Legal Ops Manager,Legal,Boston,Event,New,25,"Budget review Q3"
+

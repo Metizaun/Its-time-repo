@@ -352,6 +352,16 @@ Height: 40px | Padding: 10px 16px | Radius: 12px | Font: 14px SemiBold | Icon ga
 
 ## 5.3 Cards e Containers
 
+### Regra de Sofisticacao para Superficies Operacionais
+
+Em telas densas como Dashboard, Calendar, Pipeline e Admin, a sofisticacao vem de continuidade visual e precisao de acabamento. Use o `src/components/calendar/` como referencia pratica: containers brancos, borda sutil, shadow leve, cantos generosos, headers discretos e estados de hover quase silenciosos.
+
+- Cards representam uma unidade real de informacao, nao uma secao inteira da pagina.
+- Evite cards dentro de cards; use grids, headers e divisores sutis dentro do mesmo container.
+- Se o conteudo e recorrente ou escaneavel, priorize densidade, alinhamento e numeros tabulares.
+- O card nao deve explicar demais. Titulo curto, subtitulo curto, valor claro.
+- Em dashboards, o excesso de copy reduz sofisticacao. A hierarquia deve fazer o trabalho.
+
 ### Card Padrão
 
 ```css

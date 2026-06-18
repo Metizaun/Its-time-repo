@@ -71,9 +71,13 @@ export function groupLeadsByOrigin(leads: Lead[]): OriginData[] {
 }
 
 export interface FunnelStep {
+  id?: string;
   name: string;
   value: number;
-  color?: string;
+  color?: string | null;
+  category?: string | null;
+  position?: number;
+  is_funnel_stage?: boolean;
 }
 
 export function computeFunnelData(leads: Lead[]): FunnelStep[] {
