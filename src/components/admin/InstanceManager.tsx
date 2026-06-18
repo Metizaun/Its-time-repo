@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRight,
   Check,
+  Copy,
   Eraser,
   Link2,
   Loader2,
@@ -131,8 +132,6 @@ export function InstanceManager() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [instanceNameInput, setInstanceNameInput] = useState("");
   const [connectWebhookEnabled, setConnectWebhookEnabled] = useState(false);
-  const [remoteEvolutionUrlInput, setRemoteEvolutionUrlInput] = useState("");
-  const [remoteApiKeyInput, setRemoteApiKeyInput] = useState("");
   const [remoteInstanceNameInput, setRemoteInstanceNameInput] = useState("");
   const [creatingInstance, setCreatingInstance] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
@@ -181,6 +180,14 @@ export function InstanceManager() {
         return <Badge variant="outline">Aguardando</Badge>;
     }
   }, [connectionState]);
+
+  const webhookEndpoint = useMemo(() => {
+    const explicitBase =
+      (import.meta.env.VITE_WEBHOOK_PUBLIC_BASE_URL as string | undefined) ||
+      (import.meta.env.VITE_CRM_BACKEND_URL as string | undefined) ||
+      window.location.origin;
+    return `${explicitBase.replace(/\/$/, "")}/api/webhook/evolution`;
+  }, []);
 
   const deleteLeadCount = instancePendingDelete?.leadCount ?? 0;
   const hasLeadsToResolve = deleteLeadCount > 0;
@@ -390,9 +397,9 @@ export function InstanceManager() {
         accessToken,
         instanceName,
         connectWebhook: connectWebhookEnabled,
-        remoteEvolutionUrl: connectWebhookEnabled ? remoteEvolutionUrlInput : undefined,
-        remoteApiKey: connectWebhookEnabled ? remoteApiKeyInput : undefined,
-        remoteInstanceName: connectWebhookEnabled ? remoteInstanceNameInput : undefined,
+        remoteInstanceName: connectWebhookEnabled
+          ? remoteInstanceNameInput.trim() || instanceName
+          : undefined,
       });
 
       setQrInstanceName(result.instanceName);
@@ -402,7 +409,7 @@ export function InstanceManager() {
       setCurrentSetupStatus(result.setupStatus);
       setConnectionMessage(
         result.connectionMode === "external_webhook"
-          ? "Webhook externo conectado com sucesso."
+          ? result.message ?? "Webhook externo sincronizado. Confirme que a Evolution remota aponta para o endpoint do nosso webhook."
           : result.status === "connected"
             ? "Instancia ja estava conectada."
             : "Configuracao iniciada. Escaneie o QR code para concluir."
@@ -410,7 +417,7 @@ export function InstanceManager() {
 
       toast.success(
         result.connectionMode === "external_webhook"
-          ? "Webhook externo conectado"
+          ? "Webhook externo sincronizado"
           : "Instancia registrada no backend"
       );
       await loadInstances();
@@ -583,8 +590,6 @@ export function InstanceManager() {
     setCreateDialogOpen(false);
     setInstanceNameInput("");
     setConnectWebhookEnabled(false);
-    setRemoteEvolutionUrlInput("");
-    setRemoteApiKeyInput("");
     setRemoteInstanceNameInput("");
     setQrInstanceName(null);
     setQrCodeBase64(null);
@@ -594,6 +599,22 @@ export function InstanceManager() {
     setCurrentSetupStatus(null);
     setRefreshingQr(false);
     setCheckingStatus(false);
+  };
+
+  const handleConnectWebhookToggle = (checked: boolean) => {
+    setConnectWebhookEnabled(checked);
+    if (checked && !remoteInstanceNameInput.trim()) {
+      setRemoteInstanceNameInput(instanceNameInput.trim());
+    }
+  };
+
+  const handleCopyWebhookEndpoint = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookEndpoint);
+      toast.success("Endpoint do webhook copiado");
+    } catch {
+      toast.error("Nao foi possivel copiar o endpoint");
+    }
   };
 
   useEffect(() => {
@@ -1145,15 +1166,15 @@ export function InstanceManager() {
               <div className="rounded-lg border p-4 space-y-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="connect-webhook">Conectar webhook</Label>
+                    <Label htmlFor="connect-webhook">Sincronizar webhook existente</Label>
                     <p className="text-xs text-muted-foreground">
-                      Use uma instancia que ja existe em outra Evolution/VPS.
+                      Use uma instancia que ja esta configurada em outra Evolution/VPS.
                     </p>
                   </div>
                   <Switch
                     id="connect-webhook"
                     checked={connectWebhookEnabled}
-                    onCheckedChange={setConnectWebhookEnabled}
+                    onCheckedChange={handleConnectWebhookToggle}
                     disabled={creatingInstance}
                   />
                 </div>
@@ -1161,37 +1182,34 @@ export function InstanceManager() {
                 {connectWebhookEnabled && (
                   <div className="space-y-3">
                     <div className="space-y-2">
-                      <Label htmlFor="remote-evolution-url">URL da Evolution/VPS</Label>
-                      <Input
-                        id="remote-evolution-url"
-                        placeholder="https://evolution.exemplo.com"
-                        value={remoteEvolutionUrlInput}
-                        onChange={(event) => setRemoteEvolutionUrlInput(event.target.value)}
-                        disabled={creatingInstance}
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="remote-api-key">API key</Label>
-                      <Input
-                        id="remote-api-key"
-                        type="password"
-                        placeholder="apikey da Evolution remota"
-                        value={remoteApiKeyInput}
-                        onChange={(event) => setRemoteApiKeyInput(event.target.value)}
-                        disabled={creatingInstance}
-                      />
+                      <Label>Endpoint do nosso webhook</Label>
+                      <div className="flex gap-2">
+                        <Input value={webhookEndpoint} readOnly className="font-mono text-xs" />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          onClick={handleCopyWebhookEndpoint}
+                          disabled={creatingInstance}
+                          aria-label="Copiar endpoint do webhook"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="space-y-2">
                       <Label htmlFor="remote-instance-name">Nome da instancia externa</Label>
                       <Input
                         id="remote-instance-name"
-                        placeholder="Ex: Cliente01"
+                        placeholder={instanceNameInput.trim() || "Ex: Cliente01"}
                         value={remoteInstanceNameInput}
                         onChange={(event) => setRemoteInstanceNameInput(event.target.value)}
                         disabled={creatingInstance}
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Se ficar vazio, usaremos o mesmo nome da instancia criada aqui.
+                      </p>
                     </div>
                   </div>
                 )}
@@ -1208,9 +1226,9 @@ export function InstanceManager() {
                 {createConnectionMode === "external_webhook" ? (
                   <Alert>
                     <Check className="h-4 w-4" />
-                    <AlertTitle>Webhook conectado</AlertTitle>
+                    <AlertTitle>Webhook sincronizado</AlertTitle>
                     <AlertDescription>
-                      A instancia externa ja foi apontada para o nosso endpoint de webhook. Nao e necessario gerar QR code.
+                      O nome da instancia externa foi vinculado ao CRM. Nao e necessario gerar QR code.
                     </AlertDescription>
                   </Alert>
                 ) : (
@@ -1232,7 +1250,7 @@ export function InstanceManager() {
 
                 <p className="text-xs text-muted-foreground">
                   {createConnectionMode === "external_webhook"
-                    ? "Webhook externo conectado"
+                    ? "Webhook externo sincronizado"
                     : currentSetupStatus ? setupStatusLabel(currentSetupStatus) : "Setup pendente"}
                 </p>
 
@@ -1275,7 +1293,7 @@ export function InstanceManager() {
                 </Button>
                 <Button onClick={handleCreateInstance} disabled={creatingInstance}>
                   {creatingInstance ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  {connectWebhookEnabled ? "Criar e conectar webhook" : "Criar e gerar QR"}
+                  {connectWebhookEnabled ? "Criar e sincronizar webhook" : "Criar e gerar QR"}
                 </Button>
               </>
             )}

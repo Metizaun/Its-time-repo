@@ -1038,35 +1038,6 @@ export class AgentManager {
     return normalized;
   }
 
-  private sanitizeRemoteEvolutionUrl(raw: string) {
-    const normalized = raw.trim();
-    if (!normalized) {
-      throw new HttpError(400, "URL da Evolution remota e obrigatoria");
-    }
-
-    let parsed: URL;
-    try {
-      parsed = new URL(normalized);
-    } catch {
-      throw new HttpError(400, "URL da Evolution remota invalida");
-    }
-
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new HttpError(400, "A URL da Evolution remota deve usar http ou https");
-    }
-
-    return parsed.toString().replace(/\/$/, "");
-  }
-
-  private sanitizeRemoteApiKey(raw: string | null | undefined) {
-    const normalized = (raw ?? "").trim();
-    if (!normalized) {
-      throw new HttpError(400, "API key da Evolution remota e obrigatoria");
-    }
-
-    return normalized;
-  }
-
   private normalizeInstanceConnectionMode(raw: string | null | undefined): InstanceConnectionMode {
     return raw === "external_webhook" ? "external_webhook" : "local";
   }
@@ -1519,6 +1490,41 @@ export class AgentManager {
     }
 
     return (data as InstanceRow | null) ?? null;
+  }
+
+  private async findInstanceByRemoteWebhookName(remoteInstanceName: string) {
+    const { data, error } = await this.serviceClient
+      .from("instance")
+      .select(
+        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error, connection_mode, remote_evolution_url, remote_instance_name, remote_webhook_connected_at"
+      )
+      .eq("remote_instance_name", remoteInstanceName)
+      .eq("connection_mode", "external_webhook")
+      .limit(2);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel consultar a instancia externa", error);
+    }
+
+    const rows = (data ?? []) as InstanceRow[];
+    if (rows.length > 1) {
+      console.warn("[crm-ai] Webhook externo ambiguo para instancia remota:", {
+        remoteInstanceName,
+        matches: rows.map((row) => row.instancia),
+      });
+      return null;
+    }
+
+    return rows[0] ?? null;
+  }
+
+  private async resolveInstanceForEvolutionWebhook(instanceName: string) {
+    const localInstance = await this.findInstanceByName(instanceName);
+    if (localInstance) {
+      return localInstance;
+    }
+
+    return this.findInstanceByRemoteWebhookName(instanceName);
   }
 
   private async ensureInstanceOwnership(acesId: number, instanceName: string, ownerId?: string | null) {
@@ -2084,11 +2090,10 @@ export class AgentManager {
     }
 
     if (connectWebhook) {
-      const remoteEvolutionUrl = this.sanitizeRemoteEvolutionUrl(input.remoteEvolutionUrl ?? "");
-      const remoteApiKey = this.sanitizeRemoteApiKey(input.remoteApiKey);
-      const remoteInstanceName = this.sanitizeInstanceName(input.remoteInstanceName ?? "");
-
-      await this.configureEvolutionWebhook(remoteEvolutionUrl, remoteApiKey, remoteInstanceName);
+      const remoteEvolutionUrl = (input.remoteEvolutionUrl ?? "").trim().replace(/\/$/, "") || null;
+      const remoteInstanceName = this.sanitizeInstanceName(
+        (input.remoteInstanceName ?? "").trim() || instanceName
+      );
 
       if (!existing) {
         const { error: insertError } = await this.serviceClient.from("instance").insert({
@@ -2153,6 +2158,7 @@ export class AgentManager {
         status: "connected" as const,
         setupStatus: "connected" as const,
         connectionMode: "external_webhook" as const,
+        message: "Webhook externo sincronizado. Confirme que a Evolution remota aponta para /api/webhook/evolution.",
         expiresAt: null,
       };
     }
@@ -4435,11 +4441,21 @@ export class AgentManager {
       return { ignored: true, reason: "Mensagem de grupo ignorada" };
     }
 
-    const message = this.parseWebhookPayload(payload);
-    const instance = await this.findInstanceByName(message.instanceName);
+    const parsedMessage = this.parseWebhookPayload(payload);
+    const instance = await this.resolveInstanceForEvolutionWebhook(parsedMessage.instanceName);
     if (!instance) {
       return { ignored: true, reason: "Instancia nao cadastrada no CRM" };
     }
+
+    const message: ParsedWebhookMessage = {
+      ...parsedMessage,
+      instanceName: instance.instancia,
+      raw: {
+        ...parsedMessage.raw,
+        crm_local_instance: instance.instancia,
+        crm_remote_instance: parsedMessage.instanceName,
+      },
+    };
 
     const agent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
     const normalizedContent = await this.normalizeInboundContent(message, agent);

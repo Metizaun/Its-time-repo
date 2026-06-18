@@ -10,6 +10,7 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   userRole: UserRole | null;
+  acesId: number | null;
   profileName: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
@@ -42,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [userRole, setUserRole] = useState<UserRole | null>(null);
+  const [acesId, setAcesId] = useState<number | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const claimsRefreshAttemptRef = useRef<string | null>(null);
@@ -52,6 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfileName(currentSession?.user?.user_metadata?.name ?? null);
 
     const roleFromClaims = parseUserRole(currentSession?.user?.app_metadata?.crm_role);
+    const acesIdFromClaims = parseAcesId(currentSession?.user?.app_metadata?.aces_id);
+    setAcesId(acesIdFromClaims);
+
     if (roleFromClaims) {
       setUserRole(roleFromClaims);
     } else if (!currentSession?.user) {
@@ -65,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (profile) {
         setUserRole(profile.role);
+        setAcesId(profile.aces_id);
         setProfileName(profile.name ?? null);
 
         const appMetadata = currentSession?.user?.app_metadata ?? {};
@@ -90,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       claimsRefreshAttemptRef.current = null;
       setUserRole(null);
+      setAcesId(null);
     } catch (error) {
       console.error("Erro silencioso ao buscar perfil:", error);
     }
@@ -133,6 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         claimsRefreshAttemptRef.current = null;
         setUserRole(null);
+        setAcesId(null);
         setProfileName(null);
       }
     });
@@ -167,6 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setSession(null);
     setUserRole(null);
+    setAcesId(null);
     setProfileName(null);
   };
 
@@ -174,7 +183,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, session, userRole, profileName, loading, signIn, signUp, signOut, isPendingApproval }}
+      value={{ user, session, userRole, acesId, profileName, loading, signIn, signUp, signOut, isPendingApproval }}
     >
       {children}
     </AuthContext.Provider>

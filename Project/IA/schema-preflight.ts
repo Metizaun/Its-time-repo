@@ -389,6 +389,20 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       serviceClient,
+      "instance",
+      ["connection_mode", "remote_instance_name", "remote_webhook_connected_at"],
+      "crm.instance (external webhook mode)",
+      "supabase/migrations/20260618120000_add_external_webhook_instance_mode.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "v_lead_details",
+      ["id", "aces_id"],
+      "crm.v_lead_details.aces_id",
+      "supabase/migrations/20260618205533_fix_dashboard_scope_and_external_webhook_sync.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "ai_agents",
       ["id", "handoff_enabled", "handoff_prompt", "handoff_target_phone"],
       "crm.ai_agents (handoff)",

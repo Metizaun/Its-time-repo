@@ -10,7 +10,6 @@ type CreateInstanceInput = AuthHeadersInput & {
   instanceName: string;
   connectWebhook?: boolean;
   remoteEvolutionUrl?: string;
-  remoteApiKey?: string;
   remoteInstanceName?: string;
 };
 
@@ -102,7 +101,6 @@ export async function createInstanceWithQr({
   instanceName,
   connectWebhook,
   remoteEvolutionUrl,
-  remoteApiKey,
   remoteInstanceName,
 }: CreateInstanceInput) {
   const response = await fetch(`${CRM_BACKEND_URL}/api/instances`, {
@@ -112,7 +110,6 @@ export async function createInstanceWithQr({
       instanceName,
       connectWebhook: connectWebhook ?? false,
       remoteEvolutionUrl: remoteEvolutionUrl ?? null,
-      remoteApiKey: remoteApiKey ?? null,
       remoteInstanceName: remoteInstanceName ?? null,
     }),
   });
@@ -124,6 +121,7 @@ export async function createInstanceWithQr({
     status: AdminInstanceStatus;
     setupStatus: AdminInstanceSetupStatus;
     connectionMode: InstanceConnectionMode;
+    message?: string | null;
     expiresAt: string | null;
   }>(response);
 }

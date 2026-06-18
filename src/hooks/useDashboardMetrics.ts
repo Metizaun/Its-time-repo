@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import type {
   DashboardFilters,
@@ -94,10 +95,12 @@ function normalizeMetrics(value: unknown): DashboardOperationalMetrics {
   };
 }
 
-function buildDashboardQueryKey(filters: DashboardFilters) {
+function buildDashboardQueryKey(filters: DashboardFilters, userId: string | null, acesId: number | null) {
   return [
     "dashboard",
     "operational-metrics",
+    userId,
+    acesId,
     filters.period,
     filters.instance,
     filters.customRange?.from?.toISOString() ?? null,
@@ -125,11 +128,12 @@ async function fetchDashboardMetrics(filters: DashboardFilters) {
 }
 
 export function useDashboardOperationalQuery(filters: DashboardFilters) {
+  const { user, acesId } = useAuth();
+
   return useQuery({
-    queryKey: [...buildDashboardQueryKey(filters), DASHBOARD_RPC_ENABLED],
+    queryKey: [...buildDashboardQueryKey(filters, user?.id ?? null, acesId), DASHBOARD_RPC_ENABLED],
     queryFn: () => fetchDashboardMetrics(filters),
-    enabled: DASHBOARD_RPC_ENABLED,
-    placeholderData: (previous) => previous,
+    enabled: DASHBOARD_RPC_ENABLED && Boolean(user?.id),
     staleTime: 30_000,
   });
 }
