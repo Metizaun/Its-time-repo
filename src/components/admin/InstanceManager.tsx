@@ -37,6 +37,7 @@ import {
   type AdminInstanceSetupStatus,
   type AdminMetaChannelSummary,
   type AdminMetaTemplate,
+  type InstanceConnectionMode,
   type MetaChannelStatus,
 } from "@/services/instanceService";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -68,6 +69,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
@@ -128,11 +130,16 @@ export function InstanceManager() {
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [instanceNameInput, setInstanceNameInput] = useState("");
+  const [connectWebhookEnabled, setConnectWebhookEnabled] = useState(false);
+  const [remoteEvolutionUrlInput, setRemoteEvolutionUrlInput] = useState("");
+  const [remoteApiKeyInput, setRemoteApiKeyInput] = useState("");
+  const [remoteInstanceNameInput, setRemoteInstanceNameInput] = useState("");
   const [creatingInstance, setCreatingInstance] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [qrInstanceName, setQrInstanceName] = useState<string | null>(null);
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
+  const [createConnectionMode, setCreateConnectionMode] = useState<InstanceConnectionMode | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [currentSetupStatus, setCurrentSetupStatus] = useState<AdminInstanceSetupStatus | null>(null);
@@ -382,21 +389,32 @@ export function InstanceManager() {
       const result = await createInstanceWithQr({
         accessToken,
         instanceName,
+        connectWebhook: connectWebhookEnabled,
+        remoteEvolutionUrl: connectWebhookEnabled ? remoteEvolutionUrlInput : undefined,
+        remoteApiKey: connectWebhookEnabled ? remoteApiKeyInput : undefined,
+        remoteInstanceName: connectWebhookEnabled ? remoteInstanceNameInput : undefined,
       });
 
       setQrInstanceName(result.instanceName);
       setQrCodeBase64(result.qrCodeBase64);
+      setCreateConnectionMode(result.connectionMode);
       setConnectionState(result.status === "connected" ? "connected" : "disconnected");
       setCurrentSetupStatus(result.setupStatus);
       setConnectionMessage(
-        result.status === "connected"
-          ? "Instancia ja estava conectada."
-          : "Configuracao iniciada. Escaneie o QR code para concluir."
+        result.connectionMode === "external_webhook"
+          ? "Webhook externo conectado com sucesso."
+          : result.status === "connected"
+            ? "Instancia ja estava conectada."
+            : "Configuracao iniciada. Escaneie o QR code para concluir."
       );
 
-      toast.success("Instancia registrada no backend");
+      toast.success(
+        result.connectionMode === "external_webhook"
+          ? "Webhook externo conectado"
+          : "Instancia registrada no backend"
+      );
       await loadInstances();
-      if (result.status !== "connected") {
+      if (result.connectionMode === "local" && result.status !== "connected") {
         await checkCurrentInstanceStatus(result.instanceName);
       }
     } catch (err: any) {
@@ -414,6 +432,7 @@ export function InstanceManager() {
       setCreateDialogOpen(true);
       setQrInstanceName(instanceName);
       setQrCodeBase64(null);
+      setCreateConnectionMode("local");
       setConnectionState("checking");
       setConnectionMessage("Gerando novo QR code...");
 
@@ -557,14 +576,19 @@ export function InstanceManager() {
   };
 
   const resetCreateDialog = () => {
-    if (qrInstanceName && connectionState !== "connected") {
+    if (qrInstanceName && connectionState !== "connected" && createConnectionMode !== "external_webhook") {
       toast.warning("Configuracao incompleta; voce pode continuar depois em Gerenciar Instancias.");
     }
 
     setCreateDialogOpen(false);
     setInstanceNameInput("");
+    setConnectWebhookEnabled(false);
+    setRemoteEvolutionUrlInput("");
+    setRemoteApiKeyInput("");
+    setRemoteInstanceNameInput("");
     setQrInstanceName(null);
     setQrCodeBase64(null);
+    setCreateConnectionMode(null);
     setConnectionState("idle");
     setConnectionMessage(null);
     setCurrentSetupStatus(null);
@@ -659,6 +683,9 @@ export function InstanceManager() {
                       <div className="flex flex-wrap items-center gap-2">
                         {statusBadge(instance.status)}
                         {setupStatusBadge(instance.setupStatus)}
+                        {instance.connectionMode === "external_webhook" && (
+                          <Badge variant="secondary">Webhook externo</Badge>
+                        )}
                         {metaChannel ? (
                           <Badge variant={metaChannel.status === "active" ? "secondary" : "outline"}>
                             Meta {metaChannel.status}
@@ -757,19 +784,21 @@ export function InstanceManager() {
                       </Button>
                     )}
 
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={isBusy}
-                      onClick={() => handleSyncStatus(instance.instanceName)}
-                    >
-                      {busyAction === `sync:${instance.instanceName}` ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                      )}
-                      Atualizar status
-                    </Button>
+                    {actions.has("sync_status") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => handleSyncStatus(instance.instanceName)}
+                      >
+                        {busyAction === `sync:${instance.instanceName}` ? (
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                        )}
+                        Atualizar status
+                      </Button>
+                    )}
 
                     <Button
                       size="sm"
@@ -1112,6 +1141,63 @@ export function InstanceManager() {
               />
             </div>
 
+            {!qrInstanceName && (
+              <div className="rounded-lg border p-4 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="connect-webhook">Conectar webhook</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Use uma instancia que ja existe em outra Evolution/VPS.
+                    </p>
+                  </div>
+                  <Switch
+                    id="connect-webhook"
+                    checked={connectWebhookEnabled}
+                    onCheckedChange={setConnectWebhookEnabled}
+                    disabled={creatingInstance}
+                  />
+                </div>
+
+                {connectWebhookEnabled && (
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-evolution-url">URL da Evolution/VPS</Label>
+                      <Input
+                        id="remote-evolution-url"
+                        placeholder="https://evolution.exemplo.com"
+                        value={remoteEvolutionUrlInput}
+                        onChange={(event) => setRemoteEvolutionUrlInput(event.target.value)}
+                        disabled={creatingInstance}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-api-key">API key</Label>
+                      <Input
+                        id="remote-api-key"
+                        type="password"
+                        placeholder="apikey da Evolution remota"
+                        value={remoteApiKeyInput}
+                        onChange={(event) => setRemoteApiKeyInput(event.target.value)}
+                        disabled={creatingInstance}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-instance-name">Nome da instancia externa</Label>
+                      <Input
+                        id="remote-instance-name"
+                        placeholder="Ex: Cliente01"
+                        value={remoteInstanceNameInput}
+                        onChange={(event) => setRemoteInstanceNameInput(event.target.value)}
+                        disabled={creatingInstance}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {qrInstanceName && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -1119,23 +1205,35 @@ export function InstanceManager() {
                   {stateBadge}
                 </div>
 
-                <div className="border rounded-md p-3 flex items-center justify-center bg-muted/20 min-h-[220px]">
-                  {qrCodeBase64 ? (
-                    <img
-                      src={qrCodeBase64}
-                      alt="QR code para conectar instancia"
-                      className="h-52 w-52 object-contain"
-                    />
-                  ) : (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Carregando QR code...
-                    </div>
-                  )}
-                </div>
+                {createConnectionMode === "external_webhook" ? (
+                  <Alert>
+                    <Check className="h-4 w-4" />
+                    <AlertTitle>Webhook conectado</AlertTitle>
+                    <AlertDescription>
+                      A instancia externa ja foi apontada para o nosso endpoint de webhook. Nao e necessario gerar QR code.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <div className="border rounded-md p-3 flex items-center justify-center bg-muted/20 min-h-[220px]">
+                    {qrCodeBase64 ? (
+                      <img
+                        src={qrCodeBase64}
+                        alt="QR code para conectar instancia"
+                        className="h-52 w-52 object-contain"
+                      />
+                    ) : (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Carregando QR code...
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <p className="text-xs text-muted-foreground">
-                  {currentSetupStatus ? setupStatusLabel(currentSetupStatus) : "Setup pendente"}
+                  {createConnectionMode === "external_webhook"
+                    ? "Webhook externo conectado"
+                    : currentSetupStatus ? setupStatusLabel(currentSetupStatus) : "Setup pendente"}
                 </p>
 
                 {connectionMessage && (
@@ -1148,22 +1246,26 @@ export function InstanceManager() {
           <DialogFooter className="gap-2 sm:gap-0">
             {qrInstanceName ? (
               <>
-                <Button
-                  variant="outline"
-                  onClick={handleRefreshQr}
-                  disabled={refreshingQr || creatingInstance}
-                >
-                  {refreshingQr ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  Atualizar QR
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => checkCurrentInstanceStatus()}
-                  disabled={checkingStatus || creatingInstance}
-                >
-                  {checkingStatus ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  Verificar status
-                </Button>
+                {createConnectionMode !== "external_webhook" && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={handleRefreshQr}
+                      disabled={refreshingQr || creatingInstance}
+                    >
+                      {refreshingQr ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                      Atualizar QR
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => checkCurrentInstanceStatus()}
+                      disabled={checkingStatus || creatingInstance}
+                    >
+                      {checkingStatus ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                      Verificar status
+                    </Button>
+                  </>
+                )}
                 <Button onClick={resetCreateDialog}>Fechar</Button>
               </>
             ) : (
@@ -1173,7 +1275,7 @@ export function InstanceManager() {
                 </Button>
                 <Button onClick={handleCreateInstance} disabled={creatingInstance}>
                   {creatingInstance ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  Criar e gerar QR
+                  {connectWebhookEnabled ? "Criar e conectar webhook" : "Criar e gerar QR"}
                 </Button>
               </>
             )}

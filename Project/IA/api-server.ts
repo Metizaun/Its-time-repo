@@ -705,6 +705,12 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const result = await manager.createInstanceWithQr(req.authContext!, {
       instanceName: String(req.body.instanceName ?? ""),
+      connectWebhook: req.body.connectWebhook === true,
+      remoteEvolutionUrl:
+        typeof req.body.remoteEvolutionUrl === "string" ? req.body.remoteEvolutionUrl : null,
+      remoteApiKey: typeof req.body.remoteApiKey === "string" ? req.body.remoteApiKey : null,
+      remoteInstanceName:
+        typeof req.body.remoteInstanceName === "string" ? req.body.remoteInstanceName : null,
     });
 
     res.status(201).json(result);

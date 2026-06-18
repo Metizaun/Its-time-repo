@@ -130,6 +130,7 @@ type TagRow = {
 };
 
 type InstanceSetupStatus = "pending_qr" | "connected" | "expired" | "cancelled";
+type InstanceConnectionMode = "local" | "external_webhook";
 type InstanceAction = "continue_setup" | "reconnect" | "sync_status" | "disconnect" | "delete";
 
 type InstanceRow = {
@@ -146,12 +147,17 @@ type InstanceRow = {
   setup_expires_at?: string | null;
   operation_lock_until?: string | null;
   last_error?: string | null;
+  connection_mode?: InstanceConnectionMode | null;
+  remote_evolution_url?: string | null;
+  remote_instance_name?: string | null;
+  remote_webhook_connected_at?: string | null;
 };
 
 type InstanceListItem = {
   instanceName: string;
   status: "connected" | "disconnected" | "connecting" | "error";
   setupStatus: InstanceSetupStatus;
+  connectionMode: InstanceConnectionMode;
   createdAt: string | null;
   expiresAt: string | null;
   lastError: string | null;
@@ -376,6 +382,10 @@ type TestHandoffInput = {
 
 type CreateInstanceInput = {
   instanceName: string;
+  connectWebhook?: boolean;
+  remoteEvolutionUrl?: string | null;
+  remoteApiKey?: string | null;
+  remoteInstanceName?: string | null;
 };
 
 type DeleteInstanceLeadAction = "none" | "transfer" | "delete";
@@ -1028,8 +1038,45 @@ export class AgentManager {
     return normalized;
   }
 
-  private evolutionHeaders() {
-    return { apikey: this.config.evolutionApiKey };
+  private sanitizeRemoteEvolutionUrl(raw: string) {
+    const normalized = raw.trim();
+    if (!normalized) {
+      throw new HttpError(400, "URL da Evolution remota e obrigatoria");
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(normalized);
+    } catch {
+      throw new HttpError(400, "URL da Evolution remota invalida");
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new HttpError(400, "A URL da Evolution remota deve usar http ou https");
+    }
+
+    return parsed.toString().replace(/\/$/, "");
+  }
+
+  private sanitizeRemoteApiKey(raw: string | null | undefined) {
+    const normalized = (raw ?? "").trim();
+    if (!normalized) {
+      throw new HttpError(400, "API key da Evolution remota e obrigatoria");
+    }
+
+    return normalized;
+  }
+
+  private normalizeInstanceConnectionMode(raw: string | null | undefined): InstanceConnectionMode {
+    return raw === "external_webhook" ? "external_webhook" : "local";
+  }
+
+  private isExternalWebhookInstance(instance: Pick<InstanceRow, "connection_mode">) {
+    return this.normalizeInstanceConnectionMode(instance.connection_mode) === "external_webhook";
+  }
+
+  private evolutionHeaders(apiKey = this.config.evolutionApiKey) {
+    return { apikey: apiKey };
   }
 
   private resolveInstanceWebhookUrl() {
@@ -1041,7 +1088,11 @@ export class AgentManager {
     return `${base}/api/webhook/evolution`;
   }
 
-  private async ensureEvolutionWebhook(instanceName: string) {
+  private async configureEvolutionWebhook(
+    evolutionApiUrl: string,
+    apiKey: string,
+    instanceName: string
+  ) {
     const webhookUrl = this.resolveInstanceWebhookUrl();
     if (!webhookUrl) {
       return { configured: false, reason: "WEBHOOK_PUBLIC_BASE_URL nao configurada" as const };
@@ -1049,7 +1100,7 @@ export class AgentManager {
 
     try {
       await axios.post(
-        `${this.config.evolutionApiUrl}/webhook/set/${encodeURIComponent(instanceName)}`,
+        `${evolutionApiUrl}/webhook/set/${encodeURIComponent(instanceName)}`,
         {
           webhook: {
             enabled: true,
@@ -1059,7 +1110,7 @@ export class AgentManager {
             events: ["MESSAGES_UPSERT"],
           },
         },
-        { headers: this.evolutionHeaders() }
+        { headers: this.evolutionHeaders(apiKey) }
       );
 
       return { configured: true as const };
@@ -1072,6 +1123,14 @@ export class AgentManager {
     }
   }
 
+  private async ensureEvolutionWebhook(instanceName: string) {
+    return this.configureEvolutionWebhook(
+      this.config.evolutionApiUrl,
+      this.config.evolutionApiKey,
+      instanceName
+    );
+  }
+
   private normalizeInstanceStatus(raw: string | null | undefined): "connected" | "disconnected" | "connecting" | "error" {
     const value = (raw ?? "").toLowerCase();
     if (value === "connected") return "connected";
@@ -1081,6 +1140,10 @@ export class AgentManager {
   }
 
   private deriveSetupStatus(instance: InstanceRow): InstanceSetupStatus {
+    if (this.isExternalWebhookInstance(instance)) {
+      return "connected";
+    }
+
     const normalizedStatus = this.normalizeInstanceStatus(instance.status);
     if (normalizedStatus === "connected") {
       return "connected";
@@ -1101,6 +1164,10 @@ export class AgentManager {
   }
 
   private buildInstanceActions(instance: InstanceRow, setupStatus: InstanceSetupStatus): InstanceAction[] {
+    if (this.isExternalWebhookInstance(instance)) {
+      return ["delete"];
+    }
+
     const status = this.normalizeInstanceStatus(instance.status);
     const actions: InstanceAction[] = ["sync_status", "delete"];
 
@@ -1442,7 +1509,7 @@ export class AgentManager {
     const { data, error } = await this.serviceClient
       .from("instance")
       .select(
-        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error"
+        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error, connection_mode, remote_evolution_url, remote_instance_name, remote_webhook_connected_at"
       )
       .eq("instancia", instanceName)
       .maybeSingle();
@@ -1961,7 +2028,7 @@ export class AgentManager {
     const { data, error } = await this.serviceClient
       .from("instance")
       .select(
-        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error"
+        "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error, connection_mode, remote_evolution_url, remote_instance_name, remote_webhook_connected_at"
       )
       .eq("aces_id", context.acesId)
       .eq("created_by", context.crmUserId)
@@ -1981,6 +2048,7 @@ export class AgentManager {
         instanceName: instance.instancia,
         status: this.normalizeInstanceStatus(instance.status),
         setupStatus,
+        connectionMode: this.normalizeInstanceConnectionMode(instance.connection_mode),
         createdAt: instance.created_at ?? null,
         expiresAt: instance.setup_expires_at ?? null,
         lastError: instance.last_error ?? null,
@@ -1994,9 +2062,11 @@ export class AgentManager {
   async createInstanceWithQr(context: AuthContext, input: CreateInstanceInput) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(input.instanceName);
+    const connectWebhook = input.connectWebhook === true;
 
     await this.markExpiredPendingInstances(context.acesId);
     const now = new Date();
+    const nowIso = now.toISOString();
     const setupExpiresAt = this.computeSetupExpirationIso(now);
     const existingRow = await this.findInstanceByName(instanceName);
     if (existingRow && existingRow.aces_id !== context.acesId) {
@@ -2011,6 +2081,80 @@ export class AgentManager {
     if (existing && !existing.created_by) {
       await this.assignInstanceOwner(context.acesId, instanceName, context.crmUserId);
       existing = { ...existing, created_by: context.crmUserId };
+    }
+
+    if (connectWebhook) {
+      const remoteEvolutionUrl = this.sanitizeRemoteEvolutionUrl(input.remoteEvolutionUrl ?? "");
+      const remoteApiKey = this.sanitizeRemoteApiKey(input.remoteApiKey);
+      const remoteInstanceName = this.sanitizeInstanceName(input.remoteInstanceName ?? "");
+
+      await this.configureEvolutionWebhook(remoteEvolutionUrl, remoteApiKey, remoteInstanceName);
+
+      if (!existing) {
+        const { error: insertError } = await this.serviceClient.from("instance").insert({
+          instancia: instanceName,
+          aces_id: context.acesId,
+          created_by: context.crmUserId,
+          token: null,
+          status: "connected",
+          setup_status: "connected",
+          setup_started_at: nowIso,
+          setup_expires_at: null,
+          last_error: null,
+          connection_mode: "external_webhook",
+          remote_evolution_url: remoteEvolutionUrl,
+          remote_instance_name: remoteInstanceName,
+          remote_webhook_connected_at: nowIso,
+        });
+
+        if (insertError) {
+          throw new HttpError(500, "Nao foi possivel registrar a instancia no CRM", insertError);
+        }
+
+        await this.logInstanceEvent(context.acesId, instanceName, "created", {
+          connection_mode: "external_webhook",
+          remote_instance_name: remoteInstanceName,
+          remote_evolution_url: remoteEvolutionUrl,
+        });
+      } else {
+        const { error: updateError } = await this.serviceClient
+          .from("instance")
+          .update({
+            created_by: context.crmUserId,
+            token: null,
+            status: "connected",
+            setup_status: "connected",
+            setup_started_at: nowIso,
+            setup_expires_at: null,
+            last_error: null,
+            connection_mode: "external_webhook",
+            remote_evolution_url: remoteEvolutionUrl,
+            remote_instance_name: remoteInstanceName,
+            remote_webhook_connected_at: nowIso,
+          })
+          .eq("instancia", instanceName)
+          .eq("aces_id", context.acesId);
+
+        if (updateError) {
+          throw new HttpError(500, "Nao foi possivel atualizar a instancia com webhook externo", updateError);
+        }
+
+        await this.logInstanceEvent(context.acesId, instanceName, "connected", {
+          connection_mode: "external_webhook",
+          remote_instance_name: remoteInstanceName,
+          remote_evolution_url: remoteEvolutionUrl,
+        });
+      }
+
+      return {
+        success: true,
+        instanceName,
+        qrCodeBase64: null,
+        status: "connected" as const,
+        setupStatus: "connected" as const,
+        connectionMode: "external_webhook" as const,
+        expiresAt: null,
+      };
     }
 
     let token = existing?.token ?? null;
@@ -2051,9 +2195,13 @@ export class AgentManager {
         token,
         status: "disconnected",
         setup_status: "pending_qr",
-        setup_started_at: now.toISOString(),
+        setup_started_at: nowIso,
         setup_expires_at: setupExpiresAt,
         last_error: null,
+        connection_mode: "local",
+        remote_evolution_url: null,
+        remote_instance_name: null,
+        remote_webhook_connected_at: null,
       });
 
       if (insertError) {
@@ -2069,11 +2217,26 @@ export class AgentManager {
         await this.updateInstanceLifecycle(context.acesId, instanceName, {
           status: this.normalizeInstanceStatus(existing!.status),
           setup_status: existing?.status === "connected" ? "connected" : "pending_qr",
-          setup_started_at: now.toISOString(),
+          setup_started_at: nowIso,
           setup_expires_at: existing?.status === "connected" ? null : setupExpiresAt,
           last_error: null,
           token: token ?? null,
         });
+
+        const { error: connectionUpdateError } = await this.serviceClient
+          .from("instance")
+          .update({
+            connection_mode: "local",
+            remote_evolution_url: null,
+            remote_instance_name: null,
+            remote_webhook_connected_at: null,
+          })
+          .eq("instancia", instanceName)
+          .eq("aces_id", context.acesId);
+
+        if (connectionUpdateError) {
+          throw new HttpError(500, "Nao foi possivel normalizar a origem da instancia", connectionUpdateError);
+        }
       });
     }
 
@@ -2098,7 +2261,7 @@ export class AgentManager {
       await this.updateInstanceLifecycle(context.acesId, instanceName, {
         status: "disconnected",
         setup_status: "pending_qr",
-        setup_started_at: now.toISOString(),
+        setup_started_at: nowIso,
         setup_expires_at: setupExpiresAt,
         last_error: null,
         token: token ?? null,
@@ -2116,6 +2279,7 @@ export class AgentManager {
       qrCodeBase64,
       status: currentStatus === "connected" ? "connected" : "disconnected",
       setupStatus: currentStatus === "connected" ? "connected" : "pending_qr",
+      connectionMode: "local" as const,
       expiresAt: currentStatus === "connected" ? null : setupExpiresAt,
     };
   }
@@ -2124,7 +2288,10 @@ export class AgentManager {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
     await this.markExpiredPendingInstances(context.acesId);
-    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    const instance = await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    if (this.isExternalWebhookInstance(instance)) {
+      throw new HttpError(400, "Instancias conectadas por webhook externo nao usam QR code ou reconexao local");
+    }
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
       const now = new Date();
@@ -2187,7 +2354,10 @@ export class AgentManager {
   async getInstanceQrCode(context: AuthContext, instanceNameRaw: string) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    const instance = await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    if (this.isExternalWebhookInstance(instance)) {
+      throw new HttpError(400, "Instancias conectadas por webhook externo nao possuem QR code local");
+    }
 
     try {
       const qrCodeBase64 = await this.fetchQrCodeFromEvolution(instanceName);
@@ -2221,6 +2391,17 @@ export class AgentManager {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
     const instance = await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    if (this.isExternalWebhookInstance(instance)) {
+      const status = this.normalizeInstanceStatus(instance.status);
+      const setupStatus = this.deriveSetupStatus(instance);
+      return {
+        success: true,
+        instanceName,
+        state: status,
+        status,
+        setupStatus,
+      };
+    }
 
     try {
       const { state, status } = await this.fetchEvolutionConnectionState(instanceName);
@@ -2301,7 +2482,10 @@ export class AgentManager {
   async disconnectInstance(context: AuthContext, instanceNameRaw: string) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    const instance = await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    if (this.isExternalWebhookInstance(instance)) {
+      throw new HttpError(400, "Instancias conectadas por webhook externo nao podem ser desconectadas por este fluxo");
+    }
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
       const evolutionResult = await this.disconnectOnEvolution(instanceName);
@@ -2327,7 +2511,7 @@ export class AgentManager {
   async deleteInstance(context: AuthContext, instanceNameRaw: string, options?: DeleteInstanceOptions) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(instanceNameRaw);
-    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
+    const instance = await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
     const hardDelete = options?.hardDelete ?? false;
 
     return this.withInstanceLock(context.acesId, instanceName, async () => {
@@ -2368,7 +2552,9 @@ export class AgentManager {
 
       await this.deactivateAutomationFunnelsForInstance(context, instanceName);
 
-      const evolutionResult = await this.deleteOnEvolution(instanceName);
+      const evolutionResult = this.isExternalWebhookInstance(instance)
+        ? { ok: true as const, data: null }
+        : await this.deleteOnEvolution(instanceName);
       const remoteError = evolutionResult.ok ? null : JSON.stringify(evolutionResult.data ?? {});
 
       if (hardDelete) {

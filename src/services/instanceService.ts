@@ -4,8 +4,14 @@ type AuthHeadersInput = {
   accessToken: string;
 };
 
+export type InstanceConnectionMode = "local" | "external_webhook";
+
 type CreateInstanceInput = AuthHeadersInput & {
   instanceName: string;
+  connectWebhook?: boolean;
+  remoteEvolutionUrl?: string;
+  remoteApiKey?: string;
+  remoteInstanceName?: string;
 };
 
 export type AdminInstanceAction = "continue_setup" | "reconnect" | "sync_status" | "disconnect" | "delete";
@@ -16,6 +22,7 @@ export type AdminInstance = {
   instanceName: string;
   status: AdminInstanceStatus;
   setupStatus: AdminInstanceSetupStatus;
+  connectionMode: InstanceConnectionMode;
   createdAt: string | null;
   expiresAt: string | null;
   lastError: string | null;
@@ -93,11 +100,21 @@ async function parseResponse<T>(response: Response): Promise<BackendResponse<T>>
 export async function createInstanceWithQr({
   accessToken,
   instanceName,
+  connectWebhook,
+  remoteEvolutionUrl,
+  remoteApiKey,
+  remoteInstanceName,
 }: CreateInstanceInput) {
   const response = await fetch(`${CRM_BACKEND_URL}/api/instances`, {
     method: "POST",
     headers: buildHeaders(accessToken),
-    body: JSON.stringify({ instanceName }),
+    body: JSON.stringify({
+      instanceName,
+      connectWebhook: connectWebhook ?? false,
+      remoteEvolutionUrl: remoteEvolutionUrl ?? null,
+      remoteApiKey: remoteApiKey ?? null,
+      remoteInstanceName: remoteInstanceName ?? null,
+    }),
   });
 
   return parseResponse<{
@@ -106,6 +123,7 @@ export async function createInstanceWithQr({
     qrCodeBase64: string | null;
     status: AdminInstanceStatus;
     setupStatus: AdminInstanceSetupStatus;
+    connectionMode: InstanceConnectionMode;
     expiresAt: string | null;
   }>(response);
 }
