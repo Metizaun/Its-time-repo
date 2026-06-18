@@ -40,8 +40,10 @@ const EMPTY_DASHBOARD_METRICS: DashboardOperationalMetrics = {
 };
 
 const DASHBOARD_RPC_SAFE_MODE = import.meta.env.DEV || import.meta.env.MODE === "test";
+const DASHBOARD_RPC_FLAG = import.meta.env.VITE_ENABLE_DASHBOARD_RPC;
+
 export const DASHBOARD_RPC_ENABLED =
-  DASHBOARD_RPC_SAFE_MODE && import.meta.env.VITE_ENABLE_DASHBOARD_RPC === "true";
+  DASHBOARD_RPC_FLAG === "true" || (!DASHBOARD_RPC_SAFE_MODE && DASHBOARD_RPC_FLAG !== "false");
 
 function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;

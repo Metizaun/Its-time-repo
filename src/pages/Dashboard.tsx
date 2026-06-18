@@ -187,8 +187,9 @@ export default function Dashboard() {
 
       {!dashboardMetrics.rpcEnabled ? (
         <div className="dashboard-data-note">
-          Metricas agregadas desativadas neste ambiente. Ative VITE_ENABLE_DASHBOARD_RPC=true no
-          ambiente local de desenvolvimento ou teste para validar dados reais.
+          Metricas agregadas desativadas pela configuracao deste ambiente. Em desenvolvimento ou
+          teste, ative VITE_ENABLE_DASHBOARD_RPC=true. Em producao, remova
+          VITE_ENABLE_DASHBOARD_RPC=false caso essa flag esteja definida.
         </div>
       ) : dashboardMetrics.error ? (
         <div className="dashboard-data-note">
