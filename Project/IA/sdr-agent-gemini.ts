@@ -922,6 +922,7 @@ export class AgentManager {
   private static readonly DEFAULT_CHAT_CACHE_TTL_SECONDS = 60;
   private static readonly DEFAULT_CHAT_SIGNED_DOWNLOAD_TTL_SECONDS = 900;
   private static readonly DEFAULT_CHAT_UPLOAD_INTENT_TTL_MINUTES = 120;
+  private static readonly CHAT_RECENT_MESSAGE_CACHE_BYPASS_MS = 10_000;
 
   private readonly authClient: SupabaseClient<any, any, any>;
   private readonly serviceClient: SupabaseClient<any, any, any>;
@@ -2779,7 +2780,7 @@ export class AgentManager {
     origin: OutboundEchoOrigin;
   }) {
     if (!params.leadId) {
-      return;
+      return null;
     }
 
     const sourceType = this.outboundSourceTypeFromEcho(params.origin);
@@ -2806,10 +2807,10 @@ export class AgentManager {
 
     if (data) {
       await this.invalidateChatMessagesCache(params.acesId, params.leadId);
-      return;
+      return String(data.id);
     }
 
-    await this.saveMessage({
+    const message = await this.saveMessage({
       leadId: params.leadId,
       acesId: params.acesId,
       content: params.content,
@@ -2819,6 +2820,8 @@ export class AgentManager {
       conversationId: params.conversationId,
       sentAt: params.sentAt,
     });
+
+    return message.id;
   }
 
   private async repairAutomationFreezeForLead(leadId: string | null, reference: string) {
@@ -2944,6 +2947,8 @@ export class AgentManager {
       payload.provider_error_message = params.providerErrorMessage ?? null;
       payload.provider_payload_summary = params.providerPayloadSummary ?? null;
     }
+
+    await this.invalidateChatMessagesCache(params.acesId, params.leadId);
 
     const { data, error } = await this.serviceClient
       .from("message_history")
@@ -4471,7 +4476,7 @@ export class AgentManager {
         normalizedContent,
       );
       if (matchedOutbound) {
-        await this.ensureOutboundEchoVisible({
+        const echoMessageId = await this.ensureOutboundEchoVisible({
           acesId: instance.aces_id,
           leadId: matchedOutbound.leadId,
           instanceName: message.instanceName,
@@ -4479,6 +4484,12 @@ export class AgentManager {
           sentAt: message.sentAt,
           conversationId: matchedOutbound.conversationId ?? message.conversationId,
           origin: matchedOutbound.origin,
+        });
+        await this.tryPersistWebhookMediaAttachment({
+          acesId: instance.aces_id,
+          leadId: matchedOutbound.leadId,
+          messageId: echoMessageId,
+          message,
         });
 
         if (matchedOutbound.origin !== "manual") {
@@ -4516,6 +4527,12 @@ export class AgentManager {
       );
       if (fallbackMatch) {
         await this.invalidateChatMessagesCache(instance.aces_id, lead.id);
+        await this.tryPersistWebhookMediaAttachment({
+          acesId: instance.aces_id,
+          leadId: lead.id,
+          messageId: fallbackMatch.messageId,
+          message,
+        });
 
         if (fallbackMatch.sourceType !== "manual") {
           await this.repairAutomationFreezeForLead(
@@ -4543,7 +4560,7 @@ export class AgentManager {
         };
       }
 
-      await this.saveMessage({
+      const savedMessage = await this.saveMessage({
         leadId: lead.id,
         acesId: instance.aces_id,
         content: normalizedContent,
@@ -4552,6 +4569,12 @@ export class AgentManager {
         instanceName: message.instanceName,
         conversationId: message.conversationId,
         sentAt: message.sentAt,
+      });
+      await this.tryPersistWebhookMediaAttachment({
+        acesId: instance.aces_id,
+        leadId: lead.id,
+        messageId: savedMessage.id,
+        message,
       });
 
       const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
@@ -4612,6 +4635,12 @@ export class AgentManager {
       instanceName: message.instanceName,
       conversationId: message.conversationId,
       sentAt: message.sentAt,
+    });
+    await this.tryPersistWebhookMediaAttachment({
+      acesId: instance.aces_id,
+      leadId: lead.id,
+      messageId: savedMessage.id,
+      message,
     });
 
     const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
@@ -4870,7 +4899,15 @@ export class AgentManager {
       attachments: attachmentsByMessageId.get(message.id) ?? [],
     }));
 
-    if (this.redis) {
+    const latestMessageSentAtMs = messages.reduce((latest, message) => {
+      const sentAtMs = Date.parse(message.sent_at);
+      return Number.isFinite(sentAtMs) ? Math.max(latest, sentAtMs) : latest;
+    }, 0);
+    const shouldSkipCache =
+      latestMessageSentAtMs > 0 &&
+      Math.abs(Date.now() - latestMessageSentAtMs) < AgentManager.CHAT_RECENT_MESSAGE_CACHE_BYPASS_MS;
+
+    if (this.redis && !shouldSkipCache) {
       try {
         await this.redis.set(cacheKey, JSON.stringify(responseMessages), "EX", this.chatCacheTtlSeconds);
       } catch (error) {
@@ -4936,6 +4973,193 @@ export class AgentManager {
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel atualizar a intencao de upload", error);
+    }
+  }
+
+  private async messageHasAttachment(messageId: string) {
+    const { data, error } = await this.serviceClient
+      .from("message_attachments")
+      .select("id")
+      .eq("message_id", messageId)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel verificar anexos existentes da mensagem", error);
+    }
+
+    return Boolean(data);
+  }
+
+  private getDefaultWebhookMediaMimeType(kind: "audio" | "image") {
+    return kind === "audio" ? "audio/ogg" : "image/jpeg";
+  }
+
+  private getWebhookMediaFileName(message: ParsedWebhookMessage, mimeType: string) {
+    const data = asRecord(message.raw.data);
+    const payloadMessage = asRecord(data.message);
+    const mediaPayload =
+      message.mediaKind === "audio"
+        ? asRecord(payloadMessage.audioMessage)
+        : asRecord(payloadMessage.imageMessage);
+    const documentPayload = asRecord(payloadMessage.documentMessage);
+    const providedFileName =
+      asString(mediaPayload.fileName) ??
+      asString(mediaPayload.file_name) ??
+      asString(documentPayload.fileName) ??
+      asString(documentPayload.file_name);
+
+    if (providedFileName) {
+      return providedFileName;
+    }
+
+    const extension = this.getFileExtensionFromMimeType(
+      mimeType,
+      message.mediaKind === "audio" ? "ogg" : "jpg"
+    );
+    const messageSuffix = message.messageId ? sanitizeStorageFileName(message.messageId) : String(Date.now());
+    return `whatsapp-${message.mediaKind}-${messageSuffix}.${extension}`;
+  }
+
+  private async insertStoredMessageAttachment(params: {
+    attachmentId: string;
+    messageId: string;
+    acesId: number;
+    leadId: string;
+    kind: ChatAttachmentKind;
+    mimeType: string;
+    storagePath: string;
+    fileName: string;
+    fileSize: number;
+  }) {
+    const { error } = await this.serviceClient
+      .from("message_attachments")
+      .insert({
+        id: params.attachmentId,
+        message_id: params.messageId,
+        aces_id: params.acesId,
+        lead_id: params.leadId,
+        kind: params.kind,
+        mime_type: params.mimeType,
+        storage_bucket: CHAT_ATTACHMENTS_BUCKET,
+        storage_path: params.storagePath,
+        file_name: params.fileName,
+        file_size: params.fileSize,
+        expires_at:
+          params.kind === "image"
+            ? addDays(new Date(), CHAT_IMAGE_RETENTION_DAYS).toISOString()
+            : null,
+      });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel registrar o anexo da mensagem", error);
+    }
+  }
+
+  private async persistWebhookMediaAttachment(params: {
+    acesId: number;
+    leadId: string;
+    messageId: string;
+    message: ParsedWebhookMessage;
+  }) {
+    const mediaKind = params.message.mediaKind;
+    if (!mediaKind) {
+      return null;
+    }
+
+    const alreadyHasAttachment = await this.messageHasAttachment(params.messageId);
+    if (alreadyHasAttachment) {
+      return null;
+    }
+
+    const media = await this.resolveMediaBytes(params.message);
+    if (!media) {
+      return null;
+    }
+
+    const normalizedMediaMimeType = normalizeMimeType(media.mimeType);
+    const normalizedPayloadMimeType = normalizeMimeType(params.message.mediaMimeType ?? "");
+    const resolvedMediaKind = resolveAttachmentKind(normalizedMediaMimeType);
+    const resolvedPayloadKind = resolveAttachmentKind(normalizedPayloadMimeType);
+    const mimeType =
+      resolvedMediaKind === mediaKind
+        ? normalizedMediaMimeType
+        : resolvedPayloadKind === mediaKind
+          ? normalizedPayloadMimeType
+          : this.getDefaultWebhookMediaMimeType(mediaKind);
+
+    if (resolveAttachmentKind(mimeType) !== mediaKind) {
+      throw new HttpError(400, "MIME type de midia do webhook nao permitido para anexos do chat");
+    }
+
+    const fileSize = media.buffer.byteLength;
+    if (fileSize <= 0 || fileSize > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
+      throw new HttpError(400, "Tamanho da midia do webhook invalido para anexos do chat");
+    }
+
+    const attachmentId = randomUUID();
+    const fileName = sanitizeStorageFileName(this.getWebhookMediaFileName(params.message, mimeType));
+    const storagePath = buildAttachmentStoragePath({
+      acesId: params.acesId,
+      leadId: params.leadId,
+      messageId: params.messageId,
+      attachmentId,
+      fileName,
+    });
+
+    const { error: uploadError } = await this.serviceClient.storage
+      .from(CHAT_ATTACHMENTS_BUCKET)
+      .upload(storagePath, media.buffer, {
+        contentType: mimeType,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new HttpError(500, "Nao foi possivel salvar midia do webhook no Storage", uploadError);
+    }
+
+    await this.insertStoredMessageAttachment({
+      attachmentId,
+      messageId: params.messageId,
+      acesId: params.acesId,
+      leadId: params.leadId,
+      kind: mediaKind,
+      mimeType,
+      storagePath,
+      fileName,
+      fileSize,
+    });
+    await this.invalidateChatMessagesCache(params.acesId, params.leadId);
+
+    return attachmentId;
+  }
+
+  private async tryPersistWebhookMediaAttachment(params: {
+    acesId: number;
+    leadId: string | null;
+    messageId: string | null;
+    message: ParsedWebhookMessage;
+  }) {
+    if (!params.leadId || !params.messageId || !params.message.mediaKind) {
+      return null;
+    }
+
+    try {
+      return await this.persistWebhookMediaAttachment({
+        acesId: params.acesId,
+        leadId: params.leadId,
+        messageId: params.messageId,
+        message: params.message,
+      });
+    } catch (error) {
+      console.warn("[crm-ai] Falha ao persistir midia do webhook no chat:", {
+        acesId: params.acesId,
+        leadId: params.leadId,
+        messageId: params.message.messageId ?? params.messageId,
+        mediaKind: params.message.mediaKind,
+        error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : error),
+      });
+      return null;
     }
   }
 

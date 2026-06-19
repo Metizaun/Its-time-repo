@@ -12,7 +12,13 @@ interface MessageBubbleProps {
   attachments?: ChatAttachment[];
 }
 
-const ATTACHMENT_PLACEHOLDERS = new Set(["[imagem enviada]", "[audio enviado]", "[documento enviado]"]);
+const ATTACHMENT_PLACEHOLDERS = new Set([
+  "[imagem enviada]",
+  "[audio enviado]",
+  "[documento enviado]",
+  "[imagem recebida]",
+  "[audio recebido]",
+]);
 
 export function MessageBubble({ content, sentAt, isOutbound, senderName, attachments = [] }: MessageBubbleProps) {
   const time = format(new Date(sentAt), "HH:mm", { locale: ptBR });
