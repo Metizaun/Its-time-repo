@@ -33,7 +33,10 @@ coverage
 DEPLOY_ENV_VPS.local.md
 .vercel
 Meta-API/
-update/
+update/*
+!update/guias/
+update/guias/*
+!update/guias/09-padrao-workers-agentes-modelos.md
 chat-query.design-ui-ux/
 design-refatoracao/
 exemples/

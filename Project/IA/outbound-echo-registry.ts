@@ -3,7 +3,12 @@ import crypto from "node:crypto";
 import type Redis from "ioredis";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export type OutboundEchoOrigin = "manual" | "ai" | "automation" | "calendar_followup";
+export type OutboundEchoOrigin =
+  | "manual"
+  | "ai"
+  | "automation"
+  | "calendar_followup"
+  | "agent_followup";
 
 type RegisterOutboundEchoParams = {
   client: SupabaseClient;

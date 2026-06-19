@@ -6,6 +6,8 @@ const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
 const CALENDAR_FOLLOWUP_MIGRATION =
   "supabase/migrations/20260615223657_add_calendar_followup_dispatch.sql";
+const AGENT_FOLLOWUP_MIGRATION =
+  "supabase/migrations/20260619194439_add_agent_native_followup.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -279,6 +281,75 @@ async function validateCalendarFollowupSkipRpc(calendarClient: SupabaseClient<an
     : null;
 }
 
+async function validateAgentFollowupClaimRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_claim_due_agent_followups", {
+    p_limit: 0,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.rpc_claim_due_agent_followups",
+        AGENT_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateAgentFollowupMarkSentRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_mark_agent_followup_sent", {
+    p_task_id: NIL_UUID,
+    p_sent_at: new Date().toISOString(),
+    p_provider: null,
+    p_provider_message_id: null,
+    p_provider_status: null,
+    p_provider_payload_summary: null,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.rpc_mark_agent_followup_sent",
+        AGENT_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateAgentFollowupMarkFailedRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_mark_agent_followup_failed", {
+    p_task_id: NIL_UUID,
+    p_error: "schema_preflight",
+    p_retry: true,
+    p_provider: null,
+    p_provider_status: null,
+    p_provider_error_code: null,
+    p_provider_error_message: null,
+    p_provider_payload_summary: null,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.rpc_mark_agent_followup_failed",
+        AGENT_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateAgentFollowupCancelRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_cancel_agent_followup", {
+    p_task_id: NIL_UUID,
+    p_reason: "schema_preflight",
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.rpc_cancel_agent_followup",
+        AGENT_FOLLOWUP_MIGRATION,
+        error
+      )
+    : null;
+}
+
 async function validateChatAttachmentsStorage(
   serviceClient: StorageBucketLookupClient
 ) {
@@ -421,6 +492,38 @@ export async function assertRuntimeSchemaCompatibility(
       ["agent_id", "lead_id", "pause_origin", "pause_reference", "paused_at"],
       "crm.ai_lead_state (pause metadata)",
       "supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "follow_up_tasks",
+      [
+        "id",
+        "lead_id",
+        "aces_id",
+        "due_at",
+        "completed",
+        "completed_at",
+        "agent_id",
+        "source",
+        "status",
+        "idempotency_key",
+        "requested_message_id",
+        "requested_text",
+        "message_text",
+        "attempt_count",
+        "last_attempt_at",
+        "sent_at",
+        "last_error",
+        "provider",
+        "provider_message_id",
+        "provider_status",
+        "provider_error_code",
+        "provider_error_message",
+        "provider_payload_summary",
+        "metadata",
+      ],
+      "crm.follow_up_tasks (agent follow-up)",
+      AGENT_FOLLOWUP_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -617,6 +720,10 @@ export async function assertRuntimeSchemaCompatibility(
     validateCalendarFollowupMarkSentRpc(calendarClient),
     validateCalendarFollowupMarkFailedRpc(calendarClient),
     validateCalendarFollowupSkipRpc(calendarClient),
+    validateAgentFollowupClaimRpc(serviceClient),
+    validateAgentFollowupMarkSentRpc(serviceClient),
+    validateAgentFollowupMarkFailedRpc(serviceClient),
+    validateAgentFollowupCancelRpc(serviceClient),
   ]);
 
   const failures = checks.filter((check): check is SchemaFailure => check !== null);

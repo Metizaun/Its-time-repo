@@ -4,6 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
 
 import { registerOutboundEcho } from "./outbound-echo-registry.js";
+import { type SendResult, WhatsAppProviderError } from "./whatsapp-provider.js";
+import { createWhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 
 type ClaimedExecution = {
   execution_id: string;
@@ -38,6 +40,26 @@ type ClaimedCalendarFollowup = {
   contact_phone: string | null;
   instance_name: string | null;
   attempt_count: number;
+};
+
+type ClaimedAgentFollowup = {
+  task_id: string;
+  aces_id: number;
+  lead_id: string;
+  agent_id: string | null;
+  due_at: string;
+  requested_text: string | null;
+  message_text: string | null;
+  attempt_count: number;
+  lead_name: string | null;
+  lead_phone: string | null;
+  instance_name: string | null;
+  agent_name: string | null;
+  agent_active: boolean;
+  agent_model: string | null;
+  manual_ai_enabled: boolean | null;
+  freeze_until: string | null;
+  last_lead_inbound_at: string | null;
 };
 
 type ExpiredUploadIntent = {
@@ -103,6 +125,11 @@ const CALENDAR_FOLLOWUP_CONVERSATION_PREFIX = "calendar_followup";
 const CALENDAR_FOLLOWUP_TIMEZONE = "America/Sao_Paulo";
 const CALENDAR_FOLLOWUP_DEFAULT_TEMPLATE =
   'Ola, {nome}! Passando para lembrar do compromisso "{titulo}" hoje as {horario}.';
+const AGENT_FOLLOWUP_MAX_TRANSIENT_RETRIES = 3;
+const AGENT_FOLLOWUP_CONVERSATION_PREFIX = "agent_followup";
+const AGENT_FOLLOWUP_DEFAULT_TEMPLATE =
+  "Oi, {nome}! Como combinado, estou te chamando por aqui. Podemos continuar?";
+const META_CONVERSATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RETRY_DELAYS_MS = [5, 15, 30, 60, 120].map((minutes) => minutes * 60 * 1000);
 const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
@@ -259,6 +286,10 @@ function buildCalendarFollowupConversationId(eventId: string) {
   return `${CALENDAR_FOLLOWUP_CONVERSATION_PREFIX}:${eventId}`;
 }
 
+function buildAgentFollowupConversationId(taskId: string) {
+  return `${AGENT_FOLLOWUP_CONVERSATION_PREFIX}:${taskId}`;
+}
+
 function renderCalendarFollowupMessage(followup: ClaimedCalendarFollowup, template: string) {
   const renderedMessage = renderTemplate(template, {
     nome: followup.lead_name ?? "",
@@ -272,6 +303,38 @@ function renderCalendarFollowupMessage(followup: ClaimedCalendarFollowup, templa
 
   assertNoUnresolvedPlaceholders(renderedMessage);
   return renderedMessage;
+}
+
+function renderAgentFollowupMessage(followup: ClaimedAgentFollowup) {
+  const template = followup.message_text?.trim() || AGENT_FOLLOWUP_DEFAULT_TEMPLATE;
+  const renderedMessage = renderTemplate(template, {
+    nome: followup.lead_name?.trim() || "tudo bem",
+    empresa: normalizeBusinessName(followup.lead_name),
+    pedido: followup.requested_text ?? "",
+    horario: formatCalendarTime(followup.due_at),
+    data: formatCalendarDate(followup.due_at),
+  });
+
+  assertNoUnresolvedPlaceholders(renderedMessage);
+  return renderedMessage;
+}
+
+function isOutsideMetaConversationWindow(lastLeadInboundAt: string | null | undefined) {
+  if (!lastLeadInboundAt) {
+    return true;
+  }
+
+  const inboundAt = Date.parse(lastLeadInboundAt);
+  return !Number.isFinite(inboundAt) || Date.now() - inboundAt > META_CONVERSATION_WINDOW_MS;
+}
+
+function isFutureDate(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp > Date.now();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -436,6 +499,14 @@ function classifyExecutionFailure(error: unknown) {
     return error;
   }
 
+  if (error instanceof WhatsAppProviderError) {
+    return new AutomationDispatchError(error.message, {
+      kind: error.kind,
+      statusCode: error.statusCode,
+      errorCode: error.errorCode,
+    });
+  }
+
   const message = extractErrorMessage(error);
   const normalizedMessage = normalizeTextForComparison(message);
   const kind =
@@ -571,6 +642,16 @@ export function startAutomationWorker() {
   const calendarFollowupTemplate = process.env.CALENDAR_FOLLOWUP_1H_TEMPLATE?.trim()
     ? process.env.CALENDAR_FOLLOWUP_1H_TEMPLATE
     : CALENDAR_FOLLOWUP_DEFAULT_TEMPLATE;
+  const agentFollowupEnabled = process.env.AGENT_FOLLOWUP_ENABLED === "true";
+  const agentFollowupDryRun = process.env.AGENT_FOLLOWUP_DRY_RUN === "true";
+  const agentFollowupBatchSizeRaw = Number(process.env.AGENT_FOLLOWUP_BATCH_SIZE ?? 25);
+  const agentFollowupBatchSize = Number.isFinite(agentFollowupBatchSizeRaw)
+    ? Math.max(1, Math.min(agentFollowupBatchSizeRaw, 100))
+    : 25;
+  const agentFollowupMetaTemplateName =
+    process.env.AGENT_FOLLOWUP_META_TEMPLATE_NAME?.trim() || null;
+  const agentFollowupMetaTemplateLanguage =
+    process.env.AGENT_FOLLOWUP_META_TEMPLATE_LANGUAGE?.trim() || "pt_BR";
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     db: { schema: "crm" },
@@ -582,8 +663,18 @@ export function startAutomationWorker() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const whatsAppProviders = createWhatsAppProviderRegistry({
+    supabaseUrl,
+    supabaseServiceRoleKey: serviceRoleKey,
+    evolutionApiUrl,
+    evolutionApiKey,
+    metaProviderMode: process.env.META_PROVIDER_MODE,
+    metaGraphApiVersion: process.env.META_GRAPH_API_VERSION,
+  });
+
   let running = false;
   let calendarFollowupRunning = false;
+  let agentFollowupRunning = false;
   let chatCleanupRunning = false;
   const holidayCacheYears = new Set<number>();
   let lastFreezeRepairAt = 0;
@@ -845,6 +936,206 @@ export function startAutomationWorker() {
     if (error) {
       throw error;
     }
+  }
+
+  async function agentFollowupHistoryExists(followup: ClaimedAgentFollowup) {
+    const { data, error } = await supabase
+      .from("message_history")
+      .select("id")
+      .eq("lead_id", followup.lead_id)
+      .eq("conversation_id", buildAgentFollowupConversationId(followup.task_id))
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return Boolean(data);
+  }
+
+  async function registerAgentFollowupOutboundEcho(
+    followup: ClaimedAgentFollowup,
+    content: string,
+    sentAt: string
+  ) {
+    if (!followup.instance_name || !followup.lead_phone) {
+      return;
+    }
+
+    await registerOutboundEcho({
+      client: supabase as any,
+      acesId: followup.aces_id,
+      leadId: followup.lead_id,
+      origin: "agent_followup",
+      referenceId: followup.task_id,
+      conversationId: buildAgentFollowupConversationId(followup.task_id),
+      instanceName: followup.instance_name,
+      phone: followup.lead_phone,
+      content,
+      sentAt,
+    });
+  }
+
+  async function saveAgentFollowupMessage(
+    followup: ClaimedAgentFollowup,
+    content: string,
+    sentAt: string,
+    sendResult: SendResult
+  ) {
+    const { error } = await supabase.from("message_history").insert({
+      lead_id: followup.lead_id,
+      aces_id: followup.aces_id,
+      content,
+      direction: "outbound",
+      source_type: "ai",
+      conversation_id: buildAgentFollowupConversationId(followup.task_id),
+      instance: followup.instance_name,
+      sent_at: sentAt,
+      provider: sendResult.provider,
+      provider_message_id: sendResult.providerMessageId,
+      provider_status: sendResult.providerStatus,
+      provider_payload_summary: summarizeProviderPayload(sendResult.raw),
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function updateAgentFollowupLeadState(followup: ClaimedAgentFollowup, sentAt: string) {
+    if (!followup.agent_id) {
+      return;
+    }
+
+    const { error } = await supabase.from("ai_lead_state").upsert(
+      {
+        agent_id: followup.agent_id,
+        lead_id: followup.lead_id,
+        last_ai_reply_at: sentAt,
+        status: "active",
+        updated_at: sentAt,
+      },
+      { onConflict: "agent_id,lead_id" }
+    );
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function markAgentFollowupSent(
+    followup: ClaimedAgentFollowup,
+    sentAt: string,
+    sendResult: SendResult | null
+  ) {
+    const { error } = await supabase.rpc("rpc_mark_agent_followup_sent", {
+      p_task_id: followup.task_id,
+      p_sent_at: sentAt,
+      p_provider: sendResult?.provider ?? null,
+      p_provider_message_id: sendResult?.providerMessageId ?? null,
+      p_provider_status: sendResult?.providerStatus ?? null,
+      p_provider_payload_summary: sendResult ? summarizeProviderPayload(sendResult.raw) : null,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function markAgentFollowupFailed(
+    followup: ClaimedAgentFollowup,
+    reason: string,
+    retry: boolean,
+    originalError: unknown
+  ) {
+    const providerError =
+      originalError instanceof WhatsAppProviderError ? originalError : null;
+    const { error } = await supabase.rpc("rpc_mark_agent_followup_failed", {
+      p_task_id: followup.task_id,
+      p_error: reason,
+      p_retry: retry,
+      p_provider: providerError?.provider ?? null,
+      p_provider_status: providerError ? "failed" : null,
+      p_provider_error_code: providerError?.errorCode ?? null,
+      p_provider_error_message: providerError?.message ?? reason,
+      p_provider_payload_summary: providerError
+        ? summarizeProviderPayload(providerError.payloadSummary)
+        : null,
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  async function sendAgentFollowupMessage(
+    followup: ClaimedAgentFollowup,
+    renderedMessage: string
+  ): Promise<SendResult> {
+    if (!followup.agent_id) {
+      throw new AutomationDispatchError("Agente do follow-up nao encontrado", {
+        kind: "permanent",
+      });
+    }
+
+    if (!followup.agent_active) {
+      throw new AutomationDispatchError("Agente inativo para follow-up nativo", {
+        kind: "permanent",
+      });
+    }
+
+    if (followup.manual_ai_enabled === false) {
+      throw new AutomationDispatchError("IA desligada manualmente para o lead", {
+        kind: "permanent",
+      });
+    }
+
+    if (isFutureDate(followup.freeze_until)) {
+      throw new AutomationDispatchError("IA pausada para o lead no momento do follow-up", {
+        kind: "permanent",
+      });
+    }
+
+    if (!followup.instance_name) {
+      throw new AutomationDispatchError("Instancia de envio nao definida para o lead", {
+        kind: "permanent",
+      });
+    }
+
+    if (!followup.lead_phone) {
+      throw new AutomationDispatchError("Lead sem telefone para follow-up do agente", {
+        kind: "permanent",
+      });
+    }
+
+    const providerName = await whatsAppProviders.resolveInstanceProvider(followup.instance_name);
+    const provider = whatsAppProviders.getProvider(providerName);
+
+    if (providerName === "meta" && isOutsideMetaConversationWindow(followup.last_lead_inbound_at)) {
+      if (!agentFollowupMetaTemplateName) {
+        throw new AutomationDispatchError(
+          "Template Meta de follow-up do agente nao configurado fora da janela de 24h",
+          { kind: "permanent" }
+        );
+      }
+
+      return provider.sendTemplate({
+        instanceName: followup.instance_name,
+        to: followup.lead_phone,
+        templateName: agentFollowupMetaTemplateName,
+        languageCode: agentFollowupMetaTemplateLanguage,
+        parameters: [renderedMessage],
+        sourceType: "ai",
+      });
+    }
+
+    return provider.sendText({
+      instanceName: followup.instance_name,
+      to: followup.lead_phone,
+      text: renderedMessage,
+      sourceType: "ai",
+    });
   }
 
   async function deferExecution(
@@ -1353,6 +1644,88 @@ export function startAutomationWorker() {
     }
   }
 
+  async function processDueAgentFollowups() {
+    if (!agentFollowupEnabled || agentFollowupRunning) {
+      return;
+    }
+
+    agentFollowupRunning = true;
+
+    try {
+      while (true) {
+        const { data, error } = await supabase.rpc("rpc_claim_due_agent_followups", {
+          p_limit: agentFollowupBatchSize,
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        const followups = (data as ClaimedAgentFollowup[]) || [];
+        if (followups.length === 0) {
+          return;
+        }
+
+        for (const followup of followups) {
+          try {
+            const alreadySent = await agentFollowupHistoryExists(followup);
+            if (alreadySent) {
+              await markAgentFollowupSent(followup, new Date().toISOString(), null);
+              continue;
+            }
+
+            const renderedMessage = renderAgentFollowupMessage(followup);
+
+            if (agentFollowupDryRun) {
+              console.log("[automation-worker] Dry-run do follow-up nativo do agente:", {
+                taskId: followup.task_id,
+                leadId: followup.lead_id,
+                agentId: followup.agent_id,
+                instanceName: followup.instance_name,
+                message: renderedMessage,
+              });
+              await markAgentFollowupFailed(
+                followup,
+                "Dry-run: mensagem validada sem envio",
+                true,
+                null
+              );
+              continue;
+            }
+
+            const sentAt = new Date().toISOString();
+            await registerAgentFollowupOutboundEcho(followup, renderedMessage, sentAt);
+            const sendResult = await sendAgentFollowupMessage(followup, renderedMessage);
+            await saveAgentFollowupMessage(followup, renderedMessage, sentAt, sendResult);
+            await updateAgentFollowupLeadState(followup, sentAt);
+            await markAgentFollowupSent(followup, sentAt, sendResult);
+          } catch (error) {
+            const failure = classifyExecutionFailure(error);
+            const shouldRetry =
+              failure.kind === "transient" &&
+              followup.attempt_count < AGENT_FOLLOWUP_MAX_TRANSIENT_RETRIES;
+
+            console.error(
+              `[automation-worker] Falha ${failure.kind} no follow-up nativo ${followup.task_id}:`,
+              error
+            );
+
+            try {
+              await markAgentFollowupFailed(followup, failure.message, shouldRetry, error);
+            } catch (recoveryError) {
+              console.error(
+                `[automation-worker] Falha adicional ao marcar follow-up nativo ${followup.task_id}:`,
+                recoveryError
+              );
+            }
+          }
+        }
+      }
+    } finally {
+      agentFollowupRunning = false;
+    }
+  }
+
   const timer = setInterval(() => {
     processDueExecutions().catch((error) => {
       console.error("[automation-worker] Erro no ciclo do worker:", error);
@@ -1363,6 +1736,14 @@ export function startAutomationWorker() {
     ? setInterval(() => {
         processDueCalendarFollowups().catch((error) => {
           console.error("[automation-worker] Erro no ciclo de follow-up do calendario:", error);
+        });
+      }, pollMs)
+    : null;
+
+  const agentFollowupTimer = agentFollowupEnabled
+    ? setInterval(() => {
+        processDueAgentFollowups().catch((error) => {
+          console.error("[automation-worker] Erro no ciclo de follow-up nativo do agente:", error);
         });
       }, pollMs)
     : null;
@@ -1383,6 +1764,12 @@ export function startAutomationWorker() {
     });
   }
 
+  if (agentFollowupEnabled) {
+    processDueAgentFollowups().catch((error) => {
+      console.error("[automation-worker] Erro na execucao inicial do follow-up nativo do agente:", error);
+    });
+  }
+
   cleanupExpiredChatAttachments().catch((error) => {
     console.error("[automation-worker] Erro na limpeza inicial de anexos do chat:", error);
   });
@@ -1392,17 +1779,25 @@ export function startAutomationWorker() {
       calendarFollowupEnabled
         ? `ativo com lote ${calendarFollowupBatchSize}${calendarFollowupDryRun ? " em dry-run" : ""}`
         : "desativado"
+    }; follow-up agente ${
+      agentFollowupEnabled
+        ? `ativo com lote ${agentFollowupBatchSize}${agentFollowupDryRun ? " em dry-run" : ""}`
+        : "desativado"
     }`
   );
 
   return {
     processDueExecutions,
     processDueCalendarFollowups,
+    processDueAgentFollowups,
     cleanupExpiredChatAttachments,
     stop() {
       clearInterval(timer);
       if (calendarFollowupTimer) {
         clearInterval(calendarFollowupTimer);
+      }
+      if (agentFollowupTimer) {
+        clearInterval(agentFollowupTimer);
       }
       clearInterval(chatCleanupTimer);
     },

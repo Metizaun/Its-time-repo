@@ -67,6 +67,14 @@ const DOCUMENT_MIME_TYPES = new Set([
 const AI_SUMMARY_START = "<!-- AI_ATTENDANCE_SUMMARY_START -->";
 const AI_SUMMARY_END = "<!-- AI_ATTENDANCE_SUMMARY_END -->";
 const AI_SUMMARY_MAX_LENGTH = 1200;
+const AGENT_FOLLOWUP_TIMEZONE = "America/Sao_Paulo";
+const AGENT_FOLLOWUP_MIN_CONFIDENCE = 0.75;
+const AGENT_FOLLOWUP_MAX_DAYS = 30;
+const AGENT_FOLLOWUP_VAGUE_DELAY_MINUTES = 15;
+const AGENT_FOLLOWUP_DEFAULT_MESSAGE =
+  "Oi, {nome}! Como combinado, estou te chamando por aqui. Podemos continuar?";
+const AGENT_FOLLOWUP_CLARIFICATION_REPLY =
+  "Claro. Qual horario voce prefere: pela manha, pela tarde ou depois das 18?";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -200,6 +208,8 @@ type MessageRow = {
   provider_error_message?: string | null;
   provider_payload_summary?: unknown;
 };
+
+type LatestLeadInboundMessage = Pick<MessageRow, "id" | "content" | "sent_at">;
 
 type ChatAttachmentKind = "image" | "audio" | "document";
 
@@ -407,6 +417,16 @@ type UpdateInstanceLifecycleInput = {
   token?: string | null;
 };
 
+type NativeFollowupDecision = {
+  should_schedule: boolean;
+  needs_clarification: boolean;
+  scheduled_at: string | null;
+  requested_text: string;
+  message_text: string;
+  confidence: number;
+  reason: string;
+};
+
 type StructuredModelResponse = {
   reply_blocks: string[];
   stage_decision: {
@@ -434,6 +454,7 @@ type StructuredModelResponse = {
   should_pause: boolean;
   should_handoff: boolean;
   handoff_reason: string;
+  native_followup: NativeFollowupDecision;
 };
 
 type HandoffExecutionResult = {
@@ -451,6 +472,16 @@ type CrmDecisionApplication = {
   summaryUpdated: boolean;
   leadCheckedAt: string | null;
   changed: boolean;
+  audit: JsonRecord;
+};
+
+type NativeFollowupApplication = {
+  scheduled: boolean;
+  taskId: string | null;
+  dueAt: string | null;
+  duplicated: boolean;
+  needsClarification: boolean;
+  skippedReason: string | null;
   audit: JsonRecord;
 };
 
@@ -628,6 +659,77 @@ function addDays(date: Date, days: number) {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
+function normalizeAsciiText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function formatInTimeZone(date: Date, timeZone: string, options: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone,
+    ...options,
+  }).format(date);
+}
+
+function buildNativeTemporalContext(now = new Date()) {
+  const tomorrow = addDays(now, 1);
+  const nextWeek = addDays(now, 7);
+
+  return {
+    timezone: AGENT_FOLLOWUP_TIMEZONE,
+    now_utc: now.toISOString(),
+    now_local: formatInTimeZone(now, AGENT_FOLLOWUP_TIMEZONE, {
+      dateStyle: "full",
+      timeStyle: "medium",
+    }),
+    today_local: formatInTimeZone(now, AGENT_FOLLOWUP_TIMEZONE, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "long",
+    }),
+    tomorrow_local: formatInTimeZone(tomorrow, AGENT_FOLLOWUP_TIMEZONE, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "long",
+    }),
+    next_week_reference_local: formatInTimeZone(nextWeek, AGENT_FOLLOWUP_TIMEZONE, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "long",
+    }),
+    vague_followup_minutes: AGENT_FOLLOWUP_VAGUE_DELAY_MINUTES,
+    max_followup_days: AGENT_FOLLOWUP_MAX_DAYS,
+  };
+}
+
+function leadMessageNeedsFollowupTimeClarification(value: string) {
+  const text = normalizeAsciiText(value);
+  const hasDateWithoutDefault =
+    /\b(amanha|semana que vem|proxima semana|prox(?:ima)? semana)\b/.test(text);
+  if (!hasDateWithoutDefault) {
+    return false;
+  }
+
+  const hasExplicitHour =
+    /\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\b/.test(text) ||
+    /\b(?:meio dia|meia noite)\b/.test(text);
+  const hasClearPeriod =
+    /\b(?:pela manha|de manha|manha|pela tarde|de tarde|tarde|a noite|de noite|noite|depois das|apos as|ap[oó]s as)\b/.test(
+      text
+    );
+
+  return !hasExplicitHour && !hasClearPeriod;
+}
+
+function isSupabaseUniqueViolation(error: unknown) {
+  return asString(asRecord(error).code) === "23505";
+}
+
 function parsePositiveInteger(value: number | undefined, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -718,6 +820,7 @@ function parseStructuredJson(text: string): StructuredModelResponse {
   const parsed = JSON.parse(cleaned) as Partial<StructuredModelResponse>;
   const attendanceSummary = asRecord(parsed.attendance_summary);
   const leadVerification = asRecord(parsed.lead_verification);
+  const nativeFollowup = asRecord(parsed.native_followup);
 
   return {
     reply_blocks: Array.isArray(parsed.reply_blocks)
@@ -757,6 +860,17 @@ function parseStructuredJson(text: string): StructuredModelResponse {
     should_pause: Boolean(parsed.should_pause),
     should_handoff: Boolean(parsed.should_handoff),
     handoff_reason: parsed.handoff_reason ? String(parsed.handoff_reason) : "",
+    native_followup: {
+      should_schedule: Boolean(nativeFollowup.should_schedule),
+      needs_clarification: Boolean(nativeFollowup.needs_clarification),
+      scheduled_at: nativeFollowup.scheduled_at ? String(nativeFollowup.scheduled_at).trim() : null,
+      requested_text: nativeFollowup.requested_text ? String(nativeFollowup.requested_text).trim() : "",
+      message_text: nativeFollowup.message_text
+        ? truncateText(String(nativeFollowup.message_text).trim(), 500)
+        : "",
+      confidence: clampConfidence(nativeFollowup.confidence),
+      reason: nativeFollowup.reason ? String(nativeFollowup.reason) : "",
+    },
   };
 }
 
@@ -2763,6 +2877,10 @@ export class AgentManager {
       return "human";
     }
 
+    if (origin === "agent_followup") {
+      return "ai";
+    }
+
     if (origin === "calendar_followup") {
       return "automation";
     }
@@ -3117,7 +3235,7 @@ export class AgentManager {
   private async fetchLatestLeadInboundMessage(leadId: string) {
     const { data, error } = await this.serviceClient
       .from("message_history")
-      .select("id, sent_at")
+      .select("id, content, sent_at")
       .eq("lead_id", leadId)
       .eq("source_type", "lead")
       .order("sent_at", { ascending: false })
@@ -3128,7 +3246,7 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel carregar a ultima mensagem do lead", error);
     }
 
-    return (data as { id: string; sent_at: string } | null) ?? null;
+    return (data as LatestLeadInboundMessage | null) ?? null;
   }
 
   private shouldAnalyzeLead(latestInboundAt: string | null, lastProcessedAt: string | null) {
@@ -3964,6 +4082,7 @@ export class AgentManager {
     messages: MessageRow[]
   ) {
     const handoffConfig = this.getHandoffConfig(agent);
+    const temporalContext = buildNativeTemporalContext();
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
       .join("\n");
@@ -3990,16 +4109,25 @@ export class AgentManager {
     const prompt = [
       agent.system_prompt,
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
       "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas de WhatsApp.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
       "attendance_summary deve conter text, reason e confidence. text deve resumir o ultimo atendimento em ate 700 caracteres.",
       "lead_verification deve conter checked=true quando a conversa foi analisada.",
+      "native_followup e uma ferramenta nativa e oculta de retorno do agente; ela existe para todos os agentes e nao depende de configuracao do usuario.",
+      "native_followup deve conter should_schedule, needs_clarification, scheduled_at, requested_text, message_text, confidence e reason.",
+      "Use native_followup.should_schedule=true quando o lead pedir claramente para chamar depois, como daqui a pouco, amanha as 10, depois das 18, mais tarde ou semana que vem com horario/periodo claro.",
+      "Use scheduled_at em ISO 8601 com offset do fuso America/Sao_Paulo. Nunca use datas passadas e nunca agende alem de 30 dias.",
+      "Padroes: daqui a pouco = agora + 15 minutos; depois das 18 = hoje 18:00 se ainda nao passou, senao agora + 15 minutos; manha = 09:00; tarde = 14:00; noite/depois das 18 = 18:00.",
+      "Se o lead disser apenas amanha ou semana que vem sem horario ou periodo claro, native_followup.needs_clarification=true, should_schedule=false e reply_blocks deve perguntar qual horario prefere.",
+      `Mensagem padrao para message_text quando for agendar: ${AGENT_FOLLOWUP_DEFAULT_MESSAGE}`,
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
       "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
       "handoff_reason deve explicar objetivamente por que o handoff foi acionado. Se nao houver handoff, deixe handoff_reason vazio.",
+      "",
+      `Contexto temporal nativo: ${JSON.stringify(temporalContext)}`,
       "",
       `Lead atual: ${JSON.stringify({
         id: lead.id,
@@ -4237,6 +4365,239 @@ export class AgentManager {
     };
   }
 
+  private async applyNativeFollowup(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    response: StructuredModelResponse;
+    latestInbound: LatestLeadInboundMessage | null;
+  }): Promise<NativeFollowupApplication> {
+    const { agent, lead, response, latestInbound } = params;
+    const decision = response.native_followup;
+    const latestLeadText = latestInbound?.content ?? decision.requested_text;
+    const needsClarification =
+      decision.needs_clarification || leadMessageNeedsFollowupTimeClarification(latestLeadText);
+
+    if (needsClarification) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: null,
+        duplicated: false,
+        needsClarification: true,
+        skippedReason: "needs_clarification",
+        audit: {
+          requested_text: decision.requested_text || latestLeadText,
+          reason: decision.reason,
+          confidence: decision.confidence,
+        },
+      };
+    }
+
+    if (!decision.should_schedule) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: null,
+        duplicated: false,
+        needsClarification: false,
+        skippedReason: "not_requested",
+        audit: {
+          requested_text: decision.requested_text,
+          reason: decision.reason,
+          confidence: decision.confidence,
+        },
+      };
+    }
+
+    if (decision.confidence < AGENT_FOLLOWUP_MIN_CONFIDENCE) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: null,
+        duplicated: false,
+        needsClarification: false,
+        skippedReason: "below_threshold",
+        audit: {
+          requested_text: decision.requested_text || latestLeadText,
+          reason: decision.reason,
+          confidence: decision.confidence,
+          threshold: AGENT_FOLLOWUP_MIN_CONFIDENCE,
+        },
+      };
+    }
+
+    if (!decision.scheduled_at) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: null,
+        duplicated: false,
+        needsClarification: false,
+        skippedReason: "scheduled_at_missing",
+        audit: {
+          requested_text: decision.requested_text || latestLeadText,
+          reason: decision.reason,
+          confidence: decision.confidence,
+        },
+      };
+    }
+
+    const dueAtMs = Date.parse(decision.scheduled_at);
+    const now = new Date();
+    const maxDueAt = addDays(now, AGENT_FOLLOWUP_MAX_DAYS);
+
+    if (!Number.isFinite(dueAtMs)) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: null,
+        duplicated: false,
+        needsClarification: false,
+        skippedReason: "invalid_scheduled_at",
+        audit: {
+          scheduled_at: decision.scheduled_at,
+          requested_text: decision.requested_text || latestLeadText,
+          reason: decision.reason,
+          confidence: decision.confidence,
+        },
+      };
+    }
+
+    const dueAt = new Date(dueAtMs);
+    if (dueAt.getTime() <= now.getTime()) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: dueAt.toISOString(),
+        duplicated: false,
+        needsClarification: false,
+        skippedReason: "scheduled_at_in_past",
+        audit: {
+          scheduled_at: decision.scheduled_at,
+          requested_text: decision.requested_text || latestLeadText,
+          reason: decision.reason,
+          confidence: decision.confidence,
+        },
+      };
+    }
+
+    if (dueAt.getTime() > maxDueAt.getTime()) {
+      return {
+        scheduled: false,
+        taskId: null,
+        dueAt: dueAt.toISOString(),
+        duplicated: false,
+        needsClarification: false,
+        skippedReason: "beyond_max_horizon",
+        audit: {
+          scheduled_at: decision.scheduled_at,
+          max_followup_days: AGENT_FOLLOWUP_MAX_DAYS,
+          requested_text: decision.requested_text || latestLeadText,
+          reason: decision.reason,
+          confidence: decision.confidence,
+        },
+      };
+    }
+
+    const requestedMessageId = latestInbound?.id ?? null;
+    const idempotencyKey = [
+      "agent_followup",
+      agent.id,
+      lead.id,
+      requestedMessageId ?? latestInbound?.sent_at ?? dueAt.toISOString(),
+    ].join(":");
+    const messageText = decision.message_text.trim() || AGENT_FOLLOWUP_DEFAULT_MESSAGE;
+
+    const payload = {
+      lead_id: lead.id,
+      opportunity_id: null,
+      aces_id: lead.aces_id,
+      due_at: dueAt.toISOString(),
+      completed: false,
+      notes: "Follow-up nativo criado pelo agente IA",
+      lead_name: lead.name,
+      lead_phone: lead.contact_phone,
+      created_by: agent.created_by,
+      agent_id: agent.id,
+      source: "agent_followup",
+      status: "pending",
+      idempotency_key: idempotencyKey,
+      requested_message_id: requestedMessageId,
+      requested_text: decision.requested_text || latestLeadText,
+      message_text: messageText,
+      metadata: {
+        timezone: AGENT_FOLLOWUP_TIMEZONE,
+        reason: decision.reason,
+        confidence: decision.confidence,
+        created_by_agent_name: agent.name,
+        source: "native_followup",
+      },
+    };
+
+    const { data, error } = await this.serviceClient
+      .from("follow_up_tasks")
+      .insert(payload)
+      .select("id, due_at")
+      .single();
+
+    if (error) {
+      if (isSupabaseUniqueViolation(error)) {
+        const { data: existing, error: existingError } = await this.serviceClient
+          .from("follow_up_tasks")
+          .select("id, due_at")
+          .eq("source", "agent_followup")
+          .eq("idempotency_key", idempotencyKey)
+          .maybeSingle();
+
+        if (existingError) {
+          throw buildSupabaseOperationError(
+            existingError,
+            "Nao foi possivel consultar follow-up nativo ja existente"
+          );
+        }
+
+        const existingRecord = asRecord(existing);
+        return {
+          scheduled: false,
+          taskId: asString(existingRecord.id),
+          dueAt: asString(existingRecord.due_at),
+          duplicated: true,
+          needsClarification: false,
+          skippedReason: "duplicate_inbound",
+          audit: {
+            idempotency_key: idempotencyKey,
+            requested_message_id: requestedMessageId,
+            requested_text: decision.requested_text || latestLeadText,
+            scheduled_at: dueAt.toISOString(),
+            reason: decision.reason,
+            confidence: decision.confidence,
+          },
+        };
+      }
+
+      throw buildSupabaseOperationError(error, "Nao foi possivel criar follow-up nativo do agente");
+    }
+
+    const record = asRecord(data);
+    return {
+      scheduled: true,
+      taskId: asString(record.id),
+      dueAt: asString(record.due_at) ?? dueAt.toISOString(),
+      duplicated: false,
+      needsClarification: false,
+      skippedReason: null,
+      audit: {
+        idempotency_key: idempotencyKey,
+        requested_message_id: requestedMessageId,
+        requested_text: decision.requested_text || latestLeadText,
+        message_text: messageText,
+        scheduled_at: dueAt.toISOString(),
+        reason: decision.reason,
+        confidence: decision.confidence,
+      },
+    };
+  }
+
   private async queueBufferedProcessing(agent: AgentRow, leadId: string, message: ParsedWebhookMessage) {
     const bufferKey = `crm-ai:buffer:${agent.id}:${leadId}`;
     if (this.redis) {
@@ -4315,6 +4676,7 @@ export class AgentManager {
     const rules = await this.getStageRulesForAgent(agent);
     const tags = await this.getTagsForAccount(agent.aces_id);
     const conversation = await this.fetchRecentConversation(lead.id);
+    const temporalContext = buildNativeTemporalContext();
     const inboundMessages = bufferedEntries
       .map((entry) => entry.messageId)
       .filter((item): item is string => Boolean(item));
@@ -4336,6 +4698,17 @@ export class AgentManager {
         tags,
         validStageIds,
       });
+      const nativeFollowupApplication = await this.applyNativeFollowup({
+        agent,
+        lead,
+        response: result.parsed,
+        latestInbound,
+      });
+      if (nativeFollowupApplication.needsClarification && result.parsed.reply_blocks.length === 0) {
+        result.parsed.reply_blocks.push(AGENT_FOLLOWUP_CLARIFICATION_REPLY);
+      } else if (nativeFollowupApplication.scheduled && result.parsed.reply_blocks.length === 0) {
+        result.parsed.reply_blocks.push("Combinado. Vou te chamar no horario combinado por aqui.");
+      }
       const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
       const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
       let freezeUntil: string | null = null;
@@ -4388,6 +4761,7 @@ export class AgentManager {
           tags,
           latest_inbound: latestInbound,
           previous_ai_state: leadState,
+          temporal_context: temporalContext,
         },
         outputSnapshot: {
           raw_model_response: result.rawText,
@@ -4396,6 +4770,15 @@ export class AgentManager {
           generation_attempt: result.attempt,
           structured: result.parsed,
           crm_application: crmApplication.audit,
+          native_followup: {
+            scheduled: nativeFollowupApplication.scheduled,
+            task_id: nativeFollowupApplication.taskId,
+            due_at: nativeFollowupApplication.dueAt,
+            duplicated: nativeFollowupApplication.duplicated,
+            needs_clarification: nativeFollowupApplication.needsClarification,
+            skipped_reason: nativeFollowupApplication.skippedReason,
+            audit: nativeFollowupApplication.audit,
+          },
           handoff: handoffResult,
           freeze_until: freezeUntil,
         },

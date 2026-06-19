@@ -147,7 +147,36 @@ export function useChat(leadId: string | null) {
           const newMessage = payload.new as { direction?: string };
           if (newMessage.direction === "inbound" || newMessage.direction === "outbound") {
             await fetchMessages();
+            window.setTimeout(() => {
+              void fetchMessages();
+            }, 900);
           }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "crm",
+          table: "message_attachments",
+          filter: `lead_id=eq.${leadId}`,
+        },
+        async (payload) => {
+          console.log("Realtime detectou novo anexo de mensagem:", payload);
+          await fetchMessages();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "crm",
+          table: "message_attachments",
+          filter: `lead_id=eq.${leadId}`,
+        },
+        async (payload) => {
+          console.log("Realtime detectou atualizacao de anexo de mensagem:", payload);
+          await fetchMessages();
         }
       )
       .subscribe();
