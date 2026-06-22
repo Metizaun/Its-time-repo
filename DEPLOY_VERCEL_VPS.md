@@ -65,6 +65,7 @@ SUPABASE_ANON_KEY=...
 SUPABASE_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 GEMINI_API_KEY=...
+CRM_ANALYSIS_WORKER_MODEL=gemini-3.1-flash-lite
 GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 GEMINI_MAX_RETRIES=3
 GEMINI_RETRY_BASE_DELAY_MS=1000
@@ -84,6 +85,7 @@ AUTOMATION_WORKER_BATCH_SIZE=50
 Observacoes:
 - `EVOLUTION_API_URL` fica sem `/manager`
 - `EVOLUTION_WEBHOOK_SECRET` pode ficar vazio
+- `CRM_ANALYSIS_WORKER_MODEL` define o modelo interno do worker de analise de conversa; nao e o modelo dos agentes de atendimento
 - `GEMINI_FALLBACK_MODELS` define os modelos de fallback quando o primario retornar `429/500/503/504`
 - `GEMINI_MAX_RETRIES` e `GEMINI_RETRY_BASE_DELAY_MS` controlam retry com backoff para falhas transitórias do Gemini
 - `REDIS_URL` precisa apontar para o Redis do Docker, nao para `localhost`

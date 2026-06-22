@@ -457,6 +457,20 @@ type StructuredModelResponse = {
   native_followup: NativeFollowupDecision;
 };
 
+type ReplyModelResponse = {
+  reply_blocks: string[];
+};
+
+type GeminiExecutionResult<TParsed> = {
+  parsed: TParsed;
+  rawText: string;
+  modelName: string;
+  usedFallback: boolean;
+  attempt: number;
+  tokensIn: number | null;
+  tokensOut: number | null;
+};
+
 type HandoffExecutionResult = {
   triggered: boolean;
   targetPhone: string | null;
@@ -493,6 +507,7 @@ type ServiceConfig = {
   geminiFallbackModels?: string[];
   geminiMaxRetries?: number;
   geminiRetryBaseDelayMs?: number;
+  crmAnalysisWorkerModel?: string;
   openaiApiKey?: string;
   openaiTranscriptionModel?: string;
   openaiVisionModel?: string;
@@ -874,6 +889,17 @@ function parseStructuredJson(text: string): StructuredModelResponse {
   };
 }
 
+function parseReplyJson(text: string): ReplyModelResponse {
+  const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
+  const parsed = JSON.parse(cleaned) as Partial<ReplyModelResponse>;
+
+  return {
+    reply_blocks: Array.isArray(parsed.reply_blocks)
+      ? parsed.reply_blocks.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
+      : [],
+  };
+}
+
 function truncateText(text: string, maxLength: number) {
   if (text.length <= maxLength) {
     return text;
@@ -1025,7 +1051,8 @@ function isTransientGeminiError(error: unknown) {
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
-  private static readonly DEFAULT_CRM_AGENT_MODEL = "gemini-3.1-flash-lite";
+  private static readonly DEFAULT_CUSTOMER_AGENT_MODEL = "gemini-2.5-flash";
+  private static readonly DEFAULT_CRM_ANALYSIS_WORKER_MODEL = "gemini-3.1-flash-lite";
   private static readonly DEFAULT_GEMINI_FALLBACK_MODELS = [
     "gemini-2.5-flash-lite",
   ];
@@ -1048,6 +1075,7 @@ export class AgentManager {
   private readonly geminiFallbackModels: string[];
   private readonly geminiMaxRetries: number;
   private readonly geminiRetryBaseDelayMs: number;
+  private readonly crmAnalysisWorkerModel: string;
   private readonly openai: OpenAI | null;
   private readonly openaiTranscriptionModel: string;
   private readonly openaiVisionModel: string;
@@ -1075,6 +1103,8 @@ export class AgentManager {
       250,
       config.geminiRetryBaseDelayMs ?? AgentManager.DEFAULT_GEMINI_RETRY_BASE_DELAY_MS
     );
+    this.crmAnalysisWorkerModel =
+      config.crmAnalysisWorkerModel?.trim() || AgentManager.DEFAULT_CRM_ANALYSIS_WORKER_MODEL;
     this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
     this.openaiTranscriptionModel = config.openaiTranscriptionModel?.trim() || "gpt-4o-mini-transcribe";
     this.openaiVisionModel = config.openaiVisionModel?.trim() || "gpt-4.1-mini";
@@ -1856,7 +1886,7 @@ export class AgentManager {
       name: input.name.trim(),
       system_prompt: input.systemPrompt?.trim() || DEFAULT_SYSTEM_MESSAGE,
       provider: input.provider ?? "gemini",
-      model: input.model?.trim() || AgentManager.DEFAULT_CRM_AGENT_MODEL,
+      model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: input.isActive ?? true,
       buffer_wait_ms: input.bufferWaitMs ?? 15000,
       human_pause_minutes: input.humanPauseMinutes ?? 60,
@@ -3606,7 +3636,7 @@ export class AgentManager {
     };
   }
 
-  private async normalizeInboundContent(message: ParsedWebhookMessage, agent?: AgentRow | null) {
+  private async normalizeInboundContent(message: ParsedWebhookMessage) {
     if (message.content.trim()) {
       return message.content.trim();
     }
@@ -3635,7 +3665,7 @@ export class AgentManager {
       return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
     }
 
-    const modelName = agent?.model?.trim() || AgentManager.DEFAULT_CRM_AGENT_MODEL;
+    const modelName = this.crmAnalysisWorkerModel;
     const prompt =
       message.mediaKind === "audio"
         ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
@@ -4080,7 +4110,7 @@ export class AgentManager {
     rules: Array<{ stage: StageRow; rule: StageRuleRow }>,
     tags: TagRow[],
     messages: MessageRow[]
-  ) {
+  ): Promise<GeminiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = this.getHandoffConfig(agent);
     const temporalContext = buildNativeTemporalContext();
     const conversation = messages
@@ -4107,10 +4137,12 @@ export class AgentManager {
     }));
 
     const prompt = [
-      agent.system_prompt,
+      "Voce e um worker interno de analise operacional do CRM.",
+      "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
+      "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
       "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
-      "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas de WhatsApp.",
+      "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
       "attendance_summary deve conter text, reason e confidence. text deve resumir o ultimo atendimento em ate 700 caracteres.",
@@ -4128,6 +4160,13 @@ export class AgentManager {
       "handoff_reason deve explicar objetivamente por que o handoff foi acionado. Se nao houver handoff, deixe handoff_reason vazio.",
       "",
       `Contexto temporal nativo: ${JSON.stringify(temporalContext)}`,
+      "",
+      `Agente de atendimento configurado: ${JSON.stringify({
+        id: agent.id,
+        nome: agent.name,
+        modelo_resposta: agent.model,
+        prompt: truncateText(agent.system_prompt, 3000),
+      })}`,
       "",
       `Lead atual: ${JSON.stringify({
         id: lead.id,
@@ -4151,9 +4190,80 @@ export class AgentManager {
       `Historico recente:\n${conversation}`,
     ].join("\n");
 
-    const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(agent.model, prompt);
+    const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(
+      this.crmAnalysisWorkerModel,
+      prompt
+    );
     const text = result.response.text();
     const parsed = parseStructuredJson(text);
+    const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
+
+    return {
+      parsed,
+      rawText: text,
+      modelName,
+      usedFallback,
+      attempt,
+      tokensIn: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : null,
+      tokensOut: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
+    };
+  }
+
+  private async generateAgentReply(
+    agent: AgentRow,
+    lead: LeadRow,
+    messages: MessageRow[],
+    analysis: StructuredModelResponse,
+    executionContext: {
+      nativeFollowupShouldSchedule: boolean;
+      nativeFollowupNeedsClarification: boolean;
+      handoffTriggered: boolean;
+    }
+  ): Promise<GeminiExecutionResult<ReplyModelResponse>> {
+    const conversation = messages
+      .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
+      .join("\n");
+
+    const prompt = [
+      agent.system_prompt,
+      "",
+      "Voce e o agente de atendimento que responde ao lead pelo WhatsApp.",
+      "A analise operacional do CRM ja foi feita por um worker interno. Nao altere etapa, tags, resumo, check ou follow-up.",
+      "Retorne JSON puro apenas com a chave reply_blocks.",
+      "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas, naturais e prontas para envio no WhatsApp.",
+      "Se nao houver resposta util ou segura para enviar agora, retorne {\"reply_blocks\":[]}.",
+      "Se houver handoff humano acionado, prefira nao responder ao lead, a menos que a propria conversa exija uma confirmacao curta.",
+      "",
+      `Lead atual: ${JSON.stringify({
+        id: lead.id,
+        nome: lead.name,
+        telefone: lead.contact_phone,
+        status_atual: lead.status,
+        cidade: lead.last_city,
+      })}`,
+      "",
+      `Analise operacional ja aplicada/avaliada: ${JSON.stringify({
+        confidence: analysis.confidence,
+        reason: analysis.reason,
+        should_pause: analysis.should_pause,
+        should_handoff: analysis.should_handoff,
+        handoff_reason: analysis.handoff_reason,
+        stage_decision: analysis.stage_decision,
+        attendance_summary: analysis.attendance_summary,
+        lead_verification: analysis.lead_verification,
+        native_followup: analysis.native_followup,
+        native_followup_should_schedule: executionContext.nativeFollowupShouldSchedule,
+        native_followup_needs_clarification: executionContext.nativeFollowupNeedsClarification,
+        handoff_triggered: executionContext.handoffTriggered,
+      })}`,
+      "",
+      `Historico recente:\n${conversation}`,
+    ].join("\n");
+
+    const responseModel = agent.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL;
+    const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(responseModel, prompt);
+    const text = result.response.text();
+    const parsed = parseReplyJson(text);
     const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
 
     return {
@@ -4691,6 +4801,12 @@ export class AgentManager {
         result.parsed.stage_decision.stage_id && validStageIds.has(result.parsed.stage_decision.stage_id)
           ? result.parsed.stage_decision.stage_id
           : null;
+      const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, {
+        nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
+        nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
+        handoffTriggered: result.parsed.should_handoff,
+      });
+      result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const crmApplication = await this.applyCrmDecisions({
         agent,
         lead,
@@ -4704,16 +4820,24 @@ export class AgentManager {
         response: result.parsed,
         latestInbound,
       });
+      const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
       if (nativeFollowupApplication.needsClarification && result.parsed.reply_blocks.length === 0) {
         result.parsed.reply_blocks.push(AGENT_FOLLOWUP_CLARIFICATION_REPLY);
       } else if (nativeFollowupApplication.scheduled && result.parsed.reply_blocks.length === 0) {
         result.parsed.reply_blocks.push("Combinado. Vou te chamar no horario combinado por aqui.");
       }
-      const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
       const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
       let freezeUntil: string | null = null;
       const processedAt = latestInbound?.sent_at ?? bufferedEntries[bufferedEntries.length - 1]?.sentAt ?? new Date().toISOString();
       const lastAiReplyAt = result.parsed.reply_blocks.length > 0 ? new Date().toISOString() : null;
+      const tokensIn =
+        result.tokensIn === null && replyResult.tokensIn === null
+          ? null
+          : (result.tokensIn ?? 0) + (replyResult.tokensIn ?? 0);
+      const tokensOut =
+        result.tokensOut === null && replyResult.tokensOut === null
+          ? null
+          : (result.tokensOut ?? 0) + (replyResult.tokensOut ?? 0);
 
       if (result.parsed.reply_blocks.length > 0) {
         await this.sendReplyBlocks({
@@ -4768,6 +4892,14 @@ export class AgentManager {
           model_name: result.modelName,
           used_fallback_model: result.usedFallback,
           generation_attempt: result.attempt,
+          analysis_raw_model_response: result.rawText,
+          analysis_model_name: result.modelName,
+          analysis_used_fallback_model: result.usedFallback,
+          analysis_generation_attempt: result.attempt,
+          reply_raw_model_response: replyResult.rawText,
+          reply_model_name: replyResult.modelName,
+          reply_used_fallback_model: replyResult.usedFallback,
+          reply_generation_attempt: replyResult.attempt,
           structured: result.parsed,
           crm_application: crmApplication.audit,
           native_followup: {
@@ -4794,8 +4926,8 @@ export class AgentManager {
               : crmApplication.changed
                 ? "crm_updated"
                 : "none",
-        tokensIn: result.tokensIn,
-        tokensOut: result.tokensOut,
+        tokensIn,
+        tokensOut,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha desconhecida na execucao da IA";
@@ -4846,7 +4978,7 @@ export class AgentManager {
     };
 
     const agent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
-    const normalizedContent = await this.normalizeInboundContent(message, agent);
+    const normalizedContent = await this.normalizeInboundContent(message);
     const duplicated = await this.dedupeIncomingMessage(message.messageId);
     if (duplicated) {
       return { ignored: true, reason: "Mensagem duplicada" };
@@ -5585,7 +5717,7 @@ export class AgentManager {
       name: "Envio manual",
       system_prompt: DEFAULT_SYSTEM_MESSAGE,
       provider: "gemini",
-      model: AgentManager.DEFAULT_CRM_AGENT_MODEL,
+      model: AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: false,
       buffer_wait_ms: 15000,
       human_pause_minutes: 60,

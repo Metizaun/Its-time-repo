@@ -144,7 +144,7 @@ export default function Agentes() {
                   <h3 className="text-base font-bold text-foreground mt-0.5 truncate">{agent.name}</h3>
                   {/* Model tag */}
                   <span className="inline-block mt-2 text-[10px] px-2 py-0.5 rounded-full bg-[var(--color-border-subtle)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]">
-                    {agent.model}
+                    Resposta: {agent.model}
                   </span>
                 </div>
 

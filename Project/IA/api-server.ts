@@ -134,6 +134,7 @@ const manager = new AgentManager({
     .filter(Boolean),
   geminiMaxRetries: Number(process.env.GEMINI_MAX_RETRIES ?? 3),
   geminiRetryBaseDelayMs: Number(process.env.GEMINI_RETRY_BASE_DELAY_MS ?? 1000),
+  crmAnalysisWorkerModel: process.env.CRM_ANALYSIS_WORKER_MODEL,
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL,
   openaiVisionModel: process.env.OPENAI_VISION_MODEL,
