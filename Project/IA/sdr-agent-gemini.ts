@@ -161,6 +161,18 @@ type InstanceRow = {
   remote_webhook_connected_at?: string | null;
 };
 
+type InstanceProviderCredentialRow = {
+  instance_name: string;
+  aces_id: number;
+  evolution_api_key: string;
+};
+
+type EvolutionTransport = {
+  apiUrl: string;
+  apiKey: string;
+  instanceName: string;
+};
+
 type InstanceListItem = {
   instanceName: string;
   status: "connected" | "disconnected" | "connecting" | "error";
@@ -1079,7 +1091,6 @@ export class AgentManager {
   private readonly openai: OpenAI | null;
   private readonly openaiTranscriptionModel: string;
   private readonly openaiVisionModel: string;
-  private readonly evolutionMediaProvider: EvolutionWhatsAppProvider;
   private readonly chatCacheTtlSeconds: number;
   private readonly chatSignedDownloadTtlSeconds: number;
   private readonly chatUploadIntentTtlMinutes: number;
@@ -1108,10 +1119,6 @@ export class AgentManager {
     this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
     this.openaiTranscriptionModel = config.openaiTranscriptionModel?.trim() || "gpt-4o-mini-transcribe";
     this.openaiVisionModel = config.openaiVisionModel?.trim() || "gpt-4.1-mini";
-    this.evolutionMediaProvider = new EvolutionWhatsAppProvider({
-      evolutionApiUrl: config.evolutionApiUrl,
-      evolutionApiKey: config.evolutionApiKey,
-    });
     this.chatCacheTtlSeconds = parsePositiveInteger(
       config.chatCacheTtlSeconds,
       AgentManager.DEFAULT_CHAT_CACHE_TTL_SECONDS
@@ -1635,6 +1642,74 @@ export class AgentManager {
     }
 
     return (data as InstanceRow | null) ?? null;
+  }
+
+  private async findInstanceProviderCredentials(instanceName: string, acesId: number) {
+    const { data, error } = await this.serviceClient
+      .from("instance_provider_credentials")
+      .select("instance_name, aces_id, evolution_api_key")
+      .eq("instance_name", instanceName)
+      .eq("aces_id", acesId)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel consultar a credencial da instancia externa", error);
+    }
+
+    return (data as InstanceProviderCredentialRow | null) ?? null;
+  }
+
+  private normalizeExternalEvolutionUrl(raw: string | null | undefined) {
+    const value = raw?.trim().replace(/\/$/, "") ?? "";
+    if (!value) {
+      throw new HttpError(400, "URL da Evolution externa e obrigatoria");
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new HttpError(400, "URL da Evolution externa invalida");
+    }
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new HttpError(400, "URL da Evolution externa deve usar HTTP ou HTTPS");
+    }
+
+    return value;
+  }
+
+  private async resolveEvolutionTransport(instanceName: string, expectedAcesId?: number): Promise<EvolutionTransport> {
+    const instance = await this.findInstanceByName(instanceName);
+    if (!instance) {
+      throw new HttpError(404, "Instancia de envio nao encontrada no CRM");
+    }
+
+    if (expectedAcesId !== undefined && instance.aces_id !== expectedAcesId) {
+      throw new HttpError(403, "Instancia de envio nao pertence a esta conta");
+    }
+
+    if (!this.isExternalWebhookInstance(instance)) {
+      return {
+        apiUrl: this.config.evolutionApiUrl.replace(/\/$/, ""),
+        apiKey: this.config.evolutionApiKey,
+        instanceName: instance.instancia,
+      };
+    }
+
+    const apiUrl = instance.remote_evolution_url?.trim().replace(/\/$/, "") ?? "";
+    const remoteInstanceName = instance.remote_instance_name?.trim() ?? "";
+    const credentials = await this.findInstanceProviderCredentials(instance.instancia, instance.aces_id);
+    const apiKey = credentials?.evolution_api_key?.trim() ?? "";
+
+    if (!apiUrl || !remoteInstanceName || !apiKey) {
+      throw new HttpError(
+        409,
+        "Evolution externa sem URL, nome remoto ou API key. Vincule a instancia novamente."
+      );
+    }
+
+    return { apiUrl, apiKey, instanceName: remoteInstanceName };
   }
 
   private async findInstanceByRemoteWebhookName(remoteInstanceName: string) {
@@ -2210,7 +2285,7 @@ export class AgentManager {
     });
   }
 
-  async createInstanceWithQr(context: AuthContext, input: CreateInstanceInput) {
+  async createInstanceConnection(context: AuthContext, input: CreateInstanceInput) {
     this.ensureAdmin(context);
     const instanceName = this.sanitizeInstanceName(input.instanceName);
     const connectWebhook = input.connectWebhook === true;
@@ -2235,10 +2310,22 @@ export class AgentManager {
     }
 
     if (connectWebhook) {
-      const remoteEvolutionUrl = (input.remoteEvolutionUrl ?? "").trim().replace(/\/$/, "") || null;
+      const remoteEvolutionUrl = this.normalizeExternalEvolutionUrl(input.remoteEvolutionUrl);
+      const remoteApiKey = input.remoteApiKey?.trim() ?? "";
+      if (!remoteApiKey) {
+        throw new HttpError(400, "API key da Evolution externa e obrigatoria");
+      }
       const remoteInstanceName = this.sanitizeInstanceName(
         (input.remoteInstanceName ?? "").trim() || instanceName
       );
+      const webhookSync = await this.configureEvolutionWebhook(
+        remoteEvolutionUrl,
+        remoteApiKey,
+        remoteInstanceName
+      );
+      if (!webhookSync.configured) {
+        throw new HttpError(500, webhookSync.reason);
+      }
 
       if (!existing) {
         const { error: insertError } = await this.serviceClient.from("instance").insert({
@@ -2296,6 +2383,22 @@ export class AgentManager {
         });
       }
 
+      const { error: credentialError } = await this.serviceClient
+        .from("instance_provider_credentials")
+        .upsert(
+          {
+            instance_name: instanceName,
+            aces_id: context.acesId,
+            evolution_api_key: remoteApiKey,
+            updated_at: nowIso,
+          },
+          { onConflict: "instance_name" }
+        );
+
+      if (credentialError) {
+        throw new HttpError(500, "Nao foi possivel salvar a credencial da Evolution externa", credentialError);
+      }
+
       return {
         success: true,
         instanceName,
@@ -2303,7 +2406,7 @@ export class AgentManager {
         status: "connected" as const,
         setupStatus: "connected" as const,
         connectionMode: "external_webhook" as const,
-        message: "Webhook externo sincronizado. Confirme que a Evolution remota aponta para /api/webhook/evolution.",
+        message: "Evolution externa vinculada e webhook MESSAGES_UPSERT configurado.",
         expiresAt: null,
       };
     }
@@ -2387,6 +2490,16 @@ export class AgentManager {
 
         if (connectionUpdateError) {
           throw new HttpError(500, "Nao foi possivel normalizar a origem da instancia", connectionUpdateError);
+        }
+
+        const { error: credentialDeleteError } = await this.serviceClient
+          .from("instance_provider_credentials")
+          .delete()
+          .eq("instance_name", instanceName)
+          .eq("aces_id", context.acesId);
+
+        if (credentialDeleteError) {
+          throw new HttpError(500, "Nao foi possivel remover a credencial da instancia externa", credentialDeleteError);
         }
       });
     }
@@ -3763,7 +3876,7 @@ export class AgentManager {
     }
 
     if (message.mediaUrl) {
-      const downloaded = await this.tryDownloadMediaUrl(message.mediaUrl, mimeType);
+      const downloaded = await this.tryDownloadMediaUrl(message, mimeType);
       if (downloaded) {
         return downloaded;
       }
@@ -3777,10 +3890,12 @@ export class AgentManager {
     return null;
   }
 
-  private async tryDownloadMediaUrl(mediaUrl: string, mimeType: string) {
+  private async tryDownloadMediaUrl(message: ParsedWebhookMessage, mimeType: string) {
+    const mediaUrl = requireValue(message.mediaUrl, "URL de midia ausente");
     const attempts: Array<{ headers?: Record<string, string> }> = [{}];
-    if (this.isEvolutionApiUrl(mediaUrl)) {
-      attempts.push({ headers: this.evolutionHeaders() });
+    const transport = await this.resolveEvolutionTransport(message.instanceName);
+    if (this.isSameUrlOrigin(mediaUrl, transport.apiUrl)) {
+      attempts.push({ headers: this.evolutionHeaders(transport.apiKey) });
     }
 
     for (const attempt of attempts) {
@@ -3832,16 +3947,17 @@ export class AgentManager {
         fromMe: typeof key.fromMe === "boolean" ? key.fromMe : message.fromMe,
       },
     };
+    const transport = await this.resolveEvolutionTransport(message.instanceName);
 
     try {
       const { data } = await axios.post(
-        `${this.config.evolutionApiUrl}/chat/getBase64FromMediaMessage/${encodeURIComponent(message.instanceName)}`,
+        `${transport.apiUrl}/chat/getBase64FromMediaMessage/${encodeURIComponent(transport.instanceName)}`,
         {
           message: requestMessage,
           convertToMp4: false,
         },
         {
-          headers: this.evolutionHeaders(),
+          headers: this.evolutionHeaders(transport.apiKey),
           timeout: 20000,
         }
       );
@@ -3904,9 +4020,9 @@ export class AgentManager {
     return null;
   }
 
-  private isEvolutionApiUrl(value: string) {
+  private isSameUrlOrigin(value: string, baseUrl: string) {
     try {
-      return new URL(value).origin === new URL(this.config.evolutionApiUrl).origin;
+      return new URL(value).origin === new URL(baseUrl).origin;
     } catch {
       return false;
     }
@@ -3938,17 +4054,18 @@ export class AgentManager {
     }
   ) {
     const recipient = resolveWhatsappRecipient(phone);
+    const transport = await this.resolveEvolutionTransport(instanceName, context?.acesId);
 
     try {
       await axios.post(
-        `${this.config.evolutionApiUrl}/message/sendText/${instanceName}`,
+        `${transport.apiUrl}/message/sendText/${encodeURIComponent(transport.instanceName)}`,
         {
           number: recipient.jid,
           text: content,
           delay: 1000,
         },
         {
-          headers: { apikey: this.config.evolutionApiKey },
+          headers: { apikey: transport.apiKey },
         }
       );
     } catch (error) {
@@ -3958,6 +4075,7 @@ export class AgentManager {
         agentId: context?.agentId ?? null,
         sourceType: context?.sourceType ?? null,
         instanceName,
+        providerInstanceName: transport.instanceName,
         phoneRaw: phone,
         phoneNormalized: recipient.normalized,
         phoneFinal: recipient.finalNumber,
@@ -5818,7 +5936,15 @@ export class AgentManager {
 
     let providerResult: SendResult;
     try {
-      providerResult = await this.evolutionMediaProvider.sendMedia(providerInput);
+      const transport = await this.resolveEvolutionTransport(params.instanceName, params.context.acesId);
+      const provider = new EvolutionWhatsAppProvider({
+        evolutionApiUrl: transport.apiUrl,
+        evolutionApiKey: transport.apiKey,
+      });
+      providerResult = await provider.sendMedia({
+        ...providerInput,
+        instanceName: transport.instanceName,
+      });
     } catch (error) {
       const providerFailure = summarizeWhatsAppProviderFailure(error);
       await this.saveMessage({

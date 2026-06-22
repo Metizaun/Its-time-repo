@@ -9,7 +9,6 @@ import {
   Loader2,
   MessageCircle,
   Pencil,
-  Plus,
   QrCode,
   RefreshCw,
   Settings2,
@@ -22,7 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { INSTANCE_COLORS, type InstanceColorKey, getInstanceTextColor } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 import {
-  createInstanceWithQr,
+  createInstanceConnection,
   deleteInstance,
   disconnectInstance,
   fetchInstanceStatus,
@@ -70,7 +69,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
@@ -132,11 +130,13 @@ export function InstanceManager() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [instanceNameInput, setInstanceNameInput] = useState("");
   const [connectWebhookEnabled, setConnectWebhookEnabled] = useState(false);
+  const [remoteEvolutionUrlInput, setRemoteEvolutionUrlInput] = useState("");
+  const [remoteApiKeyInput, setRemoteApiKeyInput] = useState("");
   const [remoteInstanceNameInput, setRemoteInstanceNameInput] = useState("");
   const [creatingInstance, setCreatingInstance] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
-  const [qrInstanceName, setQrInstanceName] = useState<string | null>(null);
+  const [createdInstanceName, setCreatedInstanceName] = useState<string | null>(null);
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
   const [createConnectionMode, setCreateConnectionMode] = useState<InstanceConnectionMode | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
@@ -188,6 +188,9 @@ export function InstanceManager() {
       window.location.origin;
     return `${explicitBase.replace(/\/$/, "")}/api/webhook/evolution`;
   }, []);
+
+  const activeCreateMode: InstanceConnectionMode =
+    createConnectionMode ?? (connectWebhookEnabled ? "external_webhook" : "local");
 
   const deleteLeadCount = instancePendingDelete?.leadCount ?? 0;
   const hasLeadsToResolve = deleteLeadCount > 0;
@@ -348,7 +351,7 @@ export function InstanceManager() {
   };
 
   const checkCurrentInstanceStatus = async (nameFromAction?: string) => {
-    const instanceName = nameFromAction ?? qrInstanceName;
+    const instanceName = nameFromAction ?? createdInstanceName;
     if (!instanceName) return;
 
     try {
@@ -389,27 +392,39 @@ export function InstanceManager() {
       return;
     }
 
+    if (connectWebhookEnabled && !remoteEvolutionUrlInput.trim()) {
+      toast.error("Informe a URL da Evolution externa.");
+      return;
+    }
+
+    if (connectWebhookEnabled && !remoteApiKeyInput.trim()) {
+      toast.error("Informe a API key da Evolution externa.");
+      return;
+    }
+
     try {
       setCreatingInstance(true);
       setConnectionMessage(null);
       const accessToken = await getAccessToken();
-      const result = await createInstanceWithQr({
+      const result = await createInstanceConnection({
         accessToken,
         instanceName,
         connectWebhook: connectWebhookEnabled,
+        remoteEvolutionUrl: connectWebhookEnabled ? remoteEvolutionUrlInput.trim() : undefined,
+        remoteApiKey: connectWebhookEnabled ? remoteApiKeyInput.trim() : undefined,
         remoteInstanceName: connectWebhookEnabled
           ? remoteInstanceNameInput.trim() || instanceName
           : undefined,
       });
 
-      setQrInstanceName(result.instanceName);
+      setCreatedInstanceName(result.instanceName);
       setQrCodeBase64(result.qrCodeBase64);
       setCreateConnectionMode(result.connectionMode);
       setConnectionState(result.status === "connected" ? "connected" : "disconnected");
       setCurrentSetupStatus(result.setupStatus);
       setConnectionMessage(
         result.connectionMode === "external_webhook"
-          ? result.message ?? "Webhook externo sincronizado. Confirme que a Evolution remota aponta para o endpoint do nosso webhook."
+          ? result.message ?? "Evolution externa vinculada e webhook configurado."
           : result.status === "connected"
             ? "Instancia ja estava conectada."
             : "Configuracao iniciada. Escaneie o QR code para concluir."
@@ -417,7 +432,7 @@ export function InstanceManager() {
 
       toast.success(
         result.connectionMode === "external_webhook"
-          ? "Webhook externo sincronizado"
+          ? "Webhook externo vinculado"
           : "Instancia registrada no backend"
       );
       await loadInstances();
@@ -436,8 +451,9 @@ export function InstanceManager() {
   const handleStartReconnect = async (instanceName: string) => {
     try {
       setBusyAction(`reconnect:${instanceName}`);
+      setConnectWebhookEnabled(false);
       setCreateDialogOpen(true);
-      setQrInstanceName(instanceName);
+      setCreatedInstanceName(instanceName);
       setQrCodeBase64(null);
       setCreateConnectionMode("local");
       setConnectionState("checking");
@@ -464,14 +480,14 @@ export function InstanceManager() {
   };
 
   const handleRefreshQr = async () => {
-    if (!qrInstanceName) return;
+    if (!createdInstanceName) return;
 
     try {
       setRefreshingQr(true);
       const accessToken = await getAccessToken();
       const result = await refreshInstanceQrCode({
         accessToken,
-        instanceName: qrInstanceName,
+        instanceName: createdInstanceName,
       });
 
       setQrCodeBase64(result.qrCodeBase64);
@@ -495,7 +511,7 @@ export function InstanceManager() {
       const result = await syncInstanceStatus({ accessToken, instanceName });
       await loadInstances();
 
-      if (qrInstanceName === instanceName) {
+      if (createdInstanceName === instanceName) {
         setConnectionState(result.status === "connected" ? "connected" : "disconnected");
         setCurrentSetupStatus(result.setupStatus);
       }
@@ -583,15 +599,17 @@ export function InstanceManager() {
   };
 
   const resetCreateDialog = () => {
-    if (qrInstanceName && connectionState !== "connected" && createConnectionMode !== "external_webhook") {
+    if (createdInstanceName && connectionState !== "connected" && createConnectionMode !== "external_webhook") {
       toast.warning("Configuracao incompleta; voce pode continuar depois em Gerenciar Instancias.");
     }
 
     setCreateDialogOpen(false);
     setInstanceNameInput("");
     setConnectWebhookEnabled(false);
+    setRemoteEvolutionUrlInput("");
+    setRemoteApiKeyInput("");
     setRemoteInstanceNameInput("");
-    setQrInstanceName(null);
+    setCreatedInstanceName(null);
     setQrCodeBase64(null);
     setCreateConnectionMode(null);
     setConnectionState("idle");
@@ -601,11 +619,10 @@ export function InstanceManager() {
     setCheckingStatus(false);
   };
 
-  const handleConnectWebhookToggle = (checked: boolean) => {
-    setConnectWebhookEnabled(checked);
-    if (checked && !remoteInstanceNameInput.trim()) {
-      setRemoteInstanceNameInput(instanceNameInput.trim());
-    }
+  const openCreateDialog = (mode: InstanceConnectionMode) => {
+    setConnectWebhookEnabled(mode === "external_webhook");
+    setCreateConnectionMode(mode);
+    setCreateDialogOpen(true);
   };
 
   const handleCopyWebhookEndpoint = async () => {
@@ -618,7 +635,7 @@ export function InstanceManager() {
   };
 
   useEffect(() => {
-    if (!createDialogOpen || !qrInstanceName || connectionState === "connected") {
+    if (!createDialogOpen || !createdInstanceName || connectionState === "connected") {
       return;
     }
 
@@ -629,7 +646,7 @@ export function InstanceManager() {
     }, 5000);
 
     return () => clearInterval(timer);
-  }, [createDialogOpen, qrInstanceName, connectionState]);
+  }, [createDialogOpen, createdInstanceName, connectionState]);
 
   if (loading) {
     return (
@@ -644,7 +661,7 @@ export function InstanceManager() {
   return (
     <>
       <Card className="p-6">
-        <div className="flex items-center justify-between gap-3 mb-4 border-b border-border pb-4">
+        <div className="mb-4 flex flex-col items-start justify-between gap-4 border-b border-border pb-4 sm:flex-row sm:items-center">
           <div className="flex items-center gap-2">
             <Settings2 className="w-5 h-5 text-primary" />
             <div>
@@ -655,10 +672,23 @@ export function InstanceManager() {
             </div>
           </div>
 
-          <Button onClick={() => setCreateDialogOpen(true)} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Instancia
-          </Button>
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => openCreateDialog("local")}
+              className="flex-1 gap-2 sm:flex-none"
+            >
+              <QrCode className="h-4 w-4" />
+              Nova com QR
+            </Button>
+            <Button
+              onClick={() => openCreateDialog("external_webhook")}
+              className="flex-1 gap-2 sm:flex-none"
+            >
+              <Link2 className="h-4 w-4" />
+              Vincular Evolution externa
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -680,7 +710,7 @@ export function InstanceManager() {
             <span>Nenhuma instancia ativa encontrada para sua conta.</span>
             {!error && (
               <span className="text-xs opacity-70">
-                Use o botao Instancia para iniciar a configuracao de um novo numero.
+                Vincule uma Evolution externa existente ou crie uma instancia local com QR code.
               </span>
             )}
           </div>
@@ -1138,97 +1168,133 @@ export function InstanceManager() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={createDialogOpen} onOpenChange={(open) => (open ? setCreateDialogOpen(true) : resetCreateDialog())}>
-        <DialogContent className="max-w-md">
+      <Dialog open={createDialogOpen} onOpenChange={(open) => (open ? undefined : resetCreateDialog())}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <QrCode className="h-5 w-5" />
-              Nova instancia
+              {activeCreateMode === "external_webhook" ? (
+                <Link2 className="h-5 w-5" />
+              ) : (
+                <QrCode className="h-5 w-5" />
+              )}
+              {activeCreateMode === "external_webhook" ? "Vincular Evolution externa" : "Nova instancia local"}
             </DialogTitle>
             <DialogDescription>
-              Inicie ou retome a configuracao da instancia. O setup so conclui quando o status ficar conectado.
+              {activeCreateMode === "external_webhook"
+                ? "Use uma instancia que ja esta conectada ao WhatsApp em outro servidor. Este fluxo vincula somente o webhook."
+                : "Crie a instancia na Evolution deste CRM e conecte o WhatsApp pelo QR code."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="instance-name">Nome da instancia</Label>
+              <Label htmlFor="instance-name">
+                {activeCreateMode === "external_webhook" ? "Nome da instancia no CRM" : "Nome da instancia"}
+              </Label>
               <Input
                 id="instance-name"
                 placeholder="Ex: EquipeComercial01"
                 value={instanceNameInput}
                 onChange={(event) => setInstanceNameInput(event.target.value)}
-                disabled={creatingInstance || Boolean(qrInstanceName)}
+                disabled={creatingInstance || Boolean(createdInstanceName)}
               />
             </div>
 
-            {!qrInstanceName && (
-              <div className="rounded-lg border p-4 space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="connect-webhook">Sincronizar webhook existente</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Use uma instancia que ja esta configurada em outra Evolution/VPS.
-                    </p>
+            {!createdInstanceName && activeCreateMode === "external_webhook" && (
+              <div className="space-y-4 rounded-xl border border-border bg-[var(--color-surface-2)] p-4 shadow-sm">
+                <Alert>
+                  <Link2 className="h-4 w-4" />
+                  <AlertTitle>Nenhum QR code sera gerado</AlertTitle>
+                  <AlertDescription>
+                    Mantenha o WhatsApp conectado na Evolution externa. Ao vincular, o backend configurara o endpoint
+                    abaixo para o evento MESSAGES_UPSERT.
+                  </AlertDescription>
+                </Alert>
+
+                <div className="space-y-2">
+                  <Label htmlFor="external-webhook-endpoint">Endpoint do nosso webhook</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="external-webhook-endpoint"
+                      value={webhookEndpoint}
+                      readOnly
+                      className="min-w-0 font-mono text-xs"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={handleCopyWebhookEndpoint}
+                      disabled={creatingInstance}
+                      aria-label="Copiar endpoint do webhook"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
                   </div>
-                  <Switch
-                    id="connect-webhook"
-                    checked={connectWebhookEnabled}
-                    onCheckedChange={handleConnectWebhookToggle}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="remote-evolution-url">URL da Evolution externa</Label>
+                  <Input
+                    id="remote-evolution-url"
+                    type="url"
+                    placeholder="https://evolution.exemplo.com"
+                    value={remoteEvolutionUrlInput}
+                    onChange={(event) => setRemoteEvolutionUrlInput(event.target.value)}
                     disabled={creatingInstance}
+                    autoComplete="url"
                   />
                 </div>
 
-                {connectWebhookEnabled && (
-                  <div className="space-y-3">
-                    <div className="space-y-2">
-                      <Label>Endpoint do nosso webhook</Label>
-                      <div className="flex gap-2">
-                        <Input value={webhookEndpoint} readOnly className="font-mono text-xs" />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          onClick={handleCopyWebhookEndpoint}
-                          disabled={creatingInstance}
-                          aria-label="Copiar endpoint do webhook"
-                        >
-                          <Copy className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
+                <div className="space-y-2">
+                  <Label htmlFor="remote-api-key">API key da Evolution externa</Label>
+                  <Input
+                    id="remote-api-key"
+                    type="password"
+                    placeholder="Informe a API key"
+                    value={remoteApiKeyInput}
+                    onChange={(event) => setRemoteApiKeyInput(event.target.value)}
+                    disabled={creatingInstance}
+                    autoComplete="new-password"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    A credencial sera enviada somente ao backend e nao sera exibida novamente.
+                  </p>
+                </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="remote-instance-name">Nome da instancia externa</Label>
-                      <Input
-                        id="remote-instance-name"
-                        placeholder={instanceNameInput.trim() || "Ex: Cliente01"}
-                        value={remoteInstanceNameInput}
-                        onChange={(event) => setRemoteInstanceNameInput(event.target.value)}
-                        disabled={creatingInstance}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Se ficar vazio, usaremos o mesmo nome da instancia criada aqui.
-                      </p>
-                    </div>
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label htmlFor="remote-instance-name">Nome exato na Evolution externa</Label>
+                  <Input
+                    id="remote-instance-name"
+                    placeholder={instanceNameInput.trim() || "Ex: Cliente01"}
+                    value={remoteInstanceNameInput}
+                    onChange={(event) => setRemoteInstanceNameInput(event.target.value)}
+                    disabled={creatingInstance}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Esse nome identifica os eventos recebidos. Se ficar vazio, usaremos o nome informado no CRM.
+                  </p>
+                </div>
               </div>
             )}
 
-            {qrInstanceName && (
+            {createdInstanceName && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{qrInstanceName}</span>
-                  {stateBadge}
+                  <span className="text-sm font-medium">{createdInstanceName}</span>
+                  {createConnectionMode === "external_webhook" ? (
+                    <Badge variant="outline">Webhook vinculado</Badge>
+                  ) : (
+                    stateBadge
+                  )}
                 </div>
 
                 {createConnectionMode === "external_webhook" ? (
                   <Alert>
                     <Check className="h-4 w-4" />
-                    <AlertTitle>Webhook sincronizado</AlertTitle>
+                    <AlertTitle>Webhook vinculado</AlertTitle>
                     <AlertDescription>
-                      O nome da instancia externa foi vinculado ao CRM. Nao e necessario gerar QR code.
+                      A instancia externa foi vinculada ao CRM. A conexao do WhatsApp continua sendo administrada no outro servidor.
                     </AlertDescription>
                   </Alert>
                 ) : (
@@ -1250,7 +1316,7 @@ export function InstanceManager() {
 
                 <p className="text-xs text-muted-foreground">
                   {createConnectionMode === "external_webhook"
-                    ? "Webhook externo sincronizado"
+                    ? "Webhook externo vinculado sem gerar QR code"
                     : currentSetupStatus ? setupStatusLabel(currentSetupStatus) : "Setup pendente"}
                 </p>
 
@@ -1262,7 +1328,7 @@ export function InstanceManager() {
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            {qrInstanceName ? (
+            {createdInstanceName ? (
               <>
                 {createConnectionMode !== "external_webhook" && (
                   <>
@@ -1288,12 +1354,12 @@ export function InstanceManager() {
               </>
             ) : (
               <>
-                <Button variant="outline" onClick={resetCreateDialog} disabled={creatingInstance}>
+                <Button variant="ghost" onClick={resetCreateDialog} disabled={creatingInstance}>
                   Cancelar
                 </Button>
                 <Button onClick={handleCreateInstance} disabled={creatingInstance}>
                   {creatingInstance ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  {connectWebhookEnabled ? "Criar e sincronizar webhook" : "Criar e gerar QR"}
+                  {activeCreateMode === "external_webhook" ? "Vincular webhook" : "Criar e gerar QR"}
                 </Button>
               </>
             )}

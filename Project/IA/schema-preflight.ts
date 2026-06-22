@@ -8,6 +8,8 @@ const CALENDAR_FOLLOWUP_MIGRATION =
   "supabase/migrations/20260615223657_add_calendar_followup_dispatch.sql";
 const AGENT_FOLLOWUP_MIGRATION =
   "supabase/migrations/20260619194439_add_agent_native_followup.sql";
+const EXTERNAL_EVOLUTION_CREDENTIALS_MIGRATION =
+  "supabase/migrations/20260622143901_add_external_evolution_credentials.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -461,9 +463,16 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       serviceClient,
       "instance",
-      ["connection_mode", "remote_instance_name", "remote_webhook_connected_at"],
+      ["connection_mode", "remote_evolution_url", "remote_instance_name", "remote_webhook_connected_at"],
       "crm.instance (external webhook mode)",
       "supabase/migrations/20260618120000_add_external_webhook_instance_mode.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "instance_provider_credentials",
+      ["instance_name", "aces_id", "evolution_api_key", "updated_at"],
+      "crm.instance_provider_credentials",
+      EXTERNAL_EVOLUTION_CREDENTIALS_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,

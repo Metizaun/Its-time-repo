@@ -1,10 +1,9 @@
 import "./load-env.js";
-import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
 
 import { registerOutboundEcho } from "./outbound-echo-registry.js";
-import { type SendResult, WhatsAppProviderError } from "./whatsapp-provider.js";
+import { type SendResult, type WhatsAppProvider, WhatsAppProviderError } from "./whatsapp-provider.js";
 import { createWhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 
 type ClaimedExecution = {
@@ -154,10 +153,6 @@ function requireEnv(name: string): string {
     throw new Error(`Variavel de ambiente obrigatoria ausente: ${name}`);
   }
   return value;
-}
-
-function normalizePhone(phone: string) {
-  return phone.replace(/\D/g, "");
 }
 
 function normalizeTextForComparison(value: string) {
@@ -339,29 +334,6 @@ function isFutureDate(value: string | null | undefined) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function extractProviderMessageId(value: unknown, depth = 0): string | null {
-  if (depth > 4 || !isRecord(value)) {
-    return null;
-  }
-
-  const directKeys = ["id", "messageId", "message_id", "providerMessageId", "wamid"];
-  for (const key of directKeys) {
-    const candidate = value[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-
-  for (const key of ["key", "data", "message", "result"]) {
-    const candidate = extractProviderMessageId(value[key], depth + 1);
-    if (candidate) {
-      return candidate;
-    }
-  }
-
-  return null;
 }
 
 function summarizeProviderPayload(value: unknown): Record<string, unknown> | null {
@@ -575,37 +547,27 @@ function buildFailureDispatchMeta(
 }
 
 async function sendWhatsAppMessage(
-  evolutionApiUrl: string,
-  evolutionApiKey: string,
+  provider: WhatsAppProvider,
   instanceName: string,
   phone: string,
   message: string
 ): Promise<WhatsAppSendResult> {
-  const cleanPhone = normalizePhone(phone);
-  const finalNumber = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
-
   try {
-    const response = await axios.post(
-      `${evolutionApiUrl}/message/sendText/${instanceName}`,
-      {
-        number: `${finalNumber}@s.whatsapp.net`,
-        text: message,
-        delay: 1000,
-      },
-      {
-        headers: { apikey: evolutionApiKey },
-      }
-    );
+    const response = await provider.sendText({
+      instanceName,
+      to: phone,
+      text: message,
+      sourceType: "automation",
+    });
 
     return {
-      providerMessageId: extractProviderMessageId(response.data),
-      providerPayloadSummary: summarizeProviderPayload(response.data),
+      providerMessageId: response.providerMessageId,
+      providerPayloadSummary: summarizeProviderPayload(response.raw),
     };
   } catch (error) {
-    const statusCode = axios.isAxiosError(error) ? error.response?.status ?? null : null;
-    const errorCode =
-      axios.isAxiosError(error) && typeof error.code === "string" ? error.code.toUpperCase() : null;
-    const payload = axios.isAxiosError(error) ? error.response?.data ?? error.message : error;
+    const statusCode = error instanceof WhatsAppProviderError ? error.statusCode : null;
+    const errorCode = error instanceof WhatsAppProviderError ? error.errorCode : null;
+    const payload = error instanceof WhatsAppProviderError ? error.payloadSummary : error;
     const payloadMessage = extractExternalErrorMessage(payload);
     const messagePrefix = "Falha ao enviar mensagem na Evolution";
 
@@ -1427,8 +1389,7 @@ export function startAutomationWorker() {
             const sentAt = new Date().toISOString();
             await registerAutomationOutboundEcho(execution, renderedMessage, sentAt);
             await sendWhatsAppMessage(
-              evolutionApiUrl,
-              evolutionApiKey,
+              whatsAppProviders.getProvider("evolution"),
               execution.instance_name,
               execution.phone,
               renderedMessage
@@ -1596,8 +1557,7 @@ export function startAutomationWorker() {
             const sentAt = new Date().toISOString();
             await registerCalendarFollowupOutboundEcho(followup, renderedMessage, sentAt);
             const sendResult = await sendWhatsAppMessage(
-              evolutionApiUrl,
-              evolutionApiKey,
+              whatsAppProviders.getProvider("evolution"),
               followup.instance_name,
               followup.contact_phone,
               renderedMessage
