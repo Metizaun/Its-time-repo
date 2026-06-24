@@ -3506,7 +3506,7 @@ export class AgentManager {
     await this.markExpiredPendingInstances(context.acesId);
     const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId);
 
-    const { data, error } = await this.agentsClient
+    const { data, error } = await this.serviceClient
       .from("instance")
       .select(
         "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error, connection_mode, remote_evolution_url, remote_instance_name, remote_webhook_connected_at"
