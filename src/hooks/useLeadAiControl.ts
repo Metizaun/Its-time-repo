@@ -15,6 +15,10 @@ type UseLeadAiControlOptions = {
 
 type ToggleResult = Promise<LeadAiControlState | null>;
 
+function readErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Erro inesperado";
+}
+
 export function useLeadAiControl(
   leadId: string | null,
   instanceName?: string | null,
@@ -55,12 +59,12 @@ export function useLeadAiControl(
 
         setState(nextState);
         return nextState;
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("Erro ao carregar controle de IA do lead:", error);
 
         if (!silent) {
           toast.error("Erro ao carregar controle da IA", {
-            description: error.message,
+            description: readErrorMessage(error),
           });
         }
 
@@ -112,11 +116,11 @@ export function useLeadAiControl(
         setState(nextState);
         toast.success(nextEnabled ? "IA ativada para o lead" : "IA desativada para o lead");
         return nextState;
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("Erro ao atualizar controle de IA do lead:", error);
         setState(previousState);
         toast.error("Erro ao atualizar controle da IA", {
-          description: error.message,
+          description: readErrorMessage(error),
         });
         return null;
       } finally {
@@ -151,25 +155,8 @@ export function useLeadAiControl(
       )
       .subscribe();
 
-    const leadStateChannel = supabase
-      .channel(`lead-ai-control:state:${leadId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "crm",
-          table: "ai_lead_state",
-          filter: `lead_id=eq.${leadId}`,
-        },
-        () => {
-          void fetchState({ silent: true });
-        }
-      )
-      .subscribe();
-
     return () => {
       supabase.removeChannel(messageChannel);
-      supabase.removeChannel(leadStateChannel);
     };
   }, [fetchState, hookEnabled, leadId]);
 

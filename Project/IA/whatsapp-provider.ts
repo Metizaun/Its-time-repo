@@ -29,6 +29,13 @@ export type SendMediaInput = {
   sourceType: WhatsAppSourceType;
 };
 
+export type SendVoiceNoteInput = {
+  instanceName: string;
+  to: string;
+  mediaUrl: string;
+  sourceType: WhatsAppSourceType;
+};
+
 export type SendResult = {
   provider: WhatsAppProviderName;
   providerMessageId: string | null;
@@ -40,6 +47,7 @@ export interface WhatsAppProvider {
   sendText(input: SendTextInput): Promise<SendResult>;
   sendTemplate(input: SendTemplateInput): Promise<SendResult>;
   sendMedia?(input: SendMediaInput): Promise<SendResult>;
+  sendVoiceNote?(input: SendVoiceNoteInput): Promise<SendResult>;
 }
 
 export class WhatsAppProviderError extends Error {

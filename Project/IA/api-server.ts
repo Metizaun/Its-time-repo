@@ -138,6 +138,22 @@ const manager = new AgentManager({
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL,
   openaiVisionModel: process.env.OPENAI_VISION_MODEL,
+  elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
+  elevenLabsDefaultVoiceId: process.env.ELEVENLABS_DEFAULT_VOICE_ID,
+  elevenLabsModel: process.env.ELEVENLABS_TTS_MODEL,
+  elevenLabsOutputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT,
+  elevenLabsTtsEnabled: process.env.ELEVENLABS_TTS_ENABLED === "true",
+  visagismToolEnabled: process.env.VISAGISM_TOOL_ENABLED === "true",
+  visagismInternalRuntimeEnabled: process.env.VISAGISM_INTERNAL_RUNTIME_ENABLED !== "false",
+  visagismAnalysisWorkerModel: process.env.VISAGISM_ANALYSIS_WORKER_MODEL,
+  visagismMatchingWorkerModel: process.env.VISAGISM_MATCHING_WORKER_MODEL,
+  visagismImageWorkerModel: process.env.VISAGISM_IMAGE_WORKER_MODEL,
+  prescriptionWorkerEnabled: process.env.PRESCRIPTION_WORKER_ENABLED !== "false",
+  prescriptionWorkerModel: process.env.PRESCRIPTION_WORKER_MODEL,
+  toolMediaAllowedHosts: (process.env.TOOL_MEDIA_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter(Boolean),
   redisUrl: process.env.REDIS_URL,
   evolutionApiUrl: requireEnv("EVOLUTION_API_URL"),
   evolutionApiKey: requireEnv("EVOLUTION_API_KEY"),
@@ -800,6 +816,15 @@ app.delete(
 );
 
 app.get(
+  "/api/agent-templates",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const templates = await manager.listAgentTemplates(req.authContext!);
+    res.json({ success: true, templates });
+  })
+);
+
+app.get(
   "/api/ai-agents",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -819,6 +844,8 @@ app.post(
         typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : undefined,
       model: typeof req.body.model === "string" ? req.body.model : undefined,
       provider: req.body.provider === "gemini" ? "gemini" : undefined,
+      temperature:
+        typeof req.body.temperature === "number" ? req.body.temperature : undefined,
       isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
         typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
@@ -838,6 +865,8 @@ app.post(
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
           : undefined,
+      templateKey:
+        typeof req.body.templateKey === "string" ? req.body.templateKey : undefined,
     });
 
     res.status(201).json({ success: true, agent });
@@ -857,6 +886,8 @@ app.patch(
         typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : undefined,
       model: typeof req.body.model === "string" ? req.body.model : undefined,
       provider: req.body.provider === "gemini" ? "gemini" : undefined,
+      temperature:
+        typeof req.body.temperature === "number" ? req.body.temperature : undefined,
       isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
         typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
@@ -889,6 +920,16 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const rules = await manager.getStageRules(req.authContext!, agentId);
     res.json({ success: true, rules });
+  })
+);
+
+app.delete(
+  "/api/ai-agents/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const result = await manager.deleteAgent(req.authContext!, agentId);
+    res.json(result);
   })
 );
 
@@ -946,6 +987,9 @@ app.post("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRe
           ? req.body.systemMessage
           : undefined,
     model: typeof req.body.model === "string" ? req.body.model : undefined,
+    temperature:
+      typeof req.body.temperature === "number" ? req.body.temperature : undefined,
+    isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
     bufferWaitMs:
       typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
     handoffEnabled:
@@ -956,6 +1000,8 @@ app.post("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRe
       typeof req.body.handoffTargetPhone === "string"
         ? req.body.handoffTargetPhone
         : undefined,
+    templateKey:
+      typeof req.body.templateKey === "string" ? req.body.templateKey : undefined,
   });
 
   res.status(201).json({ success: true, agent });
@@ -982,6 +1028,8 @@ app.patch(
             ? req.body.systemMessage
             : undefined,
       model: typeof req.body.model === "string" ? req.body.model : undefined,
+      temperature:
+        typeof req.body.temperature === "number" ? req.body.temperature : undefined,
       bufferWaitMs:
         typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
       handoffEnabled:
@@ -995,6 +1043,254 @@ app.patch(
     });
 
     res.json({ success: true, agent });
+  })
+);
+
+app.delete(
+  "/api/agents/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const result = await manager.deleteAgent(req.authContext!, agentId);
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const tools = await manager.listAgentTools(req.authContext!, agentId);
+    res.json({ success: true, tools });
+  })
+);
+
+app.patch(
+  "/api/agents/:id/tools/:toolKey",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const toolKey = getSingleParam(req.params.toolKey);
+    const tool = await manager.updateAgentTool(req.authContext!, agentId, toolKey, {
+      isEnabled: typeof req.body.isEnabled === "boolean" ? req.body.isEnabled : undefined,
+      config:
+        req.body.config && typeof req.body.config === "object" && !Array.isArray(req.body.config)
+          ? req.body.config
+          : undefined,
+    });
+    res.json({ success: true, tool });
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools/send_media/assets",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const assets = await manager.listToolMediaAssets(req.authContext!, agentId);
+    res.json({ success: true, assets });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/send_media/assets",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const mediaKind = req.body.mediaKind === "document" ? "document" : "image";
+    const asset = await manager.upsertToolMediaAsset(req.authContext!, agentId, {
+      assetKey: String(req.body.assetKey ?? ""),
+      displayName: String(req.body.displayName ?? ""),
+      description: typeof req.body.description === "string" ? req.body.description : undefined,
+      usageInstruction:
+        typeof req.body.usageInstruction === "string" ? req.body.usageInstruction : undefined,
+      sourceUrl: String(req.body.sourceUrl ?? ""),
+      mediaKind,
+      fileName: typeof req.body.fileName === "string" ? req.body.fileName : null,
+      defaultCaption:
+        typeof req.body.defaultCaption === "string" ? req.body.defaultCaption : null,
+    });
+    res.status(201).json({ success: true, asset });
+  })
+);
+
+app.delete(
+  "/api/agents/:id/tools/send_media/assets/:assetId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const assetId = getSingleParam(req.params.assetId);
+    const result = await manager.deactivateToolMediaAsset(req.authContext!, agentId, assetId);
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools/prescription_analyst/lens-price-rules",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const rules = await manager.listLensPriceRules(req.authContext!, agentId);
+    res.json({ success: true, rules });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/prescription_analyst/lens-price-rules",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const lensCategory = req.body.lensCategory === "multifocal" ? "multifocal" : "single_vision";
+    const rule = await manager.upsertLensPriceRule(req.authContext!, agentId, {
+      id: typeof req.body.id === "string" ? req.body.id : null,
+      displayName: String(req.body.displayName ?? ""),
+      lensCategory,
+      minSphere: Number(req.body.minSphere),
+      maxSphere: Number(req.body.maxSphere),
+      maxAbsCylinder: Number(req.body.maxAbsCylinder),
+      minAddition: req.body.minAddition === null || req.body.minAddition === undefined ? null : Number(req.body.minAddition),
+      maxAddition: req.body.maxAddition === null || req.body.maxAddition === undefined ? null : Number(req.body.maxAddition),
+      priceCents: Number(req.body.priceCents),
+      priority: Number(req.body.priority ?? 100),
+      isActive: req.body.isActive !== false,
+    });
+    res.status(201).json({ success: true, rule });
+  })
+);
+
+app.delete(
+  "/api/agents/:id/tools/prescription_analyst/lens-price-rules/:ruleId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.deactivateLensPriceRule(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      getSingleParam(req.params.ruleId)
+    );
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools/visagism/catalog",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const catalog = await manager.listVisagismCatalog(req.authContext!, agentId);
+    res.json({ success: true, catalog });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/visagism/catalog",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const item = await manager.upsertVisagismCatalogItem(req.authContext!, agentId, {
+      id: typeof req.body.id === "string" ? req.body.id : null,
+      productCode: String(req.body.productCode ?? ""),
+      recommendationDescription: String(req.body.recommendationDescription ?? ""),
+      attributes:
+        req.body.attributes && typeof req.body.attributes === "object" && !Array.isArray(req.body.attributes)
+          ? req.body.attributes
+          : undefined,
+      sourceUrl: String(req.body.sourceUrl ?? ""),
+      displayOrder: typeof req.body.displayOrder === "number" ? req.body.displayOrder : undefined,
+      isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
+    });
+    res.status(201).json({ success: true, item });
+  })
+);
+
+app.delete(
+  "/api/agents/:id/tools/visagism/catalog/:itemId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const itemId = getSingleParam(req.params.itemId);
+    const result = await manager.deactivateVisagismCatalogItem(req.authContext!, agentId, itemId);
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools/visagism/runs",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const runs = await manager.listVisagismRuns(req.authContext!, agentId);
+    res.json({ success: true, runs });
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools/visagism/runs/:runId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const runId = getSingleParam(req.params.runId);
+    const run = await manager.getVisagismRun(req.authContext!, agentId, runId);
+    res.json({ success: true, run });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/visagism/runs",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const result = await manager.startVisagismRun(req.authContext!, agentId, {
+      leadId: String(req.body.leadId ?? ""),
+      sourceMessageId: typeof req.body.sourceMessageId === "string" ? req.body.sourceMessageId : null,
+      excludedItemId: typeof req.body.excludedItemId === "string" ? req.body.excludedItemId : null,
+    });
+    res.status(result.status === "succeeded" ? 201 : 202).json({ success: true, ...result });
+  })
+);
+
+app.get(
+  "/api/agents/:id/tools/forwarding/destinations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const destinations = await manager.listForwardingDestinations(req.authContext!, agentId);
+    res.json({ success: true, destinations });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/forwarding/destinations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    if (req.body.mode !== "external_notification" && req.body.mode !== "agent") {
+      throw new HttpError(400, "Modo de encaminhamento invalido");
+    }
+    const destination = await manager.upsertForwardingDestination(req.authContext!, agentId, {
+      destinationKey: String(req.body.destinationKey ?? ""),
+      displayName: String(req.body.displayName ?? ""),
+      mode: req.body.mode,
+      targetPhone: typeof req.body.targetPhone === "string" ? req.body.targetPhone : null,
+      targetAgentId: typeof req.body.targetAgentId === "string" ? req.body.targetAgentId : null,
+      contextInstruction: String(req.body.contextInstruction ?? ""),
+    });
+    res.status(201).json({ success: true, destination });
+  })
+);
+
+app.delete(
+  "/api/agents/:id/tools/forwarding/destinations/:destinationId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const destinationId = getSingleParam(req.params.destinationId);
+    const result = await manager.deactivateForwardingDestination(
+      req.authContext!,
+      agentId,
+      destinationId
+    );
+    res.json(result);
   })
 );
 

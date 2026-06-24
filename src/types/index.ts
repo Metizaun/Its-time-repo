@@ -36,6 +36,8 @@ export interface AIAgent {
   handoff_enabled: boolean;
   handoff_prompt: string | null;
   handoff_target_phone: string | null;
+  template_key: string | null;
+  template_version: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

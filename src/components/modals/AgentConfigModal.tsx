@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { testAgentHandoff } from "@/services/agentService";
 import { AIAgent } from "@/types";
 import { Switch } from "@/components/ui/switch";
+import { AGENT_TOOLS_UI_ENABLED } from "@/lib/featureFlags";
 
 import { toast } from "sonner";
 
@@ -61,10 +62,18 @@ function stripPersonalityInstructions(prompt: string) {
 interface AgentConfigModalProps {
   open: boolean;
   agent: AIAgent | null;
+  templateKey?: string | null;
+  templateName?: string | null;
   onClose: () => void;
 }
 
-export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps) {
+export function AgentConfigModal({
+  open,
+  agent,
+  templateKey = null,
+  templateName = null,
+  onClose,
+}: AgentConfigModalProps) {
   const { session } = useAuth();
   const { agents, upsertAgent, saving } = useAgents();
   const { instances } = useInstances();
@@ -217,6 +226,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
         handoff_enabled: handoffEnabled,
         handoff_prompt: handoffPrompt.trim() || null,
         handoff_target_phone: handoffTargetPhone.trim() || null,
+        templateKey: agent ? null : templateKey,
       },
       agent?.id
     );
@@ -287,7 +297,11 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
               {agent ? "Editar Agente" : "Novo Agente"}
             </h2>
             <p className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
-              {agent ? `Editando: ${agent.name}` : "Configure seu novo Agente de IA"}
+              {agent
+                ? `Editando: ${agent.name}`
+                : templateName
+                  ? `Template: ${templateName}`
+                  : "Configure seu novo Agente de IA"}
             </p>
           </div>
 
@@ -454,6 +468,7 @@ export function AgentConfigModal({ open, agent, onClose }: AgentConfigModalProps
                   </div>
                 </div>
               </div>
+
               </div>
 
               <div

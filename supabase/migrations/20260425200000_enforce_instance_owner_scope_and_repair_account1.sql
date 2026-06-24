@@ -50,6 +50,13 @@ DECLARE
   v_guilherme_id uuid;
   v_juan_id uuid;
 BEGIN
+  -- Fresh local resets do not contain the production account-1 fixture. In that
+  -- case there is nothing to repair; partial real data must still fail loudly.
+  IF NOT EXISTS (SELECT 1 FROM crm.users WHERE aces_id = 1) THEN
+    RAISE NOTICE 'Conta 1 sem usuarios; reparo nominal de instancias ignorado';
+    RETURN;
+  END IF;
+
   SELECT id
   INTO v_lucas_id
   FROM crm.users

@@ -81,3 +81,15 @@ export async function patchCrmBackend<T>(path: string, body: unknown): Promise<T
 
   return parseBackendResponse<T>(response);
 }
+
+export async function deleteCrmBackend<T>(path: string): Promise<T> {
+  const accessToken = await getAccessToken();
+  const response = await fetch(buildBackendUrl(path), {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  return parseBackendResponse<T>(response);
+}

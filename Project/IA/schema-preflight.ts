@@ -10,6 +10,10 @@ const AGENT_FOLLOWUP_MIGRATION =
   "supabase/migrations/20260619194439_add_agent_native_followup.sql";
 const EXTERNAL_EVOLUTION_CREDENTIALS_MIGRATION =
   "supabase/migrations/20260622143901_add_external_evolution_credentials.sql";
+const AGENTS_TOOLS_BI_MIGRATION =
+  "supabase/migrations/20260622215036_create_agents_tools_and_bi_foundation.sql";
+const PRESCRIPTION_ANALYST_MIGRATION =
+  "supabase/migrations/20260623210142_add_prescription_analyst_foundation.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -352,6 +356,74 @@ async function validateAgentFollowupCancelRpc(serviceClient: SupabaseClient<any,
     : null;
 }
 
+async function validateBiProjectionRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_project_bi_outbox_batch", {
+    p_limit: 0,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.rpc_project_bi_outbox_batch",
+        AGENTS_TOOLS_BI_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateConfigureAgentAudioRpc(agentsClient: SupabaseClient<any, any, any>) {
+  const { error } = await agentsClient.rpc("configure_agent_audio", {
+    p_agent_id: NIL_UUID,
+    p_voice_id: "schema-preflight",
+    p_selection_rate: 0.018,
+    p_activate_agent: false,
+  });
+
+  if (!error) return null;
+  const normalized = normalizePostgrestError(error);
+  if (/Agente nao encontrado/i.test(normalized.message)) return null;
+  return buildSchemaFailure(
+    "agents.configure_agent_audio",
+    AGENTS_TOOLS_BI_MIGRATION,
+    error
+  );
+}
+
+async function validateOpticsTemplate(agentsClient: SupabaseClient<any, any, any>) {
+  const { data: template, error: templateError } = await agentsClient
+    .from("agent_templates")
+    .select("template_key, version, is_active")
+    .eq("template_key", "optics-consultant")
+    .eq("version", 1)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (templateError) {
+    return buildSchemaFailure("agents.agent_templates optics-consultant", AGENTS_TOOLS_BI_MIGRATION, templateError);
+  }
+  if (!template) {
+    return buildManualSchemaFailure(
+      "agents.agent_templates optics-consultant",
+      AGENTS_TOOLS_BI_MIGRATION,
+      "Template ativo nao encontrado"
+    );
+  }
+
+  const { count, error: toolsError } = await agentsClient
+    .from("agent_template_tools")
+    .select("tool_key", { count: "exact", head: true })
+    .eq("template_key", "optics-consultant")
+    .eq("template_version", 1);
+  if (toolsError) {
+    return buildSchemaFailure("agents.agent_template_tools optics-consultant", AGENTS_TOOLS_BI_MIGRATION, toolsError);
+  }
+  return count === 5
+    ? null
+    : buildManualSchemaFailure(
+        "agents.agent_template_tools optics-consultant",
+        AGENTS_TOOLS_BI_MIGRATION,
+        `Esperadas 5 Tools; encontradas ${count ?? 0}`
+      );
+}
+
 async function validateChatAttachmentsStorage(
   serviceClient: StorageBucketLookupClient
 ) {
@@ -424,6 +496,11 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const agentsClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "agents" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const calendarClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     db: { schema: "calendar" },
     auth: { persistSession: false, autoRefreshToken: false },
@@ -476,31 +553,89 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       serviceClient,
+      "instance_access_memberships",
+      ["id", "aces_id", "instance_name", "crm_user_id", "access_level", "is_active"],
+      "crm.instance_access_memberships",
+      "supabase/migrations/20260624135935_add_instance_access_memberships.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "v_lead_details",
       ["id", "aces_id"],
       "crm.v_lead_details.aces_id",
       "supabase/migrations/20260618205533_fix_dashboard_scope_and_external_webhook_sync.sql"
     ),
     validateSelectedColumns(
-      serviceClient,
+      agentsClient,
       "ai_agents",
-      ["id", "handoff_enabled", "handoff_prompt", "handoff_target_phone"],
-      "crm.ai_agents (handoff)",
-      "supabase/migrations/20260423230000_add_ai_agent_handoff_config.sql"
+      [
+        "id",
+        "handoff_enabled",
+        "handoff_prompt",
+        "handoff_target_phone",
+        "template_key",
+        "template_version",
+      ],
+      "agents.ai_agents",
+      AGENTS_TOOLS_BI_MIGRATION
     ),
     validateSelectedColumns(
-      serviceClient,
+      agentsClient,
       "ai_lead_state",
       ["agent_id", "lead_id", "manual_ai_enabled"],
-      "crm.ai_lead_state.manual_ai_enabled",
-      "supabase/migrations/20260420110000_add_manual_ai_override_to_lead_state.sql"
+      "agents.ai_lead_state.manual_ai_enabled",
+      AGENTS_TOOLS_BI_MIGRATION
+    ),
+    validateOpticsTemplate(agentsClient),
+    validateConfigureAgentAudioRpc(agentsClient),
+    validateSelectedColumns(
+      agentsClient,
+      "ai_lead_state",
+      ["agent_id", "lead_id", "pause_origin", "pause_reference", "paused_at"],
+      "agents.ai_lead_state (pause metadata)",
+      AGENTS_TOOLS_BI_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "agent_templates",
+      ["template_key", "version", "display_name", "agent_defaults", "is_active"],
+      "agents.agent_templates",
+      AGENTS_TOOLS_BI_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "agent_tools",
+      ["id", "aces_id", "agent_id", "tool_key", "is_enabled", "readiness", "config"],
+      "agents.agent_tools",
+      AGENTS_TOOLS_BI_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "agent_tool_runs",
+      ["id", "aces_id", "agent_id", "agent_tool_id", "lead_id", "status", "idempotency_key"],
+      "agents.agent_tool_runs",
+      AGENTS_TOOLS_BI_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "visagism_catalog_items",
+      ["id", "aces_id", "product_code", "recommendation_description", "attributes", "source_url", "is_active", "display_order"],
+      "agents.visagism_catalog_items",
+      "supabase/migrations/20260622233000_add_visagism_backend_foundation.sql"
     ),
     validateSelectedColumns(
       serviceClient,
-      "ai_lead_state",
-      ["agent_id", "lead_id", "pause_origin", "pause_reference", "paused_at"],
-      "crm.ai_lead_state (pause metadata)",
-      "supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql"
+      "receituarios",
+      ["id", "lead_id", "aces_id", "source_attachment_id", "agent_tool_run_id", "status", "raw_extraction"],
+      "crm.receituarios (prescription analyst)",
+      PRESCRIPTION_ANALYST_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "lens_price_rules",
+      ["id", "aces_id", "agent_tool_id", "lens_category", "min_sphere", "max_sphere", "price_cents", "priority", "is_active"],
+      "crm.lens_price_rules",
+      PRESCRIPTION_ANALYST_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -733,6 +868,7 @@ export async function assertRuntimeSchemaCompatibility(
     validateAgentFollowupMarkSentRpc(serviceClient),
     validateAgentFollowupMarkFailedRpc(serviceClient),
     validateAgentFollowupCancelRpc(serviceClient),
+    validateBiProjectionRpc(serviceClient),
   ]);
 
   const failures = checks.filter((check): check is SchemaFailure => check !== null);

@@ -49,7 +49,7 @@ FROM (
   UNION
 
   SELECT a.instance_name AS instancia
-  FROM crm.ai_agents a
+  FROM agents.ai_agents a
   CROSS JOIN tmp_juan_context jc
   WHERE a.aces_id = jc.aces_id
     AND a.created_by = jc.crm_user_id

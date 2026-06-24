@@ -4,6 +4,10 @@ import { cn } from "@/lib/utils";
 import { useAgents } from "@/hooks/useAgents";
 import { AIAgent } from "@/types";
 import { AgentConfigModal } from "@/components/modals/AgentConfigModal";
+import { AgentCreationDialog } from "@/components/agents/AgentCreationDialog";
+import { AgentToolRail } from "@/components/agents/AgentToolRail";
+import { AGENT_TOOLS_UI_ENABLED } from "@/lib/featureFlags";
+import type { AgentTemplate } from "@/services/agentToolsService";
 import {
   Dialog,
   DialogContent,
@@ -18,12 +22,26 @@ import { Input } from "@/components/ui/input";
 export default function Agentes() {
   const { agents, loading, toggleAgentStatus, deleteAgent, statusAgentId, deletingAgentId } = useAgents();
   const [modalOpen, setModalOpen] = useState(false);
+  const [creationPickerOpen, setCreationPickerOpen] = useState(false);
+  const [creationTemplate, setCreationTemplate] = useState<AgentTemplate | null>(null);
   const [editingAgent, setEditingAgent] = useState<AIAgent | null>(null);
   const [agentToDelete, setAgentToDelete] = useState<AIAgent | null>(null);
   const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
 
   function openCreate() {
     setEditingAgent(null);
+    setCreationTemplate(null);
+    if (AGENT_TOOLS_UI_ENABLED) {
+      setCreationPickerOpen(true);
+      return;
+    }
+
+    setModalOpen(true);
+  }
+
+  function selectCreationMode(template: AgentTemplate | null) {
+    setCreationTemplate(template);
+    setCreationPickerOpen(false);
     setModalOpen(true);
   }
 
@@ -35,6 +53,7 @@ export default function Agentes() {
   function handleClose() {
     setModalOpen(false);
     setEditingAgent(null);
+    setCreationTemplate(null);
   }
 
   function openDelete(agent: AIAgent) {
@@ -173,6 +192,10 @@ export default function Agentes() {
               </div>
 
               {/* Footer actions */}
+              {AGENT_TOOLS_UI_ENABLED && (
+                <AgentToolRail agentId={agent.id} />
+              )}
+
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--color-border-subtle)]">
                 <span
                   className={cn(
@@ -215,9 +238,19 @@ export default function Agentes() {
       )}
 
       {/* Modal */}
+      {AGENT_TOOLS_UI_ENABLED && (
+        <AgentCreationDialog
+          open={creationPickerOpen}
+          onOpenChange={setCreationPickerOpen}
+          onSelect={selectCreationMode}
+        />
+      )}
+
       <AgentConfigModal
         open={modalOpen}
         agent={editingAgent}
+        templateKey={creationTemplate?.key ?? null}
+        templateName={creationTemplate?.name ?? null}
         onClose={handleClose}
       />
 

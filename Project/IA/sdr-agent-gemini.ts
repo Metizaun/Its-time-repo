@@ -1,6 +1,8 @@
 import axios from "axios";
 import Redis from "ioredis";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -96,12 +98,15 @@ type AgentRow = {
   provider: "gemini";
   model: string;
   is_active: boolean;
+  temperature: number;
   buffer_wait_ms: number;
   human_pause_minutes: number;
   auto_apply_threshold: number;
   handoff_enabled: boolean;
   handoff_prompt: string | null;
   handoff_target_phone: string | null;
+  template_key: string | null;
+  template_version: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -137,6 +142,91 @@ type TagRow = {
   usage_description: string | null;
 };
 
+type VisagismCatalogItemRow = {
+  id: string;
+  aces_id: number;
+  product_code: string;
+  recommendation_description: string;
+  attributes: JsonRecord;
+  source_url: string;
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LensCategory = "single_vision" | "multifocal";
+
+export type LensPriceRule = {
+  id: string;
+  displayName: string;
+  lensCategory: LensCategory;
+  minSphere: number;
+  maxSphere: number;
+  maxAbsCylinder: number;
+  minAddition: number | null;
+  maxAddition: number | null;
+  priceCents: number;
+  currency: "BRL";
+  priority: number;
+  isActive: boolean;
+};
+
+export type NormalizedPrescription = {
+  odSphere: number | null;
+  odCylinder: number | null;
+  odAxis: number | null;
+  oeSphere: number | null;
+  oeCylinder: number | null;
+  oeAxis: number | null;
+  addition: number | null;
+};
+
+type PrescriptionExtraction = NormalizedPrescription & {
+  distancePd: number | null;
+  nearPd: number | null;
+  patientName: string | null;
+  prescriberName: string | null;
+  prescriberRegistration: string | null;
+  prescriptionDate: string | null;
+  expiresAt: string | null;
+  observations: string | null;
+  confidence: number;
+  isPrescription: boolean;
+};
+
+export type OpticsImageKind = "prescription" | "face" | "product" | "document" | "other";
+
+export type FaceAnalysis = {
+  faceShape: string | null;
+  summary: string | null;
+  hair: string | null;
+  skinTone: string | null;
+  visualFeatures: string[];
+};
+
+export type OpticsImageAnalysis = {
+  kind: OpticsImageKind;
+  evidence: string[];
+  prescription: PrescriptionExtraction | null;
+  face: FaceAnalysis | null;
+};
+
+type VisagismLeadAnswerRow = {
+  question_key: string;
+  answer_text: string | null;
+  answer_value: JsonRecord | null;
+  answered_at: string;
+};
+
+type VisagismRunSnapshot = {
+  desiredPerception: string | null;
+  desiredFeeling: string | null;
+  selectedItemId: string | null;
+  analysis: JsonRecord;
+  image: JsonRecord;
+};
+
 type InstanceSetupStatus = "pending_qr" | "connected" | "expired" | "cancelled";
 type InstanceConnectionMode = "local" | "external_webhook";
 type InstanceAction = "continue_setup" | "reconnect" | "sync_status" | "disconnect" | "delete";
@@ -165,6 +255,13 @@ type InstanceProviderCredentialRow = {
   instance_name: string;
   aces_id: number;
   evolution_api_key: string;
+};
+
+type InstanceAccessMembershipRow = {
+  instance_name: string;
+  crm_user_id: string;
+  access_level: string;
+  is_active: boolean;
 };
 
 type EvolutionTransport = {
@@ -198,6 +295,8 @@ type LeadRow = {
   last_city: string | null;
   notes: string | null;
   check: string | null;
+  como_quer_ser_percebido: string | null;
+  qual_imagem_passar: string | null;
   last_message_at: string | null;
   updated_at: string | null;
 };
@@ -367,6 +466,7 @@ type CreateAgentInput = {
   systemPrompt?: string;
   model?: string;
   provider?: "gemini";
+  temperature?: number;
   bufferWaitMs?: number;
   humanPauseMinutes?: number;
   autoApplyThreshold?: number;
@@ -374,9 +474,15 @@ type CreateAgentInput = {
   handoffEnabled?: boolean;
   handoffPrompt?: string;
   handoffTargetPhone?: string;
+  templateKey?: string | null;
 };
 
 type UpdateAgentInput = Partial<CreateAgentInput>;
+
+type UpdateAgentToolInput = {
+  isEnabled?: boolean;
+  config?: JsonRecord;
+};
 
 type StageRuleInput = {
   stage_id: string;
@@ -439,6 +545,14 @@ type NativeFollowupDecision = {
   reason: string;
 };
 
+type VisagismDecision = {
+  requested: boolean;
+  desired_perception_answer: string | null;
+  desired_feeling_answer: string | null;
+  should_start: boolean;
+  reason: string;
+};
+
 type StructuredModelResponse = {
   reply_blocks: string[];
   stage_decision: {
@@ -467,10 +581,12 @@ type StructuredModelResponse = {
   should_handoff: boolean;
   handoff_reason: string;
   native_followup: NativeFollowupDecision;
+  visagism: VisagismDecision;
 };
 
 type ReplyModelResponse = {
   reply_blocks: string[];
+  media_asset_key: string | null;
 };
 
 type GeminiExecutionResult<TParsed> = {
@@ -485,7 +601,9 @@ type GeminiExecutionResult<TParsed> = {
 
 type HandoffExecutionResult = {
   triggered: boolean;
+  mode: "external_notification" | "agent" | null;
   targetPhone: string | null;
+  targetAgentId: string | null;
   reason: string;
   notification: string | null;
 };
@@ -523,6 +641,19 @@ type ServiceConfig = {
   openaiApiKey?: string;
   openaiTranscriptionModel?: string;
   openaiVisionModel?: string;
+  elevenLabsApiKey?: string;
+  elevenLabsDefaultVoiceId?: string;
+  elevenLabsModel?: string;
+  elevenLabsOutputFormat?: string;
+  elevenLabsTtsEnabled?: boolean;
+  visagismToolEnabled?: boolean;
+  visagismInternalRuntimeEnabled?: boolean;
+  visagismAnalysisWorkerModel?: string;
+  visagismMatchingWorkerModel?: string;
+  visagismImageWorkerModel?: string;
+  prescriptionWorkerEnabled?: boolean;
+  prescriptionWorkerModel?: string;
+  toolMediaAllowedHosts?: string[];
   redisUrl?: string;
   evolutionApiUrl: string;
   evolutionApiKey: string;
@@ -672,6 +803,94 @@ function phoneVariants(phone: string): string[] {
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+export function resolveAudioDispatchFailure(dispatched: boolean) {
+  return dispatched ? "delivered_requires_reconciliation" : "fallback_to_text";
+}
+
+export function pickVisagismCatalogItem(params: {
+  catalog: Array<{ id: string; displayOrder: number; productCode: string }>;
+  excludedItemId?: string | null;
+  priorSelectedItemId?: string | null;
+}) {
+  const excluded = params.excludedItemId ?? params.priorSelectedItemId ?? null;
+  const ordered = [...params.catalog].sort((left, right) => {
+    if (left.displayOrder !== right.displayOrder) return left.displayOrder - right.displayOrder;
+    return left.productCode.localeCompare(right.productCode);
+  });
+
+  const eligible = ordered.filter((item) => item.id !== excluded);
+  if (eligible.length > 0) {
+    return eligible[0] ?? null;
+  }
+  return ordered[0] ?? null;
+}
+
+export function resolveVisagismIdempotencyAction(
+  existingStatus: string | null,
+  ready: boolean
+): "create" | "resume" | "return_existing" {
+  if (!existingStatus) return "create";
+  return existingStatus === "waiting_input" && ready ? "resume" : "return_existing";
+}
+
+export function createVisagismEditRequest<T>(model: string, prompt: string, image: T[]) {
+  if (image.length !== 2) {
+    throw new Error("Visagismo exige exatamente a foto do lead e a imagem da armacao");
+  }
+  return { model, image, prompt, size: "1024x1024" as const };
+}
+
+export async function invokeVisagismImageEdit<TRequest, TResponse>(
+  edit: (request: TRequest) => Promise<TResponse>,
+  request: TRequest
+) {
+  return edit(request);
+}
+
+export function getPrescriptionValidationErrors(prescription: NormalizedPrescription) {
+  const errors: string[] = [];
+  if (prescription.odSphere === null && prescription.odCylinder === null) errors.push("od_missing");
+  if (prescription.oeSphere === null && prescription.oeCylinder === null) errors.push("oe_missing");
+  if (prescription.odCylinder !== null && prescription.odCylinder !== 0 && prescription.odAxis === null) {
+    errors.push("od_axis_missing");
+  }
+  if (prescription.oeCylinder !== null && prescription.oeCylinder !== 0 && prescription.oeAxis === null) {
+    errors.push("oe_axis_missing");
+  }
+  for (const [key, axis] of [["od_axis", prescription.odAxis], ["oe_axis", prescription.oeAxis]] as const) {
+    if (axis !== null && (!Number.isInteger(axis) || axis < 0 || axis > 180)) errors.push(`${key}_invalid`);
+  }
+  return errors;
+}
+
+export function matchLensPriceRule(
+  prescription: NormalizedPrescription,
+  rules: LensPriceRule[]
+): LensPriceRule | null {
+  if (getPrescriptionValidationErrors(prescription).length > 0) return null;
+  const category: LensCategory = (prescription.addition ?? 0) > 0 ? "multifocal" : "single_vision";
+  const spheres = [prescription.odSphere, prescription.oeSphere].filter(
+    (value): value is number => value !== null
+  );
+  const cylinders = [prescription.odCylinder, prescription.oeCylinder].filter(
+    (value): value is number => value !== null
+  );
+
+  return [...rules]
+    .filter((rule) => {
+      if (!rule.isActive || rule.lensCategory !== category) return false;
+      if (spheres.some((value) => value < rule.minSphere || value > rule.maxSphere)) return false;
+      if (cylinders.some((value) => Math.abs(value) > rule.maxAbsCylinder)) return false;
+      if (category === "multifocal") {
+        const addition = prescription.addition;
+        if (addition === null || rule.minAddition === null || rule.maxAddition === null) return false;
+        if (addition < rule.minAddition || addition > rule.maxAddition) return false;
+      }
+      return true;
+    })
+    .sort((left, right) => left.priority - right.priority || left.displayName.localeCompare(right.displayName))[0] ?? null;
 }
 
 function addHours(date: Date, hours: number) {
@@ -848,6 +1067,7 @@ function parseStructuredJson(text: string): StructuredModelResponse {
   const attendanceSummary = asRecord(parsed.attendance_summary);
   const leadVerification = asRecord(parsed.lead_verification);
   const nativeFollowup = asRecord(parsed.native_followup);
+  const visagism = asRecord(parsed.visagism);
 
   return {
     reply_blocks: Array.isArray(parsed.reply_blocks)
@@ -898,6 +1118,13 @@ function parseStructuredJson(text: string): StructuredModelResponse {
       confidence: clampConfidence(nativeFollowup.confidence),
       reason: nativeFollowup.reason ? String(nativeFollowup.reason) : "",
     },
+    visagism: {
+      requested: visagism.requested === true,
+      desired_perception_answer: asString(visagism.desired_perception_answer),
+      desired_feeling_answer: asString(visagism.desired_feeling_answer),
+      should_start: visagism.should_start === true,
+      reason: asString(visagism.reason) ?? "",
+    },
   };
 }
 
@@ -909,6 +1136,83 @@ function parseReplyJson(text: string): ReplyModelResponse {
     reply_blocks: Array.isArray(parsed.reply_blocks)
       ? parsed.reply_blocks.map((item) => String(item).trim()).filter(Boolean).slice(0, 3)
       : [],
+    media_asset_key: parsed.media_asset_key ? String(parsed.media_asset_key).trim() : null,
+  };
+}
+
+function parseNullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const normalized = typeof value === "string" ? value.replace(",", ".") : value;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parsePrescriptionRecord(parsed: JsonRecord): PrescriptionExtraction {
+  const nullableText = (value: unknown) => asString(value);
+  const nullableDate = (value: unknown) => {
+    const date = asString(value);
+    return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+  };
+  return {
+    odSphere: parseNullableNumber(parsed.od_sphere),
+    odCylinder: parseNullableNumber(parsed.od_cylinder),
+    odAxis: parseNullableNumber(parsed.od_axis),
+    oeSphere: parseNullableNumber(parsed.oe_sphere),
+    oeCylinder: parseNullableNumber(parsed.oe_cylinder),
+    oeAxis: parseNullableNumber(parsed.oe_axis),
+    addition: parseNullableNumber(parsed.addition),
+    distancePd: parseNullableNumber(parsed.distance_pd),
+    nearPd: parseNullableNumber(parsed.near_pd),
+    patientName: nullableText(parsed.patient_name),
+    prescriberName: nullableText(parsed.prescriber_name),
+    prescriberRegistration: nullableText(parsed.prescriber_registration),
+    prescriptionDate: nullableDate(parsed.prescription_date),
+    expiresAt: nullableDate(parsed.expires_at),
+    observations: nullableText(parsed.observations),
+    confidence: clampConfidence(parsed.confidence),
+    isPrescription: parsed.is_prescription === true,
+  };
+}
+
+export function parseOpticsImageAnalysis(text: string): OpticsImageAnalysis {
+  const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
+  const parsed = asRecord(JSON.parse(cleaned));
+  const rawKind = asString(parsed.kind);
+  const kind: OpticsImageKind =
+    rawKind === "prescription" || rawKind === "face" || rawKind === "product" || rawKind === "document"
+      ? rawKind
+      : parsed.is_prescription === true
+        ? "prescription"
+        : "other";
+  const prescriptionRecord = Object.keys(asRecord(parsed.prescription)).length > 0
+    ? asRecord(parsed.prescription)
+    : parsed;
+  const faceRecord = asRecord(parsed.face);
+
+  return {
+    kind,
+    evidence: Array.isArray(parsed.evidence)
+      ? parsed.evidence.map((item) => truncateText(String(item).trim(), 160)).filter(Boolean).slice(0, 8)
+      : [],
+    prescription:
+      kind === "prescription"
+        ? parsePrescriptionRecord({ ...prescriptionRecord, is_prescription: true })
+        : null,
+    face:
+      kind === "face"
+        ? {
+            faceShape: asString(faceRecord.face_shape),
+            summary: asString(faceRecord.summary),
+            hair: asString(faceRecord.hair),
+            skinTone: asString(faceRecord.skin_tone),
+            visualFeatures: Array.isArray(faceRecord.visual_features)
+              ? faceRecord.visual_features
+                  .map((item) => truncateText(String(item).trim(), 120))
+                  .filter(Boolean)
+                  .slice(0, 10)
+              : [],
+          }
+        : null,
   };
 }
 
@@ -1060,6 +1364,18 @@ function isTransientGeminiError(error: unknown) {
   return /\b(429|500|503|504)\b/i.test(message) || /high demand|temporar|try again later|unavailable|timeout/i.test(message);
 }
 
+export function isTransientVisagismError(error: unknown) {
+  if (error instanceof WhatsAppProviderError) {
+    return error.kind === "transient" && error.statusCode !== null;
+  }
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    return status === 408 || status === 429 || (typeof status === "number" && status >= 500);
+  }
+  const message = extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : "");
+  return /\b(408|429|500|502|503|504)\b/i.test(message) || /temporar|timeout|unavailable|try again/i.test(message);
+}
+
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
@@ -1079,6 +1395,7 @@ export class AgentManager {
 
   private readonly authClient: SupabaseClient<any, any, any>;
   private readonly serviceClient: SupabaseClient<any, any, any>;
+  private readonly agentsClient: SupabaseClient<any, any, any>;
   private readonly redis: Redis | null;
   private readonly memoryBuffers = new Map<string, ParsedWebhookMessage[]>();
   private readonly memoryTimers = new Map<string, NodeJS.Timeout>();
@@ -1094,6 +1411,19 @@ export class AgentManager {
   private readonly chatCacheTtlSeconds: number;
   private readonly chatSignedDownloadTtlSeconds: number;
   private readonly chatUploadIntentTtlMinutes: number;
+  private readonly elevenLabsApiKey: string | null;
+  private readonly elevenLabsDefaultVoiceId: string | null;
+  private readonly elevenLabsModel: string;
+  private readonly elevenLabsOutputFormat: string;
+  private readonly elevenLabsTtsEnabled: boolean;
+  private readonly visagismToolEnabled: boolean;
+  private readonly visagismInternalRuntimeEnabled: boolean;
+  private readonly visagismAnalysisWorkerModel: string;
+  private readonly visagismMatchingWorkerModel: string;
+  private readonly visagismImageWorkerModel: string;
+  private readonly prescriptionWorkerEnabled: boolean;
+  private readonly prescriptionWorkerModel: string;
+  private readonly toolMediaAllowedHosts: Set<string>;
 
   constructor(private readonly config: ServiceConfig) {
     this.authClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -1104,6 +1434,11 @@ export class AgentManager {
     this.serviceClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       db: { schema: "crm" },
+    });
+
+    this.agentsClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      db: { schema: "agents" },
     });
 
     this.redis = config.redisUrl ? new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 }) : null;
@@ -1130,6 +1465,28 @@ export class AgentManager {
     this.chatUploadIntentTtlMinutes = parsePositiveInteger(
       config.chatAttachmentUploadIntentTtlMinutes,
       AgentManager.DEFAULT_CHAT_UPLOAD_INTENT_TTL_MINUTES
+    );
+    this.elevenLabsApiKey = config.elevenLabsApiKey?.trim() || null;
+    this.elevenLabsDefaultVoiceId = config.elevenLabsDefaultVoiceId?.trim() || null;
+    this.elevenLabsModel = config.elevenLabsModel?.trim() || "eleven_flash_v2_5";
+    this.elevenLabsOutputFormat = config.elevenLabsOutputFormat?.trim() || "mp3_44100_128";
+    this.elevenLabsTtsEnabled = config.elevenLabsTtsEnabled === true;
+    this.visagismToolEnabled = config.visagismToolEnabled === true;
+    this.visagismInternalRuntimeEnabled = config.visagismInternalRuntimeEnabled !== false;
+    this.visagismAnalysisWorkerModel = config.visagismAnalysisWorkerModel?.trim() || "gemini-2.5-flash";
+    this.visagismMatchingWorkerModel = config.visagismMatchingWorkerModel?.trim() || "gemini-2.5-flash";
+    this.visagismImageWorkerModel = config.visagismImageWorkerModel?.trim() || "gpt-image-1";
+    this.prescriptionWorkerEnabled = config.prescriptionWorkerEnabled !== false;
+    this.prescriptionWorkerModel = config.prescriptionWorkerModel?.trim() || "gemini-2.5-flash";
+    this.toolMediaAllowedHosts = new Set(
+      [
+        "drive.google.com",
+        "docs.google.com",
+        "googleusercontent.com",
+        ...(config.toolMediaAllowedHosts ?? []),
+      ]
+        .map((host) => host.trim().toLowerCase())
+        .filter(Boolean)
     );
   }
 
@@ -1483,7 +1840,6 @@ export class AgentManager {
         updated_at: new Date().toISOString(),
       })
       .eq("aces_id", context.acesId)
-      .eq("created_by", context.crmUserId)
       .eq("instance_name", instanceName)
       .eq("is_active", true);
 
@@ -1510,7 +1866,6 @@ export class AgentManager {
       .select("id, humanized_dispatch_enabled")
       .eq("aces_id", context.acesId)
       .eq("instance_name", instanceName)
-      .eq("created_by", context.crmUserId)
       .eq("is_active", true);
 
     if (error) {
@@ -1758,10 +2113,64 @@ export class AgentManager {
     }
 
     if (ownerId && existing.created_by !== ownerId) {
-      throw new HttpError(403, "Instancia nao pertence ao usuario atual");
+      const { data, error } = await this.serviceClient
+        .from("instance_access_memberships")
+        .select("instance_name")
+        .eq("aces_id", acesId)
+        .eq("instance_name", instanceName)
+        .eq("crm_user_id", ownerId)
+        .eq("is_active", true)
+        .maybeSingle<InstanceAccessMembershipRow>();
+
+      if (error) {
+        throw new HttpError(500, "Nao foi possivel validar o compartilhamento da instancia", error);
+      }
+
+      if (!data) {
+        throw new HttpError(403, "Instancia nao pertence ao usuario atual");
+      }
     }
 
     return existing;
+  }
+
+  private async getAccessibleInstanceNames(acesId: number, crmUserId?: string | null) {
+    if (!crmUserId) {
+      return new Set<string>();
+    }
+
+    const [{ data: ownedInstances, error: ownedError }, { data: sharedMemberships, error: sharedError }] =
+      await Promise.all([
+        this.serviceClient
+          .from("instance")
+          .select("instancia")
+          .eq("aces_id", acesId)
+          .eq("created_by", crmUserId),
+        this.serviceClient
+          .from("instance_access_memberships")
+          .select("instance_name")
+          .eq("aces_id", acesId)
+          .eq("crm_user_id", crmUserId)
+          .eq("is_active", true),
+      ]);
+
+    if (ownedError) {
+      throw new HttpError(500, "Nao foi possivel listar as instancias do usuario", ownedError);
+    }
+
+    if (sharedError) {
+      throw new HttpError(500, "Nao foi possivel listar os compartilhamentos de instancia", sharedError);
+    }
+
+    const accessibleInstances = new Set<string>();
+    for (const row of (ownedInstances ?? []) as Array<{ instancia: string }>) {
+      accessibleInstances.add(String(row.instancia));
+    }
+    for (const row of (sharedMemberships ?? []) as Array<{ instance_name: string }>) {
+      accessibleInstances.add(String(row.instance_name));
+    }
+
+    return accessibleInstances;
   }
 
   private async fetchQrCodeFromEvolution(instanceName: string) {
@@ -1780,17 +2189,12 @@ export class AgentManager {
   }
 
   private async getAgentForAccount(agentId: string, acesId: number, ownerId?: string | null) {
-    let query = this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_agents")
       .select("*")
       .eq("id", agentId)
-      .eq("aces_id", acesId);
-
-    if (ownerId) {
-      query = query.eq("created_by", ownerId);
-    }
-
-    const { data, error } = await query.maybeSingle();
+      .eq("aces_id", acesId)
+      .maybeSingle();
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel carregar o agente", error);
@@ -1800,11 +2204,30 @@ export class AgentManager {
       throw new HttpError(404, "Agente nao encontrado");
     }
 
+    if (ownerId && data.created_by !== ownerId) {
+      const { data: membership, error: membershipError } = await this.serviceClient
+        .from("instance_access_memberships")
+        .select("instance_name")
+        .eq("aces_id", acesId)
+        .eq("instance_name", data.instance_name)
+        .eq("crm_user_id", ownerId)
+        .eq("is_active", true)
+        .maybeSingle<InstanceAccessMembershipRow>();
+
+      if (membershipError) {
+        throw new HttpError(500, "Nao foi possivel validar o compartilhamento do agente", membershipError);
+      }
+
+      if (!membership) {
+        throw new HttpError(404, "Agente nao encontrado");
+      }
+    }
+
     return data as AgentRow;
   }
 
   private async getAgentById(agentId: string) {
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_agents")
       .select("*")
       .eq("id", agentId)
@@ -1822,17 +2245,13 @@ export class AgentManager {
   }
 
   private async getAnyAgentByInstance(instanceName: string, acesId?: number, ownerId?: string | null) {
-    let query = this.serviceClient
+    let query = this.agentsClient
       .from("ai_agents")
       .select("*")
       .eq("instance_name", instanceName);
 
     if (typeof acesId === "number") {
       query = query.eq("aces_id", acesId);
-    }
-
-    if (ownerId) {
-      query = query.eq("created_by", ownerId);
     }
 
     const { data, error } = await query
@@ -1845,7 +2264,31 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel localizar o agente da instancia", error);
     }
 
-    return (data as AgentRow | null) ?? null;
+    const agent = (data as AgentRow | null) ?? null;
+    if (!agent) {
+      return null;
+    }
+
+    if (ownerId && agent.created_by !== ownerId) {
+      const { data: membership, error: membershipError } = await this.serviceClient
+        .from("instance_access_memberships")
+        .select("instance_name")
+        .eq("aces_id", typeof acesId === "number" ? acesId : agent.aces_id)
+        .eq("instance_name", instanceName)
+        .eq("crm_user_id", ownerId)
+        .eq("is_active", true)
+        .maybeSingle<InstanceAccessMembershipRow>();
+
+      if (membershipError) {
+        throw new HttpError(500, "Nao foi possivel validar o compartilhamento do agente", membershipError);
+      }
+
+      if (!membership) {
+        return null;
+      }
+    }
+
+    return agent;
   }
 
   private async getStagesForAccount(acesId: number) {
@@ -1878,7 +2321,7 @@ export class AgentManager {
 
   private async syncMissingStageRules(agent: AgentRow) {
     const stages = await this.getStagesForAccount(agent.aces_id);
-    const { data: currentRules, error } = await this.serviceClient
+    const { data: currentRules, error } = await this.agentsClient
       .from("ai_stage_rules")
       .select("stage_id")
       .eq("agent_id", agent.id);
@@ -1905,7 +2348,7 @@ export class AgentManager {
       return;
     }
 
-    const { error: insertError } = await this.serviceClient.from("ai_stage_rules").insert(missing);
+    const { error: insertError } = await this.agentsClient.from("ai_stage_rules").insert(missing);
     if (insertError) {
       throw new HttpError(500, "Nao foi possivel criar as regras iniciais de etapa", insertError);
     }
@@ -1913,19 +2356,257 @@ export class AgentManager {
 
   async listAgents(context: AuthContext) {
     this.ensureAdmin(context);
+    const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId);
 
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_agents")
       .select("*")
       .eq("aces_id", context.acesId)
-      .eq("created_by", context.crmUserId)
       .order("created_at", { ascending: true });
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel listar os agentes", error);
     }
 
-    return (data ?? []) as AgentRow[];
+    return ((data ?? []) as AgentRow[]).filter(
+      (agent) => accessibleInstances.has(agent.instance_name)
+    );
+  }
+
+  async listAgentTemplates(context: AuthContext) {
+    this.ensureAdmin(context);
+
+    const [{ data: templates, error: templateError }, { data: templateTools, error: toolError }, { data: definitions, error: definitionError }] =
+      await Promise.all([
+        this.agentsClient
+          .from("agent_templates")
+          .select("*")
+          .eq("is_active", true)
+          .order("display_name", { ascending: true })
+          .order("version", { ascending: false }),
+        this.agentsClient
+          .from("agent_template_tools")
+          .select("*")
+          .order("display_order", { ascending: true }),
+        this.agentsClient
+          .from("tool_definitions")
+          .select("tool_key, version, display_name, description, icon")
+          .eq("is_active", true),
+      ]);
+
+    const firstError = templateError ?? toolError ?? definitionError;
+    if (firstError) {
+      throw new HttpError(500, "Nao foi possivel carregar os templates de agentes", firstError);
+    }
+
+    const latestTemplates = new Map<string, any>();
+    for (const template of templates ?? []) {
+      if (!latestTemplates.has(String(template.template_key))) {
+        latestTemplates.set(String(template.template_key), template);
+      }
+    }
+
+    const definitionMap = new Map(
+      (definitions ?? []).map((definition) => [
+        `${String(definition.tool_key)}:${Number(definition.version)}`,
+        definition,
+      ])
+    );
+
+    return Array.from(latestTemplates.values()).map((template) => ({
+      key: String(template.template_key),
+      version: Number(template.version),
+      name: String(template.display_name),
+      description: String(template.description),
+      niche: template.niche ? String(template.niche) : null,
+      defaults: asRecord(template.agent_defaults),
+      tools: (templateTools ?? [])
+        .filter(
+          (binding) =>
+            binding.template_key === template.template_key &&
+            Number(binding.template_version) === Number(template.version)
+        )
+        .map((binding) => {
+          const definition = definitionMap.get(
+            `${String(binding.tool_key)}:${Number(binding.tool_version)}`
+          );
+          return {
+            key: String(binding.tool_key),
+            version: Number(binding.tool_version),
+            name: String(definition?.display_name ?? binding.tool_key),
+            description: String(definition?.description ?? ""),
+            icon: String(definition?.icon ?? "wrench"),
+            readiness: String(binding.default_readiness),
+            enabled: Boolean(binding.default_enabled),
+          };
+        }),
+    }));
+  }
+
+  private async syncPlatformToolReadiness(agentId: string, acesId: number) {
+    const { data: audioTool, error } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, config, is_enabled")
+      .eq("agent_id", agentId)
+      .eq("aces_id", acesId)
+      .eq("tool_key", "ai_audio")
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar a Tool de audio", error);
+    }
+
+    if (!audioTool) return;
+
+    const currentConfig = asRecord(audioTool.config);
+    const voiceId = asString(currentConfig.voiceId) ?? this.elevenLabsDefaultVoiceId;
+    const ready = Boolean(this.elevenLabsTtsEnabled && this.elevenLabsApiKey && voiceId);
+    const readiness = this.elevenLabsTtsEnabled ? (ready ? "ready" : "needs_config") : "unavailable";
+
+    const { error: updateError } = await this.agentsClient
+      .from("agent_tools")
+      .update({
+        readiness,
+        is_enabled: ready ? Boolean(audioTool.is_enabled) : false,
+        config: {
+          ...currentConfig,
+          selectionRate:
+            typeof currentConfig.selectionRate === "number" ? currentConfig.selectionRate : 0.018,
+          voiceId: voiceId ?? null,
+        },
+        last_validated_at: new Date().toISOString(),
+      })
+      .eq("id", audioTool.id)
+      .eq("aces_id", acesId);
+
+    if (updateError) {
+      throw new HttpError(500, "Nao foi possivel atualizar a prontidao da Tool de audio", updateError);
+    }
+  }
+
+  private async syncDataToolReadiness(agentId: string, acesId: number) {
+    const { data: bindings, error } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, tool_key, is_enabled")
+      .eq("agent_id", agentId)
+      .eq("aces_id", acesId)
+      .in("tool_key", ["forwarding", "send_media"]);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar as Tools do agente", error);
+    }
+
+    for (const binding of bindings ?? []) {
+      const table = binding.tool_key === "forwarding" ? "forwarding_destinations" : "tool_media_assets";
+      const { count, error: countError } = await this.agentsClient
+        .from(table)
+        .select("id", { count: "exact", head: true })
+        .eq("aces_id", acesId)
+        .eq("agent_tool_id", binding.id)
+        .eq("is_active", true);
+
+      if (countError) {
+        throw new HttpError(500, `Nao foi possivel validar a Tool ${binding.tool_key}`, countError);
+      }
+
+      const ready = Number(count ?? 0) > 0;
+      const { error: updateError } = await this.agentsClient
+        .from("agent_tools")
+        .update({
+          readiness: ready ? "ready" : "needs_config",
+          is_enabled: ready ? Boolean(binding.is_enabled) : false,
+          last_validated_at: new Date().toISOString(),
+        })
+        .eq("id", binding.id)
+        .eq("aces_id", acesId);
+
+      if (updateError) {
+        throw new HttpError(500, `Nao foi possivel atualizar a Tool ${binding.tool_key}`, updateError);
+      }
+    }
+  }
+
+  private async syncLegacyHandoffTool(agent: AgentRow) {
+    const instruction = asString(agent.handoff_prompt);
+    const targetPhone = asString(agent.handoff_target_phone);
+    const { data: current, error: currentError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id")
+      .eq("agent_id", agent.id)
+      .eq("tool_key", "forwarding")
+      .maybeSingle();
+
+    if (currentError) {
+      throw new HttpError(500, "Nao foi possivel sincronizar o encaminhamento", currentError);
+    }
+
+    if (!current && !instruction && !targetPhone) return;
+
+    const ready = Boolean(instruction && targetPhone);
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .upsert(
+        {
+          aces_id: agent.aces_id,
+          agent_id: agent.id,
+          tool_key: "forwarding",
+          tool_version: 1,
+          is_enabled: Boolean(agent.handoff_enabled && ready),
+          readiness: ready ? "ready" : "needs_config",
+          config: { migratedFromLegacyHandoff: true },
+          last_validated_at: new Date().toISOString(),
+        },
+        { onConflict: "agent_id,tool_key" }
+      )
+      .select("id")
+      .single();
+
+    if (bindingError) {
+      throw new HttpError(500, "Nao foi possivel salvar a Tool de encaminhamento", bindingError);
+    }
+
+    if (targetPhone) {
+      const { error: destinationError } = await this.agentsClient
+        .from("forwarding_destinations")
+        .upsert(
+          {
+            aces_id: agent.aces_id,
+            agent_tool_id: binding.id,
+            destination_key: "legacy-handoff",
+            display_name: "Atendimento humano",
+            mode: "external_notification",
+            target_phone: targetPhone,
+            target_agent_id: null,
+            context_instruction: instruction,
+            is_active: true,
+          },
+          { onConflict: "agent_tool_id,destination_key" }
+        );
+
+      if (destinationError) {
+        throw new HttpError(500, "Nao foi possivel salvar o destino do encaminhamento", destinationError);
+      }
+    } else if (binding.id) {
+      await this.agentsClient
+        .from("forwarding_destinations")
+        .update({ is_active: false })
+        .eq("agent_tool_id", binding.id)
+        .eq("destination_key", "legacy-handoff");
+    }
+  }
+
+  private async refreshDerivedAgentState(agent: AgentRow) {
+    const results = await Promise.allSettled([
+      this.syncMissingStageRules(agent),
+      this.syncLegacyHandoffTool(agent),
+    ]);
+
+    for (const result of results) {
+      if (result.status === "rejected") {
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        console.warn("[crm-ai] Falha ao sincronizar estado derivado do agente:", reason);
+      }
+    }
   }
 
   async createAgent(context: AuthContext, input: CreateAgentInput) {
@@ -1939,30 +2620,43 @@ export class AgentManager {
       throw new HttpError(400, "Instancia do agente e obrigatoria");
     }
 
-    const { data: instanceRow, error: instanceError } = await this.serviceClient
-      .from("instance")
-      .select("instancia")
-      .eq("aces_id", context.acesId)
-      .eq("created_by", context.crmUserId)
-      .eq("instancia", input.instanceName.trim())
-      .maybeSingle();
+    const instanceName = input.instanceName.trim();
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
 
-    if (instanceError) {
-      throw new HttpError(500, "Nao foi possivel validar a instancia selecionada", instanceError);
-    }
+    if (input.templateKey?.trim()) {
+      const { data, error } = await this.agentsClient
+        .rpc("create_agent_from_template", {
+          p_aces_id: context.acesId,
+          p_created_by: context.crmUserId,
+          p_instance_name: instanceName,
+          p_name: input.name.trim(),
+          p_system_prompt: input.systemPrompt?.trim() || DEFAULT_SYSTEM_MESSAGE,
+          p_model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
+          p_temperature: input.temperature ?? 0.4,
+          p_template_key: input.templateKey.trim(),
+          p_is_active: input.isActive ?? true,
+        })
+        .single();
 
-    if (!instanceRow) {
-      throw new HttpError(400, "A instancia informada nao pertence a esta conta");
+      if (error) {
+        throw new HttpError(500, "Nao foi possivel criar o agente pelo template", error);
+      }
+
+      const agent = data as AgentRow;
+      await this.syncMissingStageRules(agent);
+      await this.syncPlatformToolReadiness(agent.id, agent.aces_id);
+      return agent;
     }
 
     const payload = {
       aces_id: context.acesId,
-      instance_name: input.instanceName.trim(),
+      instance_name: instanceName,
       name: input.name.trim(),
       system_prompt: input.systemPrompt?.trim() || DEFAULT_SYSTEM_MESSAGE,
       provider: input.provider ?? "gemini",
       model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: input.isActive ?? true,
+      temperature: input.temperature ?? 0.4,
       buffer_wait_ms: input.bufferWaitMs ?? 15000,
       human_pause_minutes: input.humanPauseMinutes ?? 60,
       auto_apply_threshold: input.autoApplyThreshold ?? 0.85,
@@ -1972,7 +2666,7 @@ export class AgentManager {
       created_by: context.crmUserId,
     };
 
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_agents")
       .insert(payload)
       .select("*")
@@ -1983,8 +2677,568 @@ export class AgentManager {
     }
 
     const agent = data as AgentRow;
-    await this.syncMissingStageRules(agent);
+    await this.refreshDerivedAgentState(agent);
     return agent;
+  }
+
+  async deleteAgent(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { error } = await this.agentsClient
+      .from("ai_agents")
+      .delete()
+      .eq("id", agentId)
+      .eq("aces_id", context.acesId);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel apagar o agente", error);
+    }
+
+    return { success: true };
+  }
+
+  async listAgentTools(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    await this.syncPlatformToolReadiness(agentId, context.acesId);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+
+    const [{ data: bindings, error: bindingError }, { data: definitions, error: definitionError }] =
+      await Promise.all([
+        this.agentsClient
+          .from("agent_tools")
+          .select("*")
+          .eq("agent_id", agentId)
+          .eq("aces_id", context.acesId)
+          .order("created_at", { ascending: true }),
+        this.agentsClient
+          .from("tool_definitions")
+          .select("tool_key, version, display_name, description, icon")
+          .eq("is_active", true),
+      ]);
+
+    const firstError = bindingError ?? definitionError;
+    if (firstError) {
+      throw new HttpError(500, "Nao foi possivel carregar as Tools do agente", firstError);
+    }
+
+    const definitionMap = new Map(
+      (definitions ?? []).map((definition) => [
+        `${String(definition.tool_key)}:${Number(definition.version)}`,
+        definition,
+      ])
+    );
+
+    return (bindings ?? []).map((binding) => {
+      const definition = definitionMap.get(
+        `${String(binding.tool_key)}:${Number(binding.tool_version)}`
+      );
+      return {
+        id: String(binding.id),
+        key: String(binding.tool_key),
+        version: Number(binding.tool_version),
+        name: String(definition?.display_name ?? binding.tool_key),
+        description: String(definition?.description ?? ""),
+        icon: String(definition?.icon ?? "wrench"),
+        enabled: Boolean(binding.is_enabled),
+        readiness: String(binding.readiness),
+        config: asRecord(binding.config),
+        lastValidatedAt: binding.last_validated_at ? String(binding.last_validated_at) : null,
+      };
+    });
+  }
+
+  async updateAgentTool(
+    context: AuthContext,
+    agentId: string,
+    toolKey: string,
+    input: UpdateAgentToolInput
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { data: current, error: currentError } = await this.agentsClient
+      .from("agent_tools")
+      .select("*")
+      .eq("agent_id", agentId)
+      .eq("aces_id", context.acesId)
+      .eq("tool_key", toolKey)
+      .maybeSingle();
+
+    if (currentError) {
+      throw new HttpError(500, "Nao foi possivel carregar a Tool", currentError);
+    }
+
+    if (!current) {
+      throw new HttpError(404, "Tool nao instalada neste agente");
+    }
+
+    if (input.isEnabled === true && current.readiness !== "ready") {
+      throw new HttpError(409, "Conclua a configuracao da Tool antes de ativa-la");
+    }
+
+    const payload: JsonRecord = {};
+    if (input.isEnabled !== undefined) payload.is_enabled = input.isEnabled;
+    if (input.config !== undefined) payload.config = { ...asRecord(current.config), ...input.config };
+
+    const { error } = await this.agentsClient
+      .from("agent_tools")
+      .update(payload)
+      .eq("id", current.id)
+      .eq("aces_id", context.acesId);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel atualizar a Tool", error);
+    }
+
+    await this.syncPlatformToolReadiness(agentId, context.acesId);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+    const tools = await this.listAgentTools(context, agentId);
+    return tools.find((tool) => tool.key === toolKey) ?? null;
+  }
+
+  async listLensPriceRules(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "prescription_analyst");
+    const { data, error } = await this.serviceClient
+      .from("lens_price_rules")
+      .select("*")
+      .eq("aces_id", context.acesId)
+      .eq("agent_tool_id", binding.id)
+      .order("priority", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw new HttpError(500, "Nao foi possivel listar as regras de lentes", error);
+    return (data ?? []).map((row: Record<string, unknown>) => this.mapLensPriceRule(row));
+  }
+
+  async upsertLensPriceRule(
+    context: AuthContext,
+    agentId: string,
+    input: Omit<LensPriceRule, "id" | "currency"> & { id?: string | null }
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "prescription_analyst");
+    if (!input.displayName.trim()) throw new HttpError(400, "Informe o nome da regra");
+    if (input.minSphere > input.maxSphere) throw new HttpError(400, "A esfera minima deve ser menor que a maxima");
+    if (input.maxAbsCylinder < 0 || input.priceCents < 0 || input.priority < 0) {
+      throw new HttpError(400, "Cilindro, preco e prioridade nao podem ser negativos");
+    }
+    if (input.lensCategory === "multifocal" &&
+      (input.minAddition === null || input.maxAddition === null || input.minAddition > input.maxAddition)) {
+      throw new HttpError(400, "Informe uma faixa de adicao valida para lentes multifocais");
+    }
+
+    const payload = {
+      id: input.id ?? undefined,
+      aces_id: context.acesId,
+      agent_tool_id: binding.id,
+      display_name: input.displayName.trim(),
+      lens_category: input.lensCategory,
+      min_sphere: input.minSphere,
+      max_sphere: input.maxSphere,
+      max_abs_cylinder: input.maxAbsCylinder,
+      min_addition: input.lensCategory === "multifocal" ? input.minAddition : null,
+      max_addition: input.lensCategory === "multifocal" ? input.maxAddition : null,
+      price_cents: input.priceCents,
+      currency: "BRL",
+      priority: input.priority,
+      is_active: input.isActive,
+    };
+    const result = input.id
+      ? await this.serviceClient.from("lens_price_rules").update(payload)
+          .eq("id", input.id).eq("aces_id", context.acesId).eq("agent_tool_id", binding.id).select("*").single()
+      : await this.serviceClient.from("lens_price_rules").insert(payload).select("*").single();
+    const { data, error } = result;
+    if (error) throw new HttpError(500, "Nao foi possivel salvar a regra de lentes", error);
+    await this.refreshPrescriptionToolReadiness(context.acesId, binding.id);
+    return this.mapLensPriceRule(data);
+  }
+
+  async deactivateLensPriceRule(context: AuthContext, agentId: string, ruleId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "prescription_analyst");
+    const { error } = await this.serviceClient.from("lens_price_rules")
+      .update({ is_active: false })
+      .eq("id", ruleId)
+      .eq("aces_id", context.acesId)
+      .eq("agent_tool_id", binding.id);
+    if (error) throw new HttpError(500, "Nao foi possivel desativar a regra de lentes", error);
+    await this.refreshPrescriptionToolReadiness(context.acesId, binding.id);
+    return { success: true };
+  }
+
+  private async getAgentToolBinding(acesId: number, agentId: string, toolKey: string) {
+    const { data, error } = await this.agentsClient.from("agent_tools")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("tool_key", toolKey)
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel carregar a Tool", error);
+    if (!data) throw new HttpError(404, "Tool nao instalada neste agente");
+    return data;
+  }
+
+  private mapLensPriceRule(row: Record<string, unknown>): LensPriceRule {
+    return {
+      id: String(row.id),
+      displayName: String(row.display_name),
+      lensCategory: row.lens_category === "multifocal" ? "multifocal" : "single_vision",
+      minSphere: Number(row.min_sphere),
+      maxSphere: Number(row.max_sphere),
+      maxAbsCylinder: Number(row.max_abs_cylinder),
+      minAddition: row.min_addition === null ? null : Number(row.min_addition),
+      maxAddition: row.max_addition === null ? null : Number(row.max_addition),
+      priceCents: Number(row.price_cents),
+      currency: "BRL",
+      priority: Number(row.priority),
+      isActive: Boolean(row.is_active),
+    };
+  }
+
+  private async refreshPrescriptionToolReadiness(acesId: number, bindingId: string) {
+    const { error: updateError } = await this.agentsClient.from("agent_tools")
+      .update({ readiness: "ready", last_validated_at: new Date().toISOString() })
+      .eq("id", bindingId)
+      .eq("aces_id", acesId);
+    if (updateError) throw new HttpError(500, "Nao foi possivel atualizar o Analista", updateError);
+  }
+
+  async listVisagismCatalog(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { data, error } = await this.agentsClient
+      .from("visagism_catalog_items")
+      .select("*")
+      .eq("aces_id", context.acesId)
+      .order("display_order", { ascending: true })
+      .order("created_at", { ascending: false });
+    if (error) throw new HttpError(500, "Nao foi possivel listar o catalogo de visagismo", error);
+    return (data ?? []) as VisagismCatalogItemRow[];
+  }
+
+  async upsertVisagismCatalogItem(
+    context: AuthContext,
+    agentId: string,
+    input: {
+      id?: string | null;
+      productCode: string;
+      recommendationDescription: string;
+      attributes?: JsonRecord;
+      sourceUrl: string;
+      displayOrder?: number;
+      isActive?: boolean;
+    }
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const payload = {
+      id: input.id ?? undefined,
+      aces_id: context.acesId,
+      product_code: input.productCode.trim(),
+      recommendation_description: input.recommendationDescription.trim(),
+      attributes: input.attributes ?? {},
+      source_url: input.sourceUrl.trim(),
+      display_order: input.displayOrder ?? 0,
+      is_active: input.isActive ?? true,
+    };
+
+    const { data, error } = await this.agentsClient
+      .from("visagism_catalog_items")
+      .upsert(payload, { onConflict: "aces_id,product_code" })
+      .select("*")
+      .single();
+    if (error) throw new HttpError(500, "Nao foi possivel salvar o item do catalogo", error);
+    return data;
+  }
+
+  async deactivateVisagismCatalogItem(context: AuthContext, agentId: string, itemId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const { error } = await this.agentsClient
+      .from("visagism_catalog_items")
+      .update({ is_active: false })
+      .eq("id", itemId)
+      .eq("aces_id", context.acesId);
+    if (error) throw new HttpError(500, "Nao foi possivel desativar o item do catalogo", error);
+    return { success: true };
+  }
+
+  async listVisagismRuns(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const { data, error } = await this.agentsClient
+      .from("agent_tool_runs")
+      .select("id, agent_id, lead_id, status, attempt_count, input_snapshot, output_snapshot, error_message, created_at, updated_at, started_at, completed_at")
+      .eq("aces_id", context.acesId)
+      .eq("agent_id", agentId)
+      .eq("tool_key", "visagism")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw new HttpError(500, "Nao foi possivel listar as execucoes de visagismo", error);
+    return data ?? [];
+  }
+
+  async getVisagismRun(context: AuthContext, agentId: string, runId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const { data, error } = await this.agentsClient
+      .from("agent_tool_runs")
+      .select("id, agent_id, lead_id, status, attempt_count, input_snapshot, output_snapshot, error_message, created_at, updated_at, started_at, completed_at")
+      .eq("id", runId)
+      .eq("aces_id", context.acesId)
+      .eq("agent_id", agentId)
+      .eq("tool_key", "visagism")
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel carregar a execucao de visagismo", error);
+    if (!data) throw new HttpError(404, "Execucao de visagismo nao encontrada");
+    return data;
+  }
+
+  async startVisagismRun(
+    context: AuthContext,
+    agentId: string,
+    input: {
+      leadId: string;
+      sourceMessageId?: string | null;
+      excludedItemId?: string | null;
+    }
+  ) {
+    this.ensureAdmin(context);
+    const agent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const lead = await this.loadLeadById(input.leadId, context.acesId, context.crmUserId);
+    return this.startVisagismRunInternal({
+      agent,
+      lead,
+      sourceMessageId: input.sourceMessageId ?? null,
+      excludedItemId: input.excludedItemId ?? null,
+      faceAnalysis: null,
+    });
+  }
+
+  async listToolMediaAssets(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id")
+      .eq("agent_id", agentId)
+      .eq("aces_id", context.acesId)
+      .eq("tool_key", "send_media")
+      .maybeSingle();
+
+    if (bindingError) throw new HttpError(500, "Nao foi possivel carregar a Tool Enviar midia", bindingError);
+    if (!binding) throw new HttpError(404, "Tool Enviar midia nao instalada");
+
+    const { data, error } = await this.agentsClient
+      .from("tool_media_assets")
+      .select("id, asset_key, display_name, description, usage_instruction, source_type, source_url, media_kind, mime_type, file_name, default_caption, is_active, created_at")
+      .eq("aces_id", context.acesId)
+      .eq("agent_tool_id", binding.id)
+      .order("display_name", { ascending: true });
+
+    if (error) throw new HttpError(500, "Nao foi possivel listar os materiais", error);
+    return data ?? [];
+  }
+
+  async upsertToolMediaAsset(
+    context: AuthContext,
+    agentId: string,
+    input: {
+      assetKey: string;
+      displayName: string;
+      description?: string;
+      usageInstruction?: string;
+      sourceUrl: string;
+      mediaKind: "image" | "document";
+      fileName?: string | null;
+      defaultCaption?: string | null;
+    }
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const assetKey = input.assetKey.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{1,63}$/.test(assetKey)) {
+      throw new HttpError(400, "Use uma chave simples com letras, numeros, _ ou -");
+    }
+    if (!input.displayName.trim()) throw new HttpError(400, "Nome do material e obrigatorio");
+    const safeUrl = (await this.assertSafeMediaUrl(input.sourceUrl.trim())).toString();
+
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id")
+      .eq("agent_id", agentId)
+      .eq("aces_id", context.acesId)
+      .eq("tool_key", "send_media")
+      .maybeSingle();
+
+    if (bindingError) throw new HttpError(500, "Nao foi possivel carregar a Tool Enviar midia", bindingError);
+    if (!binding) throw new HttpError(404, "Tool Enviar midia nao instalada");
+
+    const sourceType = safeUrl.includes("drive.google.com") ? "google_drive" : "https";
+    const { data, error } = await this.agentsClient
+      .from("tool_media_assets")
+      .upsert(
+        {
+          aces_id: context.acesId,
+          agent_tool_id: binding.id,
+          asset_key: assetKey,
+          display_name: input.displayName.trim(),
+          description: input.description?.trim() || "",
+          usage_instruction: input.usageInstruction?.trim() || "",
+          source_type: sourceType,
+          source_url: safeUrl,
+          media_kind: input.mediaKind,
+          file_name: input.fileName?.trim() || null,
+          default_caption: input.defaultCaption?.trim() || null,
+          is_active: true,
+        },
+        { onConflict: "agent_tool_id,asset_key" }
+      )
+      .select("*")
+      .single();
+
+    if (error) throw new HttpError(500, "Nao foi possivel salvar o material", error);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+    return data;
+  }
+
+  async deactivateToolMediaAsset(context: AuthContext, agentId: string, assetId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { error } = await this.agentsClient
+      .from("tool_media_assets")
+      .update({ is_active: false })
+      .eq("id", assetId)
+      .eq("aces_id", context.acesId);
+
+    if (error) throw new HttpError(500, "Nao foi possivel desativar o material", error);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+    return { success: true };
+  }
+
+  async listForwardingDestinations(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id")
+      .eq("agent_id", agentId)
+      .eq("aces_id", context.acesId)
+      .eq("tool_key", "forwarding")
+      .maybeSingle();
+
+    if (bindingError) throw new HttpError(500, "Nao foi possivel carregar a Tool Encaminhar", bindingError);
+    if (!binding) throw new HttpError(404, "Tool Encaminhar nao instalada");
+
+    const { data, error } = await this.agentsClient
+      .from("forwarding_destinations")
+      .select("id, destination_key, display_name, mode, target_phone, target_agent_id, context_instruction, is_active, created_at, updated_at")
+      .eq("aces_id", context.acesId)
+      .eq("agent_tool_id", binding.id)
+      .order("display_name", { ascending: true });
+
+    if (error) throw new HttpError(500, "Nao foi possivel listar os destinos", error);
+    return data ?? [];
+  }
+
+  async upsertForwardingDestination(
+    context: AuthContext,
+    agentId: string,
+    input: {
+      destinationKey: string;
+      displayName: string;
+      mode: "external_notification" | "agent";
+      targetPhone?: string | null;
+      targetAgentId?: string | null;
+      contextInstruction: string;
+    }
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const destinationKey = input.destinationKey.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{1,63}$/.test(destinationKey)) {
+      throw new HttpError(400, "Use uma chave simples com letras, numeros, _ ou -");
+    }
+    if (!input.displayName.trim()) throw new HttpError(400, "Nome do destino e obrigatorio");
+    if (!input.contextInstruction.trim()) {
+      throw new HttpError(400, "Instrucao de encaminhamento e obrigatoria");
+    }
+
+    let targetPhone: string | null = null;
+    let targetAgentId: string | null = null;
+    if (input.mode === "external_notification") {
+      const recipient = resolveWhatsappRecipient(input.targetPhone?.trim() ?? "");
+      targetPhone = recipient.finalNumber;
+    } else {
+      targetAgentId = input.targetAgentId?.trim() || null;
+      if (!targetAgentId) throw new HttpError(400, "Agente de destino e obrigatorio");
+      if (targetAgentId === agentId) throw new HttpError(400, "O agente nao pode encaminhar para si mesmo");
+      await this.getAgentForAccount(targetAgentId, context.acesId, context.crmUserId);
+    }
+
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id")
+      .eq("agent_id", agentId)
+      .eq("aces_id", context.acesId)
+      .eq("tool_key", "forwarding")
+      .maybeSingle();
+
+    if (bindingError) throw new HttpError(500, "Nao foi possivel carregar a Tool Encaminhar", bindingError);
+    if (!binding) throw new HttpError(404, "Tool Encaminhar nao instalada");
+
+    const { data, error } = await this.agentsClient
+      .from("forwarding_destinations")
+      .upsert(
+        {
+          aces_id: context.acesId,
+          agent_tool_id: binding.id,
+          destination_key: destinationKey,
+          display_name: input.displayName.trim(),
+          mode: input.mode,
+          target_phone: targetPhone,
+          target_agent_id: targetAgentId,
+          context_instruction: input.contextInstruction.trim(),
+          is_active: true,
+        },
+        { onConflict: "agent_tool_id,destination_key" }
+      )
+      .select("*")
+      .single();
+
+    if (error) throw new HttpError(500, "Nao foi possivel salvar o destino", error);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+    return data;
+  }
+
+  async deactivateForwardingDestination(
+    context: AuthContext,
+    agentId: string,
+    destinationId: string
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
+
+    const { error } = await this.agentsClient
+      .from("forwarding_destinations")
+      .update({ is_active: false })
+      .eq("id", destinationId)
+      .eq("aces_id", context.acesId);
+
+    if (error) throw new HttpError(500, "Nao foi possivel desativar o destino", error);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+    return { success: true };
   }
 
   async updateAgent(context: AuthContext, agentId: string, input: UpdateAgentInput) {
@@ -1998,6 +3252,7 @@ export class AgentManager {
     if (input.model !== undefined) payload.model = input.model.trim();
     if (input.provider !== undefined) payload.provider = input.provider;
     if (input.isActive !== undefined) payload.is_active = input.isActive;
+    if (input.temperature !== undefined) payload.temperature = input.temperature;
     if (input.bufferWaitMs !== undefined) payload.buffer_wait_ms = input.bufferWaitMs;
     if (input.humanPauseMinutes !== undefined) payload.human_pause_minutes = input.humanPauseMinutes;
     if (input.autoApplyThreshold !== undefined) payload.auto_apply_threshold = input.autoApplyThreshold;
@@ -2005,12 +3260,11 @@ export class AgentManager {
     if (input.handoffPrompt !== undefined) payload.handoff_prompt = input.handoffPrompt.trim() || null;
     if (input.handoffTargetPhone !== undefined) payload.handoff_target_phone = input.handoffTargetPhone.trim() || null;
 
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_agents")
       .update(payload)
       .eq("id", agentId)
       .eq("aces_id", context.acesId)
-      .eq("created_by", context.crmUserId)
       .select("*")
       .single();
 
@@ -2019,7 +3273,7 @@ export class AgentManager {
     }
 
     const agent = data as AgentRow;
-    await this.syncMissingStageRules(agent);
+    await this.refreshDerivedAgentState(agent);
     return agent;
   }
 
@@ -2029,7 +3283,7 @@ export class AgentManager {
     await this.syncMissingStageRules(agent);
 
     const stages = await this.getStagesForAccount(context.acesId);
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_stage_rules")
       .select("*")
       .eq("agent_id", agentId)
@@ -2087,7 +3341,7 @@ export class AgentManager {
     });
 
     if (payload.length > 0) {
-      const { error } = await this.serviceClient
+      const { error } = await this.agentsClient
         .from("ai_stage_rules")
         .upsert(payload, { onConflict: "agent_id,stage_id" });
 
@@ -2102,7 +3356,7 @@ export class AgentManager {
   private async getStageRulesForAgent(agent: AgentRow) {
     await this.syncMissingStageRules(agent);
     const stages = await this.getStagesForAccount(agent.aces_id);
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_stage_rules")
       .select("*")
       .eq("agent_id", agent.id)
@@ -2158,7 +3412,7 @@ export class AgentManager {
       return [];
     }
 
-    let query = this.serviceClient
+    let query = this.agentsClient
       .from("ai_runs")
       .select("*")
       .eq("agent_id", agentId)
@@ -2183,7 +3437,7 @@ export class AgentManager {
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId);
     await this.loadLeadById(leadId, context.acesId, context.crmUserId);
 
-    const { error } = await this.serviceClient.from("ai_lead_state").upsert(
+    const { error } = await this.agentsClient.from("ai_lead_state").upsert(
       {
         agent_id: agentId,
         lead_id: leadId,
@@ -2250,14 +3504,14 @@ export class AgentManager {
   async listInstances(context: AuthContext) {
     this.ensureAdmin(context);
     await this.markExpiredPendingInstances(context.acesId);
+    const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId);
 
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("instance")
       .select(
         "instancia, aces_id, created_by, color, token, status, created_at, setup_status, setup_started_at, setup_expires_at, operation_lock_until, last_error, connection_mode, remote_evolution_url, remote_instance_name, remote_webhook_connected_at"
       )
       .eq("aces_id", context.acesId)
-      .eq("created_by", context.crmUserId)
       .or("setup_status.is.null,setup_status.neq.cancelled")
       .order("created_at", { ascending: false });
 
@@ -2266,9 +3520,10 @@ export class AgentManager {
     }
 
     const rows = (data ?? []) as InstanceRow[];
-    const leadCounts = await this.buildLeadCountMap(context.acesId, rows);
+    const visibleRows = rows.filter((instance) => accessibleInstances.has(instance.instancia));
+    const leadCounts = await this.buildLeadCountMap(context.acesId, visibleRows);
 
-    return rows.map((instance): InstanceListItem => {
+    return visibleRows.map((instance): InstanceListItem => {
       const setupStatus = this.deriveSetupStatus(instance);
       return {
         instanceName: instance.instancia,
@@ -2299,8 +3554,8 @@ export class AgentManager {
       throw new HttpError(409, "Nome de instancia indisponivel");
     }
 
-    if (existingRow && existingRow.created_by && existingRow.created_by !== context.crmUserId) {
-      throw new HttpError(403, "Instancia nao pertence ao usuario atual");
+    if (existingRow) {
+      await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId);
     }
 
     let existing = existingRow;
@@ -2357,7 +3612,6 @@ export class AgentManager {
         const { error: updateError } = await this.serviceClient
           .from("instance")
           .update({
-            created_by: context.crmUserId,
             token: null,
             status: "connected",
             setup_status: "connected",
@@ -2826,8 +4080,7 @@ export class AgentManager {
           .from("instance")
           .delete()
           .eq("instancia", instanceName)
-          .eq("aces_id", context.acesId)
-          .eq("created_by", context.crmUserId);
+          .eq("aces_id", context.acesId);
 
         if (error) {
           throw new HttpError(500, "Nao foi possivel remover a instancia do CRM", error);
@@ -3182,6 +4435,7 @@ export class AgentManager {
     providerErrorCode?: string | null;
     providerErrorMessage?: string | null;
     providerPayloadSummary?: unknown;
+    senderAgentId?: string | null;
   }) {
     const sentAt = params.sentAt ?? new Date().toISOString();
     const payload: Record<string, unknown> = {
@@ -3194,6 +4448,7 @@ export class AgentManager {
       created_by: params.createdBy ?? null,
       conversation_id: params.conversationId ?? null,
       sent_at: sentAt,
+      sender_agent_id: params.senderAgentId ?? null,
     };
 
     if (params.id) {
@@ -3226,7 +4481,6 @@ export class AgentManager {
       .update({
         last_message_at: sentAt,
         updated_at: new Date().toISOString(),
-        instancia: params.instanceName,
       })
       .eq("id", params.leadId)
       .eq("aces_id", params.acesId);
@@ -3239,7 +4493,7 @@ export class AgentManager {
   private async loadLeadById(leadId: string, acesId: number, ownerId?: string | null) {
     let query = this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
       .eq("id", leadId)
       .eq("aces_id", acesId);
 
@@ -3277,6 +4531,41 @@ export class AgentManager {
     }
 
     return (data as LeadRow | null) ?? null;
+  }
+
+  private async hasActiveLeadInstanceMembership(
+    acesId: number,
+    leadId: string,
+    instanceName: string
+  ) {
+    const { data, error } = await this.serviceClient
+      .from("lead_instance_memberships")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("lead_id", leadId)
+      .eq("instance_name", instanceName)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar o vinculo da instancia com o lead", error);
+    }
+
+    return Boolean(data);
+  }
+
+  private async loadLeadForAgent(agent: AgentRow, leadId: string) {
+    const lead = await this.loadLeadById(leadId, agent.aces_id);
+    const isPrimaryInstance = lead.instancia === agent.instance_name;
+    const isAdditionalInstance = isPrimaryInstance
+      ? false
+      : await this.hasActiveLeadInstanceMembership(agent.aces_id, lead.id, agent.instance_name);
+
+    if (!isPrimaryInstance && !isAdditionalInstance) {
+      throw new HttpError(403, "Agente nao autorizado para este lead");
+    }
+
+    return lead;
   }
 
   private async getDefaultLeadOwnerId(acesId: number) {
@@ -3441,7 +4730,7 @@ export class AgentManager {
   }
 
   private async getLeadState(agentId: string, leadId: string) {
-    const { data, error } = await this.serviceClient
+    const { data, error } = await this.agentsClient
       .from("ai_lead_state")
       .select("*")
       .eq("agent_id", agentId)
@@ -3539,7 +4828,7 @@ export class AgentManager {
   }
 
   private async upsertLeadState(agentId: string, leadId: string, payload: JsonRecord) {
-    const { error } = await this.serviceClient.from("ai_lead_state").upsert(
+    const { error } = await this.agentsClient.from("ai_lead_state").upsert(
       {
         agent_id: agentId,
         lead_id: leadId,
@@ -3581,6 +4870,7 @@ export class AgentManager {
   }
 
   private async createRun(payload: {
+    runId?: string;
     agentId: string;
     leadId: string;
     messageHistoryIds?: string[];
@@ -3594,7 +4884,8 @@ export class AgentManager {
     tokensIn?: number | null;
     tokensOut?: number | null;
   }) {
-    const { error } = await this.serviceClient.from("ai_runs").insert({
+    const { error } = await this.agentsClient.from("ai_runs").insert({
+      id: payload.runId ?? randomUUID(),
       agent_id: payload.agentId,
       lead_id: payload.leadId,
       message_history_ids: payload.messageHistoryIds ?? [],
@@ -4086,16 +5377,760 @@ export class AgentManager {
     }
   }
 
+  private async getEnabledAgentTool(agent: AgentRow, toolKey: string) {
+    const { data, error } = await this.agentsClient
+      .from("agent_tools")
+      .select("*")
+      .eq("agent_id", agent.id)
+      .eq("aces_id", agent.aces_id)
+      .eq("tool_key", toolKey)
+      .eq("is_enabled", true)
+      .eq("readiness", "ready")
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, `Nao foi possivel carregar a Tool ${toolKey}`, error);
+    }
+
+    return data;
+  }
+
+  private async listAvailableMediaAssets(agent: AgentRow) {
+    const binding = await this.getEnabledAgentTool(agent, "send_media");
+    if (!binding) return [];
+
+    const { data, error } = await this.agentsClient
+      .from("tool_media_assets")
+      .select("asset_key, display_name, description, usage_instruction")
+      .eq("aces_id", agent.aces_id)
+      .eq("agent_tool_id", binding.id)
+      .eq("is_active", true)
+      .order("display_name", { ascending: true });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar os materiais do agente", error);
+    }
+
+    return data ?? [];
+  }
+
+  private async enqueueBiEvent(params: {
+    acesId: number;
+    aggregateType: string;
+    aggregateId?: string | null;
+    eventType: string;
+    payload: JsonRecord;
+  }) {
+    const { error } = await this.serviceClient.from("bi_outbox").insert({
+      aces_id: params.acesId,
+      aggregate_type: params.aggregateType,
+      aggregate_id: params.aggregateId ?? null,
+      event_type: params.eventType,
+      payload: params.payload,
+    });
+
+    if (error) {
+      console.warn("[crm-ai] Falha ao publicar evento para o BI:", {
+        eventType: params.eventType,
+        aggregateId: params.aggregateId ?? null,
+        error,
+      });
+    }
+  }
+
+  private isAudioEligible(text: string) {
+    const normalized = text.trim();
+    return (
+      normalized.length >= 20 &&
+      normalized.length <= 800 &&
+      !/(?:https?:\/\/|www\.)/i.test(normalized) &&
+      !/```|\b(?:otp|token|codigo de verificacao)\b/i.test(normalized)
+    );
+  }
+
+  private shouldSelectAudio(runId: string, agentId: string, leadId: string, rate: number) {
+    const normalizedRate = Math.min(Math.max(rate, 0), 1);
+    const sample = createHash("sha256")
+      .update(`${runId}:${agentId}:${leadId}`)
+      .digest()
+      .readUInt32BE(0) % 10_000;
+
+    return sample < Math.round(normalizedRate * 10_000);
+  }
+
+  private async generateElevenLabsAudio(text: string, voiceId: string) {
+    if (!this.elevenLabsApiKey || !this.elevenLabsTtsEnabled) {
+      throw new Error("ElevenLabs nao configurada");
+    }
+
+    const response = await axios.post<ArrayBuffer>(
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
+      {
+        text,
+        model_id: this.elevenLabsModel,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "xi-api-key": this.elevenLabsApiKey,
+        },
+        params: { output_format: this.elevenLabsOutputFormat },
+        responseType: "arraybuffer",
+        timeout: 15_000,
+      }
+    );
+
+    const buffer = Buffer.from(response.data);
+    if (buffer.byteLength === 0 || buffer.byteLength > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
+      throw new Error("Audio gerado pela ElevenLabs possui tamanho invalido");
+    }
+
+    return buffer;
+  }
+
+  private async sendWhatsAppVoiceNote(
+    instanceName: string,
+    phone: string,
+    mediaUrl: string,
+    acesId: number
+  ): Promise<SendResult> {
+    const recipient = resolveWhatsappRecipient(phone);
+    const transport = await this.resolveEvolutionTransport(instanceName, acesId);
+
+    try {
+      const response = await axios.post(
+        `${transport.apiUrl}/message/sendWhatsAppAudio/${encodeURIComponent(transport.instanceName)}`,
+        {
+          number: recipient.jid,
+          audio: mediaUrl,
+          delay: 1000,
+          encoding: true,
+        },
+        { headers: { apikey: transport.apiKey } }
+      );
+      const root = asRecord(response.data);
+      const key = asRecord(root.key);
+      const providerMessageId =
+        asString(root.id) ?? asString(root.messageId) ?? asString(key.id) ?? null;
+
+      return {
+        provider: "evolution",
+        providerMessageId,
+        providerStatus: "sent",
+        raw: summarizeProviderPayload(response.data),
+      };
+    } catch (error) {
+      throw buildExternalRequestError(error, "Falha ao enviar audio na Evolution");
+    }
+  }
+
+  private async trySendAiAudio(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    runId: string;
+    blocks: string[];
+  }) {
+    const binding = await this.getEnabledAgentTool(params.agent, "ai_audio");
+    if (!binding) return false;
+
+    const text = params.blocks.join("\n\n").trim();
+    const config = asRecord(binding.config);
+    const voiceId = asString(config.voiceId) ?? this.elevenLabsDefaultVoiceId;
+    const selectionRate =
+      typeof config.selectionRate === "number" ? config.selectionRate : 0.018;
+    const eligible = Boolean(voiceId && this.isAudioEligible(text));
+    const selected = eligible
+      ? this.shouldSelectAudio(params.runId, params.agent.id, params.lead.id, selectionRate)
+      : false;
+
+    await this.enqueueBiEvent({
+      acesId: params.agent.aces_id,
+      aggregateType: "lead",
+      aggregateId: params.lead.id,
+      eventType: "tool.ai_audio.decision",
+      payload: {
+        lead_id: params.lead.id,
+        agent_id: params.agent.id,
+        tool_key: "ai_audio",
+        eligible,
+        selected,
+        rate: selectionRate,
+        run_id: params.runId,
+      },
+    });
+
+    if (!selected || !voiceId) return false;
+
+    let toolRunId: string = randomUUID();
+    const idempotencyKey = `${params.runId}:ai_audio`;
+    const { error: runError } = await this.agentsClient.from("agent_tool_runs").insert({
+      id: toolRunId,
+      aces_id: params.agent.aces_id,
+      agent_id: params.agent.id,
+      agent_tool_id: binding.id,
+      lead_id: params.lead.id,
+      tool_key: "ai_audio",
+      status: "running",
+      idempotency_key: idempotencyKey,
+      attempt_count: 1,
+      provider: "elevenlabs",
+      model: this.elevenLabsModel,
+      input_snapshot: { character_count: text.length },
+      started_at: new Date().toISOString(),
+    });
+
+    if (runError?.code === "23505") {
+      const { data: existing, error: existingError } = await this.agentsClient
+        .from("agent_tool_runs")
+        .select("id, status, attempt_count")
+        .eq("aces_id", params.agent.aces_id)
+        .eq("idempotency_key", idempotencyKey)
+        .single();
+
+      if (existingError) {
+        throw new HttpError(500, "Nao foi possivel recuperar a execucao da Tool de audio", existingError);
+      }
+
+      if (existing.status === "succeeded") return true;
+      if (existing.status === "running") {
+        throw new HttpError(409, "A Tool de audio ja esta em execucao");
+      }
+
+      toolRunId = String(existing.id);
+      const { error: retryError } = await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "running",
+          attempt_count: Number(existing.attempt_count ?? 0) + 1,
+          started_at: new Date().toISOString(),
+          completed_at: null,
+          error_message: null,
+        })
+        .eq("id", toolRunId);
+
+      if (retryError) {
+        throw new HttpError(500, "Nao foi possivel repetir a Tool de audio", retryError);
+      }
+    } else if (runError) {
+      throw new HttpError(500, "Nao foi possivel iniciar a Tool de audio", runError);
+    }
+
+    const messageId = randomUUID();
+    const attachmentId = randomUUID();
+    const fileName = `audio-${params.runId}.mp3`;
+    const storagePath = buildAttachmentStoragePath({
+      acesId: params.agent.aces_id,
+      leadId: params.lead.id,
+      messageId,
+      attachmentId,
+      fileName,
+    });
+    const conversationId = `ai-audio:${params.runId}`;
+    const instanceName = requireValue(
+      params.agent.instance_name || params.lead.instancia,
+      "Instancia de envio nao definida"
+    );
+    const phone = requireValue(params.lead.contact_phone, "Lead sem telefone para envio");
+    let uploaded = false;
+    let dispatched = false;
+
+    try {
+      const audio = await this.generateElevenLabsAudio(text, voiceId);
+      const { error: uploadError } = await this.serviceClient.storage
+        .from(CHAT_ATTACHMENTS_BUCKET)
+        .upload(storagePath, audio, { contentType: "audio/mpeg", upsert: false });
+
+      if (uploadError) {
+        throw new HttpError(500, "Nao foi possivel salvar o audio gerado", uploadError);
+      }
+      uploaded = true;
+
+      const mediaUrl = await this.createSignedDownloadUrl(storagePath);
+      await this.registerOutboundEcho({
+        acesId: params.lead.aces_id,
+        leadId: params.lead.id,
+        origin: "ai",
+        conversationId,
+        referenceId: toolRunId,
+        instanceName,
+        phone,
+        content: text,
+        sentAt: new Date().toISOString(),
+      });
+
+      const providerResult = await this.sendWhatsAppVoiceNote(
+        instanceName,
+        phone,
+        mediaUrl,
+        params.agent.aces_id
+      );
+      dispatched = true;
+      const sentAt = new Date().toISOString();
+      await this.saveMessage({
+        id: messageId,
+        leadId: params.lead.id,
+        acesId: params.lead.aces_id,
+        content: text,
+        direction: "outbound",
+        sourceType: "ai",
+        instanceName,
+        conversationId,
+        sentAt,
+        provider: providerResult.provider,
+        providerMessageId: providerResult.providerMessageId,
+        providerStatus: providerResult.providerStatus,
+        providerPayloadSummary: providerResult.raw,
+        senderAgentId: params.agent.id,
+      });
+      await this.insertStoredMessageAttachment({
+        attachmentId,
+        messageId,
+        acesId: params.lead.aces_id,
+        leadId: params.lead.id,
+        kind: "audio",
+        mimeType: "audio/mpeg",
+        storagePath,
+        fileName,
+        fileSize: audio.byteLength,
+      });
+
+      await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "succeeded",
+          output_snapshot: { message_id: messageId, attachment_id: attachmentId },
+          completed_at: sentAt,
+        })
+        .eq("id", toolRunId);
+
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: toolRunId,
+        eventType: "tool.ai_audio.succeeded",
+        payload: {
+          tool_run_id: toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          character_count: text.length,
+        },
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha desconhecida na Tool de audio";
+
+      if (resolveAudioDispatchFailure(dispatched) === "delivered_requires_reconciliation") {
+        await this.agentsClient
+          .from("agent_tool_runs")
+          .update({
+            status: "succeeded",
+            output_snapshot: {
+              delivery_dispatched: true,
+              persistence_complete: false,
+              message_id: messageId,
+              attachment_id: attachmentId,
+            },
+            error_message: truncateText(`Persistencia incompleta apos despacho: ${message}`, 1000),
+            completed_at: new Date().toISOString(),
+          })
+          .eq("id", toolRunId);
+        await this.enqueueBiEvent({
+          acesId: params.agent.aces_id,
+          aggregateType: "tool_run",
+          aggregateId: toolRunId,
+          eventType: "tool.ai_audio.delivery_persistence_failed",
+          payload: {
+            tool_run_id: toolRunId,
+            lead_id: params.lead.id,
+            agent_id: params.agent.id,
+            error: truncateText(message, 500),
+            audio_dispatched: true,
+          },
+        });
+        return true;
+      }
+
+      await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "failed",
+          error_message: truncateText(message, 1000),
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", toolRunId);
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: toolRunId,
+        eventType: "tool.ai_audio.fallback_to_text",
+        payload: {
+          tool_run_id: toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          error: truncateText(message, 500),
+          audio_dispatched: dispatched,
+        },
+      });
+
+      if (uploaded && !dispatched) {
+        await this.serviceClient.storage.from(CHAT_ATTACHMENTS_BUCKET).remove([storagePath]);
+      }
+
+      return false;
+    }
+  }
+
+  private isPrivateNetworkAddress(address: string): boolean {
+    if (isIP(address) === 4) {
+      const [a, b] = address.split(".").map(Number);
+      return (
+        a === 0 ||
+        a === 10 ||
+        a === 127 ||
+        (a === 100 && b >= 64 && b <= 127) ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        a >= 224
+      );
+    }
+
+    if (isIP(address) === 6) {
+      const normalized = address.toLowerCase();
+      if (normalized.startsWith("::ffff:")) {
+        return this.isPrivateNetworkAddress(normalized.slice(7));
+      }
+      return (
+        normalized === "::" ||
+        normalized === "::1" ||
+        normalized.startsWith("fc") ||
+        normalized.startsWith("fd") ||
+        normalized.startsWith("fe8") ||
+        normalized.startsWith("fe9") ||
+        normalized.startsWith("fea") ||
+        normalized.startsWith("feb")
+      );
+    }
+
+    return true;
+  }
+
+  private isAllowedMediaHost(hostname: string) {
+    const normalized = hostname.toLowerCase();
+    return Array.from(this.toolMediaAllowedHosts).some(
+      (allowed) => normalized === allowed || normalized.endsWith(`.${allowed}`)
+    );
+  }
+
+  private async assertSafeMediaUrl(value: string) {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new Error("URL de midia invalida");
+    }
+
+    if (parsed.protocol !== "https:") {
+      throw new Error("A midia deve usar HTTPS");
+    }
+    if (parsed.username || parsed.password || !this.isAllowedMediaHost(parsed.hostname)) {
+      throw new Error("Host de midia nao autorizado");
+    }
+
+    const addresses = await lookup(parsed.hostname, { all: true, verbatim: true });
+    if (addresses.length === 0 || addresses.some((entry) => this.isPrivateNetworkAddress(entry.address))) {
+      throw new Error("Destino de midia nao permitido");
+    }
+
+    return parsed;
+  }
+
+  private normalizeRegisteredMediaUrl(value: string) {
+    const parsed = new URL(value);
+    if (parsed.hostname.toLowerCase() !== "drive.google.com") return parsed.toString();
+
+    const pathMatch = parsed.pathname.match(/\/file\/d\/([^/]+)/i);
+    const fileId = pathMatch?.[1] ?? parsed.searchParams.get("id");
+    if (!fileId) return parsed.toString();
+
+    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+  }
+
+  private detectRegisteredMedia(buffer: Buffer) {
+    if (buffer.subarray(0, 5).toString("ascii") === "%PDF-") {
+      return { mimeType: "application/pdf", kind: "document" as const, extension: "pdf" };
+    }
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return { mimeType: "image/jpeg", kind: "image" as const, extension: "jpg" };
+    }
+    if (
+      buffer.length >= 8 &&
+      buffer[0] === 0x89 &&
+      buffer.subarray(1, 4).toString("ascii") === "PNG"
+    ) {
+      return { mimeType: "image/png", kind: "image" as const, extension: "png" };
+    }
+    if (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP"
+    ) {
+      return { mimeType: "image/webp", kind: "image" as const, extension: "webp" };
+    }
+
+    throw new Error("O arquivo nao e uma imagem ou PDF permitido");
+  }
+
+  private async downloadRegisteredMedia(sourceUrl: string) {
+    let currentUrl = this.normalizeRegisteredMediaUrl(sourceUrl);
+
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+      await this.assertSafeMediaUrl(currentUrl);
+      const response = await axios.get<ArrayBuffer>(currentUrl, {
+        responseType: "arraybuffer",
+        timeout: 20_000,
+        maxRedirects: 0,
+        maxContentLength: CHAT_ATTACHMENT_MAX_FILE_SIZE,
+        maxBodyLength: CHAT_ATTACHMENT_MAX_FILE_SIZE,
+        validateStatus: (status) => status >= 200 && status < 400,
+      });
+
+      if (response.status >= 300) {
+        const location = asString(response.headers.location);
+        if (!location || redirectCount === 3) {
+          throw new Error("Redirecionamento de midia invalido");
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+
+      const buffer = Buffer.from(response.data);
+      if (buffer.byteLength === 0 || buffer.byteLength > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
+        throw new Error("Tamanho do arquivo invalido");
+      }
+
+      return { buffer, ...this.detectRegisteredMedia(buffer) };
+    }
+
+    throw new Error("Nao foi possivel baixar o material cadastrado");
+  }
+
+  private async executeConfiguredMedia(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    runId: string;
+    assetKey: string;
+  }) {
+    const binding = await this.getEnabledAgentTool(params.agent, "send_media");
+    if (!binding) {
+      return { succeeded: false, error: "Tool Enviar midia nao esta ativa" };
+    }
+
+    const { data: asset, error: assetError } = await this.agentsClient
+      .from("tool_media_assets")
+      .select("*")
+      .eq("aces_id", params.agent.aces_id)
+      .eq("agent_tool_id", binding.id)
+      .eq("asset_key", params.assetKey)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (assetError) {
+      throw new HttpError(500, "Nao foi possivel carregar o material selecionado", assetError);
+    }
+    if (!asset) {
+      return { succeeded: false, error: "Material nao encontrado ou desativado" };
+    }
+
+    const toolRunId = randomUUID();
+    const idempotencyKey = `${params.runId}:send_media:${params.assetKey}`;
+    const { error: runError } = await this.agentsClient.from("agent_tool_runs").insert({
+      id: toolRunId,
+      aces_id: params.agent.aces_id,
+      agent_id: params.agent.id,
+      agent_tool_id: binding.id,
+      lead_id: params.lead.id,
+      tool_key: "send_media",
+      status: "running",
+      idempotency_key: idempotencyKey,
+      attempt_count: 1,
+      provider: "evolution",
+      input_snapshot: { asset_key: params.assetKey },
+      started_at: new Date().toISOString(),
+    });
+
+    if (runError?.code === "23505") {
+      const { data: existing } = await this.agentsClient
+        .from("agent_tool_runs")
+        .select("status")
+        .eq("aces_id", params.agent.aces_id)
+        .eq("idempotency_key", idempotencyKey)
+        .maybeSingle();
+      return existing?.status === "succeeded"
+        ? { succeeded: true, duplicated: true }
+        : { succeeded: false, error: "Envio deste material ja esta em processamento" };
+    }
+    if (runError) {
+      throw new HttpError(500, "Nao foi possivel iniciar a Tool Enviar midia", runError);
+    }
+
+    let storagePath: string | null = null;
+    let dispatched = false;
+    try {
+      const downloaded = await this.downloadRegisteredMedia(String(asset.source_url));
+      const messageId = randomUUID();
+      const attachmentId = randomUUID();
+      const configuredName = asString(asset.file_name);
+      const fileName = sanitizeStorageFileName(
+        configuredName ?? `${String(asset.asset_key)}.${downloaded.extension}`
+      );
+      storagePath = buildAttachmentStoragePath({
+        acesId: params.agent.aces_id,
+        leadId: params.lead.id,
+        messageId,
+        attachmentId,
+        fileName,
+      });
+
+      const { error: uploadError } = await this.serviceClient.storage
+        .from(CHAT_ATTACHMENTS_BUCKET)
+        .upload(storagePath, downloaded.buffer, {
+          contentType: downloaded.mimeType,
+          upsert: false,
+        });
+      if (uploadError) {
+        throw new HttpError(500, "Nao foi possivel salvar o material no historico", uploadError);
+      }
+
+      const mediaUrl = await this.createSignedDownloadUrl(storagePath);
+      const phone = requireValue(params.lead.contact_phone, "Lead sem telefone para envio");
+      const instanceName = requireValue(
+        params.agent.instance_name || params.lead.instancia,
+        "Instancia de envio nao definida"
+      );
+      const transport = await this.resolveEvolutionTransport(instanceName, params.agent.aces_id);
+      const provider = new EvolutionWhatsAppProvider({
+        evolutionApiUrl: transport.apiUrl,
+        evolutionApiKey: transport.apiKey,
+      });
+      const caption = asString(asset.default_caption);
+      const providerResult = await provider.sendMedia({
+        instanceName: transport.instanceName,
+        to: phone,
+        mediaUrl,
+        mimeType: downloaded.mimeType,
+        fileName,
+        kind: downloaded.kind,
+        caption,
+        sourceType: "ai",
+      });
+      dispatched = true;
+      const sentAt = new Date().toISOString();
+      await this.saveMessage({
+        id: messageId,
+        leadId: params.lead.id,
+        acesId: params.lead.aces_id,
+        content: buildAttachmentContent(downloaded.kind, caption ?? ""),
+        direction: "outbound",
+        sourceType: "ai",
+        instanceName,
+        conversationId: `ai-media:${params.runId}:${params.assetKey}`,
+        sentAt,
+        provider: providerResult.provider,
+        providerMessageId: providerResult.providerMessageId,
+        providerStatus: providerResult.providerStatus,
+        providerPayloadSummary: providerResult.raw,
+        senderAgentId: params.agent.id,
+      });
+      await this.insertStoredMessageAttachment({
+        attachmentId,
+        messageId,
+        acesId: params.lead.aces_id,
+        leadId: params.lead.id,
+        kind: downloaded.kind,
+        mimeType: downloaded.mimeType,
+        storagePath,
+        fileName,
+        fileSize: downloaded.buffer.byteLength,
+      });
+
+      await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "succeeded",
+          output_snapshot: { message_id: messageId, attachment_id: attachmentId },
+          completed_at: sentAt,
+        })
+        .eq("id", toolRunId);
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: toolRunId,
+        eventType: "tool.send_media.succeeded",
+        payload: {
+          tool_run_id: toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          asset_key: params.assetKey,
+          media_kind: downloaded.kind,
+        },
+      });
+
+      return { succeeded: true, messageId, assetKey: params.assetKey };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha desconhecida ao enviar material";
+      if (storagePath && !dispatched) {
+        await this.serviceClient.storage.from(CHAT_ATTACHMENTS_BUCKET).remove([storagePath]);
+      }
+      await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "failed",
+          error_message: truncateText(message, 1000),
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", toolRunId);
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: toolRunId,
+        eventType: "tool.send_media.failed",
+        payload: {
+          tool_run_id: toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          asset_key: params.assetKey,
+          error: truncateText(message, 500),
+        },
+      });
+      return dispatched
+        ? { succeeded: true, persistenceFailed: true, error: message }
+        : { succeeded: false, error: message };
+    }
+  }
+
   private async sendReplyBlocks(params: {
     agent: AgentRow;
     lead: LeadRow;
     blocks: string[];
     sourceType: "ai" | "human";
     createdBy?: string | null;
+    runId?: string;
+    hasMediaAttachment?: boolean;
   }) {
     const blocks = params.blocks.map((item) => item.trim()).filter(Boolean);
     if (blocks.length === 0) {
-      return;
+      return null;
+    }
+
+    if (params.sourceType === "ai" && params.runId && !params.hasMediaAttachment) {
+      const sentAsAudio = await this.trySendAiAudio({
+        agent: params.agent,
+        lead: params.lead,
+        runId: params.runId,
+        blocks,
+      });
+      if (sentAsAudio) return "audio" as const;
     }
 
     const instanceName = params.agent.instance_name || params.lead.instancia;
@@ -4136,15 +6171,57 @@ export class AgentManager {
         createdBy: params.createdBy ?? null,
         conversationId,
         sentAt,
+        senderAgentId: params.sourceType === "ai" ? params.agent.id : null,
       });
 
       if (index < blocks.length - 1) {
         await wait(900);
       }
     }
+
+    return "text" as const;
   }
 
-  private getHandoffConfig(agent: AgentRow) {
+  private async getHandoffConfig(agent: AgentRow) {
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, is_enabled, readiness")
+      .eq("agent_id", agent.id)
+      .eq("aces_id", agent.aces_id)
+      .eq("tool_key", "forwarding")
+      .maybeSingle();
+
+    if (bindingError) {
+      throw new HttpError(500, "Nao foi possivel carregar a Tool de encaminhamento", bindingError);
+    }
+
+    if (binding?.is_enabled && binding.readiness === "ready") {
+      const { data: destination, error: destinationError } = await this.agentsClient
+        .from("forwarding_destinations")
+        .select("mode, target_phone, target_agent_id, context_instruction")
+        .eq("agent_tool_id", binding.id)
+        .eq("aces_id", agent.aces_id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (destinationError) {
+        throw new HttpError(500, "Nao foi possivel carregar o destino do encaminhamento", destinationError);
+      }
+
+      if (destination) {
+        return {
+          enabled: true,
+          instruction: asString(destination.context_instruction),
+          targetPhone: asString(destination.target_phone),
+          targetAgentId: asString(destination.target_agent_id),
+          mode: destination.mode === "agent" ? ("agent" as const) : ("external_notification" as const),
+          source: "tool" as const,
+        };
+      }
+    }
+
     const instruction = asString(agent.handoff_prompt);
     const targetPhone = asString(agent.handoff_target_phone);
 
@@ -4152,6 +6229,9 @@ export class AgentManager {
       enabled: Boolean(agent.handoff_enabled && instruction && targetPhone),
       instruction,
       targetPhone,
+      targetAgentId: null,
+      mode: "external_notification" as const,
+      source: "legacy" as const,
     };
   }
 
@@ -4186,24 +6266,253 @@ export class AgentManager {
       .join("\n");
   }
 
+  private async transferLeadToAgent(params: {
+    sourceAgent: AgentRow;
+    targetAgentId: string;
+    lead: LeadRow;
+    reason: string;
+    notification: string;
+    sourceMessageId: string | null;
+  }): Promise<HandoffExecutionResult> {
+    const targetAgent = await this.getAgentById(params.targetAgentId);
+    if (targetAgent.aces_id !== params.sourceAgent.aces_id) {
+      throw new HttpError(403, "O agente de destino pertence a outra conta");
+    }
+    if (targetAgent.id === params.sourceAgent.id) {
+      throw new HttpError(400, "O agente nao pode encaminhar para si mesmo");
+    }
+    if (!targetAgent.is_active) {
+      throw new HttpError(409, "O agente de destino esta desativado");
+    }
+
+    const { data: reverseSession, error: reverseError } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .select("id")
+      .eq("aces_id", params.sourceAgent.aces_id)
+      .eq("lead_id", params.lead.id)
+      .eq("source_agent_id", targetAgent.id)
+      .eq("target_agent_id", params.sourceAgent.id)
+      .eq("status", "active")
+      .maybeSingle();
+
+    if (reverseError) {
+      throw new HttpError(500, "Nao foi possivel validar o ciclo de encaminhamento", reverseError);
+    }
+    if (reverseSession) {
+      return {
+        triggered: false,
+        mode: "agent",
+        targetPhone: null,
+        targetAgentId: targetAgent.id,
+        reason: "Encaminhamento bloqueado para evitar um ciclo entre agentes.",
+        notification: null,
+      };
+    }
+
+    const { data: activeSession, error: activeSessionError } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .select("id")
+      .eq("aces_id", params.sourceAgent.aces_id)
+      .eq("lead_id", params.lead.id)
+      .eq("source_agent_id", params.sourceAgent.id)
+      .eq("target_agent_id", targetAgent.id)
+      .eq("status", "active")
+      .maybeSingle();
+
+    if (activeSessionError) {
+      throw new HttpError(500, "Nao foi possivel validar o encaminhamento existente", activeSessionError);
+    }
+    if (activeSession) {
+      return {
+        triggered: true,
+        mode: "agent",
+        targetPhone: null,
+        targetAgentId: targetAgent.id,
+        reason: params.reason,
+        notification: "O lead ja possui um encaminhamento ativo para este agente.",
+      };
+    }
+
+    const sessionId = randomUUID();
+    const { error: sessionError } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .insert({
+        id: sessionId,
+        aces_id: params.sourceAgent.aces_id,
+        lead_id: params.lead.id,
+        source_agent_id: params.sourceAgent.id,
+        target_agent_id: targetAgent.id,
+        source_message_id: params.sourceMessageId,
+        status: "active",
+        context_snapshot: {
+          reason: params.reason,
+          source_agent_name: params.sourceAgent.name,
+          target_agent_name: targetAgent.name,
+          notification: truncateText(params.notification, 1200),
+        },
+        cooldown_until: new Date(Date.now() + 30 * 60_000).toISOString(),
+      });
+
+    if (sessionError) {
+      if (sessionError.code === "23505") {
+        return {
+          triggered: true,
+          mode: "agent",
+          targetPhone: null,
+          targetAgentId: targetAgent.id,
+          reason: params.reason,
+          notification: "O encaminhamento ja foi iniciado em outra execucao.",
+        };
+      }
+      throw new HttpError(500, "Nao foi possivel iniciar o encaminhamento entre agentes", sessionError);
+    }
+
+    const { data: existingMembership, error: membershipLookupError } = await this.serviceClient
+      .from("lead_instance_memberships")
+      .select("id, is_active")
+      .eq("aces_id", params.sourceAgent.aces_id)
+      .eq("lead_id", params.lead.id)
+      .eq("instance_name", targetAgent.instance_name)
+      .maybeSingle();
+
+    if (membershipLookupError) {
+      await this.agentsClient
+        .from("agent_transfer_sessions")
+        .update({ status: "failed", ended_at: new Date().toISOString() })
+        .eq("id", sessionId);
+      throw new HttpError(500, "Nao foi possivel validar a instancia de destino", membershipLookupError);
+    }
+
+    const { error: membershipError } = await this.serviceClient
+      .from("lead_instance_memberships")
+      .upsert(
+        {
+          aces_id: params.sourceAgent.aces_id,
+          lead_id: params.lead.id,
+          instance_name: targetAgent.instance_name,
+          source_agent_id: params.sourceAgent.id,
+          reason: params.reason,
+          is_active: true,
+          revoked_at: null,
+          authorized_at: new Date().toISOString(),
+        },
+        { onConflict: "lead_id,instance_name" }
+      );
+
+    if (membershipError) {
+      await this.agentsClient
+        .from("agent_transfer_sessions")
+        .update({ status: "failed", ended_at: new Date().toISOString() })
+        .eq("id", sessionId);
+      throw new HttpError(500, "Nao foi possivel autorizar a instancia de destino", membershipError);
+    }
+
+    const leadName = params.lead.name?.trim();
+    const introduction = leadName
+      ? `Ola, ${leadName}! Sou ${targetAgent.name}. Recebi seu atendimento de ${params.sourceAgent.name} e vou continuar com voce por aqui.`
+      : `Ola! Sou ${targetAgent.name}. Recebi seu atendimento de ${params.sourceAgent.name} e vou continuar com voce por aqui.`;
+
+    try {
+      await this.sendReplyBlocks({
+        agent: targetAgent,
+        lead: params.lead,
+        blocks: [introduction],
+        sourceType: "ai",
+        runId: `transfer:${sessionId}`,
+        hasMediaAttachment: true,
+      });
+    } catch (error) {
+      await this.agentsClient
+        .from("agent_transfer_sessions")
+        .update({ status: "failed", ended_at: new Date().toISOString() })
+        .eq("id", sessionId);
+
+      if (!existingMembership?.is_active) {
+        await this.serviceClient
+          .from("lead_instance_memberships")
+          .update({ is_active: false, revoked_at: new Date().toISOString() })
+          .eq("aces_id", params.sourceAgent.aces_id)
+          .eq("lead_id", params.lead.id)
+          .eq("instance_name", targetAgent.instance_name);
+      }
+      throw error;
+    }
+
+    await this.enqueueBiEvent({
+      acesId: params.sourceAgent.aces_id,
+      aggregateType: "lead",
+      aggregateId: params.lead.id,
+      eventType: "tool.forwarding.agent.succeeded",
+      payload: {
+        lead_id: params.lead.id,
+        agent_id: params.sourceAgent.id,
+        target_agent_id: targetAgent.id,
+        transfer_session_id: sessionId,
+        tool_key: "forwarding",
+        status: "succeeded",
+      },
+    });
+
+    return {
+      triggered: true,
+      mode: "agent",
+      targetPhone: null,
+      targetAgentId: targetAgent.id,
+      reason: params.reason,
+      notification: introduction,
+    };
+  }
+
   private async triggerHandoff(
     agent: AgentRow,
     lead: LeadRow,
     response: StructuredModelResponse,
     messages: MessageRow[]
   ): Promise<HandoffExecutionResult> {
-    const config = this.getHandoffConfig(agent);
+    const config = await this.getHandoffConfig(agent);
+    const reason =
+      response.handoff_reason.trim() ||
+      response.reason.trim() ||
+      "Condicao de handoff atendida pela IA.";
 
-    if (!config.enabled || !config.targetPhone || !response.should_handoff) {
+    if (!config.enabled || !response.should_handoff) {
       return {
         triggered: false,
+        mode: null,
         targetPhone: null,
+        targetAgentId: null,
         reason: response.handoff_reason.trim(),
         notification: null,
       };
     }
 
     const notification = this.buildHandoffNotification(agent, lead, response, messages);
+    const sourceMessageId = [...messages]
+      .reverse()
+      .find((message) => message.source_type === "lead")?.id ?? null;
+
+    if (config.mode === "agent" && config.targetAgentId) {
+      return this.transferLeadToAgent({
+        sourceAgent: agent,
+        targetAgentId: config.targetAgentId,
+        lead,
+        reason,
+        notification,
+        sourceMessageId,
+      });
+    }
+
+    if (!config.targetPhone) {
+      return {
+        triggered: false,
+        mode: config.mode,
+        targetPhone: null,
+        targetAgentId: config.targetAgentId,
+        reason: "Destino de encaminhamento incompleto.",
+        notification: null,
+      };
+    }
+
     await this.sendWhatsAppMessage(agent.instance_name, config.targetPhone, notification, {
       acesId: agent.aces_id,
       leadId: lead.id,
@@ -4211,13 +6520,26 @@ export class AgentManager {
       sourceType: "handoff",
     });
 
+    await this.enqueueBiEvent({
+      acesId: agent.aces_id,
+      aggregateType: "lead",
+      aggregateId: lead.id,
+      eventType: "tool.forwarding.external_notification.succeeded",
+      payload: {
+        lead_id: lead.id,
+        agent_id: agent.id,
+        tool_key: "forwarding",
+        status: "succeeded",
+        source_message_id: sourceMessageId,
+      },
+    });
+
     return {
       triggered: true,
+      mode: "external_notification",
       targetPhone: config.targetPhone,
-      reason:
-        response.handoff_reason.trim() ||
-        response.reason.trim() ||
-        "Condicao de handoff atendida pela IA.",
+      targetAgentId: null,
+      reason,
       notification,
     };
   }
@@ -4229,7 +6551,7 @@ export class AgentManager {
     tags: TagRow[],
     messages: MessageRow[]
   ): Promise<GeminiExecutionResult<StructuredModelResponse>> {
-    const handoffConfig = this.getHandoffConfig(agent);
+    const handoffConfig = await this.getHandoffConfig(agent);
     const temporalContext = buildNativeTemporalContext();
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
@@ -4259,7 +6581,7 @@ export class AgentManager {
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
       "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
@@ -4272,6 +6594,11 @@ export class AgentManager {
       "Padroes: daqui a pouco = agora + 15 minutos; depois das 18 = hoje 18:00 se ainda nao passou, senao agora + 15 minutos; manha = 09:00; tarde = 14:00; noite/depois das 18 = 18:00.",
       "Se o lead disser apenas amanha ou semana que vem sem horario ou periodo claro, native_followup.needs_clarification=true, should_schedule=false e reply_blocks deve perguntar qual horario prefere.",
       `Mensagem padrao para message_text quando for agendar: ${AGENT_FOLLOWUP_DEFAULT_MESSAGE}`,
+      "visagism deve conter requested, desired_perception_answer, desired_feeling_answer, should_start e reason.",
+      "Marque visagism.requested=true somente quando o lead pedir recomendacao, simulacao ou prova virtual de armacao.",
+      "Extraia desired_perception_answer apenas quando o lead responder como quer ser percebido pelas pessoas.",
+      "Extraia desired_feeling_answer apenas quando o lead responder quais valores ou caracteristicas representam quem ele e.",
+      "Nao confunda descricao tecnica de uma imagem com resposta de qualificacao. Use null quando nao houver resposta explicita.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
       "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
@@ -4301,8 +6628,10 @@ export class AgentManager {
       "",
       `Configuracao de handoff: ${JSON.stringify({
         enabled: handoffConfig.enabled,
+        mode: handoffConfig.mode,
         instruction: handoffConfig.instruction ?? null,
         target_phone_configured: Boolean(handoffConfig.targetPhone),
+        target_agent_configured: Boolean(handoffConfig.targetAgentId),
       })}`,
       "",
       `Historico recente:\n${conversation}`,
@@ -4336,8 +6665,10 @@ export class AgentManager {
       nativeFollowupShouldSchedule: boolean;
       nativeFollowupNeedsClarification: boolean;
       handoffTriggered: boolean;
+      visagism: JsonRecord;
     }
   ): Promise<GeminiExecutionResult<ReplyModelResponse>> {
+    const mediaAssets = await this.listAvailableMediaAssets(agent);
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
       .join("\n");
@@ -4347,10 +6678,13 @@ export class AgentManager {
       "",
       "Voce e o agente de atendimento que responde ao lead pelo WhatsApp.",
       "A analise operacional do CRM ja foi feita por um worker interno. Nao altere etapa, tags, resumo, check ou follow-up.",
-      "Retorne JSON puro apenas com a chave reply_blocks.",
+      "Retorne JSON puro apenas com as chaves reply_blocks e media_asset_key.",
       "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas, naturais e prontas para envio no WhatsApp.",
+      "media_asset_key deve ser null ou uma chave exata da lista de materiais disponiveis.",
+      "Escolha um material apenas quando o lead pedir ou quando ele for claramente util para a resposta. Nunca invente URL ou chave.",
       "Se nao houver resposta util ou segura para enviar agora, retorne {\"reply_blocks\":[]}.",
       "Se houver handoff humano acionado, prefira nao responder ao lead, a menos que a propria conversa exija uma confirmacao curta.",
+      "Se o visagismo estiver waiting_input, pergunte somente o campo faltante indicado. Se estiver succeeded, nao envie texto adicional porque a imagem ja foi enviada.",
       "",
       `Lead atual: ${JSON.stringify({
         id: lead.id,
@@ -4373,7 +6707,10 @@ export class AgentManager {
         native_followup_should_schedule: executionContext.nativeFollowupShouldSchedule,
         native_followup_needs_clarification: executionContext.nativeFollowupNeedsClarification,
         handoff_triggered: executionContext.handoffTriggered,
+        visagism: executionContext.visagism,
       })}`,
+      "",
+      `Materiais disponiveis: ${JSON.stringify(mediaAssets)}`,
       "",
       `Historico recente:\n${conversation}`,
     ].join("\n");
@@ -4826,6 +7163,332 @@ export class AgentManager {
     };
   }
 
+  private async shouldAnalyzeOpticsImage(agent: AgentRow | null, message: ParsedWebhookMessage) {
+    if (!agent || message.mediaKind !== "image" || agent.template_key !== "optics-consultant") return false;
+    const [prescription, visagism] = await Promise.all([
+      this.prescriptionWorkerEnabled ? this.getEnabledAgentTool(agent, "prescription_analyst") : null,
+      this.visagismToolEnabled ? this.getEnabledAgentTool(agent, "visagism") : null,
+    ]);
+    return Boolean(prescription || visagism);
+  }
+
+  private formatPrescriptionContext(
+    extraction: PrescriptionExtraction,
+    rule: LensPriceRule | null,
+    status: "parsed" | "needs_new_image" | "failed",
+    handoffRequired: boolean
+  ) {
+    return [
+      "[ANALISE_DE_RECEITUARIO]",
+      `status=${status}`,
+      `confianca=${extraction.confidence.toFixed(2)}`,
+      `od=esf ${extraction.odSphere ?? "?"}; cil ${extraction.odCylinder ?? "?"}; eixo ${extraction.odAxis ?? "?"}`,
+      `oe=esf ${extraction.oeSphere ?? "?"}; cil ${extraction.oeCylinder ?? "?"}; eixo ${extraction.oeAxis ?? "?"}`,
+      `adicao=${extraction.addition ?? "nao informada"}`,
+      rule ? `regra=${rule.displayName}; preco_centavos=${rule.priceCents}; moeda=${rule.currency}` : "regra_de_preco=nao_encontrada",
+      extraction.observations ? `observacoes=${truncateText(extraction.observations, 300)}` : null,
+      handoffRequired ? "handoff_humano_recomendado=true" : null,
+      status !== "parsed" ? "instrucao=solicitar uma nova foto nitida e completa do receituario" : null,
+      "[/ANALISE_DE_RECEITUARIO]",
+    ].filter((line): line is string => Boolean(line)).join("\n");
+  }
+
+  private formatOpticsImageContext(analysis: OpticsImageAnalysis) {
+    if (analysis.kind === "face" && analysis.face) {
+      return [
+        "[ANALISE_DE_IMAGEM_OTICA]",
+        "kind=face",
+        analysis.face.faceShape ? `formato_facial=${analysis.face.faceShape}` : null,
+        analysis.face.summary ? `resumo=${truncateText(analysis.face.summary, 300)}` : null,
+        analysis.face.hair ? `cabelo=${truncateText(analysis.face.hair, 120)}` : null,
+        analysis.face.skinTone ? `tom_de_pele=${truncateText(analysis.face.skinTone, 120)}` : null,
+        analysis.face.visualFeatures.length > 0
+          ? `caracteristicas=${analysis.face.visualFeatures.join("; ")}`
+          : null,
+        "[/ANALISE_DE_IMAGEM_OTICA]",
+      ].filter((line): line is string => Boolean(line)).join("\n");
+    }
+
+    return [
+      "[ANALISE_DE_IMAGEM_OTICA]",
+      `kind=${analysis.kind}`,
+      analysis.evidence.length > 0 ? `evidencias=${analysis.evidence.join("; ")}` : null,
+      "[/ANALISE_DE_IMAGEM_OTICA]",
+    ].filter((line): line is string => Boolean(line)).join("\n");
+  }
+
+  private async processPrescriptionImage(
+    agent: AgentRow,
+    lead: LeadRow,
+    message: ParsedWebhookMessage
+  ) {
+    if (!message.messageId || !(await this.shouldAnalyzeOpticsImage(agent, message))) return null;
+
+    const binding = await this.getEnabledAgentTool(agent, "prescription_analyst");
+    if (!binding) return null;
+    const occurrenceKey = `message:${message.messageId}`;
+    const idempotencyKey = `prescription:${lead.id}:${occurrenceKey}`;
+    const { data: existing } = await this.agentsClient
+      .from("agent_tool_runs")
+      .select("id, status, output_snapshot")
+      .eq("aces_id", agent.aces_id)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (existing) {
+      const context = asString(asRecord(existing.output_snapshot).agent_context);
+      if (context) {
+        await this.serviceClient.from("message_history").update({ content: context })
+          .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
+      }
+      return context;
+    }
+
+    const { data: attachment, error: attachmentError } = await this.serviceClient
+      .from("message_attachments")
+      .select("id, storage_bucket, storage_path, mime_type")
+      .eq("aces_id", agent.aces_id)
+      .eq("lead_id", lead.id)
+      .eq("message_id", message.messageId)
+      .eq("kind", "image")
+      .limit(1)
+      .maybeSingle();
+    if (attachmentError) throw new HttpError(500, "Nao foi possivel carregar o receituario", attachmentError);
+    if (!attachment) return null;
+
+    const toolRunId = randomUUID();
+    const startedAt = new Date();
+    const { error: runError } = await this.agentsClient.from("agent_tool_runs").insert({
+      id: toolRunId,
+      aces_id: agent.aces_id,
+      agent_id: agent.id,
+      agent_tool_id: binding.id,
+      lead_id: lead.id,
+      tool_key: "prescription_analyst",
+      status: "running",
+      idempotency_key: idempotencyKey,
+      attempt_count: 1,
+      provider: "google",
+      model: this.prescriptionWorkerModel,
+      input_snapshot: { occurrence_key: occurrenceKey, source_message_id: message.messageId, source_attachment_id: attachment.id },
+      started_at: startedAt.toISOString(),
+    });
+    if (runError) throw new HttpError(500, "Nao foi possivel iniciar a leitura do receituario", runError);
+
+    try {
+      const { data: file, error: downloadError } = await this.serviceClient.storage
+        .from(String(attachment.storage_bucket))
+        .download(String(attachment.storage_path));
+      if (downloadError || !file) throw new HttpError(500, "Nao foi possivel baixar o receituario", downloadError);
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const prompt = [
+        "Voce e um worker optico multimodal. Analise esta imagem uma unica vez e retorne somente JSON valido.",
+        "Classifique kind como prescription, face, product, document ou other e inclua evidence como lista curta.",
+        "Se kind=prescription, preencha prescription com confidence, od_sphere, od_cylinder, od_axis, oe_sphere, oe_cylinder, oe_axis, addition, distance_pd, near_pd, patient_name, prescriber_name, prescriber_registration, prescription_date, expires_at e observations.",
+        "Nao invente valores ilegíveis. Use null. Normalize graus com sinal e ponto decimal, eixos entre 0 e 180 e datas YYYY-MM-DD.",
+        "Se kind=face, preencha face com face_shape, summary, hair, skin_tone e visual_features. Nao diagnostique nem infira atributos sensiveis.",
+        "Para campos que nao pertencem ao kind identificado, use null.",
+      ].join("\n");
+      const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(
+        this.prescriptionWorkerModel,
+        [prompt, { inlineData: { mimeType: String(attachment.mime_type || "image/jpeg"), data: buffer.toString("base64") } }]
+      );
+      const rawText = result.response.text();
+      const analysis = parseOpticsImageAnalysis(rawText);
+      if (analysis.kind !== "prescription" || !analysis.prescription) {
+        const agentContext = this.formatOpticsImageContext(analysis);
+        await this.serviceClient.from("message_history").update({ content: agentContext })
+          .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
+        await this.agentsClient.from("agent_tool_runs").update({
+          status: "cancelled",
+          output_snapshot: {
+            image_analysis: analysis,
+            agent_context: agentContext,
+            raw_model_response: rawText,
+            model_name: modelName,
+            used_fallback_model: usedFallback,
+            generation_attempt: attempt,
+          },
+          completed_at: new Date().toISOString(),
+        }).eq("id", toolRunId).eq("aces_id", agent.aces_id);
+        await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
+        return analysis;
+      }
+      const extraction = analysis.prescription;
+      const validationErrors = extraction.isPrescription
+        ? getPrescriptionValidationErrors(extraction)
+        : ["not_a_prescription"];
+      const valid = validationErrors.length === 0 && extraction.confidence >= 0.75;
+      const status = valid ? "parsed" : "needs_new_image";
+      const { data: ruleRows, error: rulesError } = await this.serviceClient.from("lens_price_rules")
+        .select("*").eq("aces_id", agent.aces_id).eq("agent_tool_id", binding.id).eq("is_active", true);
+      if (rulesError) throw new HttpError(500, "Nao foi possivel carregar regras de lentes", rulesError);
+      const matchedRule = valid
+        ? matchLensPriceRule(extraction, (ruleRows ?? []).map((row: Record<string, unknown>) => this.mapLensPriceRule(row)))
+        : null;
+      const { count: priorFailures } = await this.agentsClient.from("agent_tool_runs")
+        .select("id", { count: "exact", head: true }).eq("aces_id", agent.aces_id).eq("lead_id", lead.id)
+        .eq("tool_key", "prescription_analyst").eq("status", "waiting_input");
+      const handoffRequired = !valid && Number(priorFailures ?? 0) >= 1;
+      const agentContext = this.formatPrescriptionContext(extraction, matchedRule, status, handoffRequired);
+      const outputSnapshot = {
+        occurrence_key: occurrenceKey,
+        extraction,
+        validation_errors: validationErrors,
+        matched_rule: matchedRule,
+        handoff_required: handoffRequired,
+        agent_context: agentContext,
+        raw_model_response: rawText,
+        model_name: modelName,
+        used_fallback_model: usedFallback,
+        generation_attempt: attempt,
+      };
+      const { error: prescriptionError } = await this.serviceClient.from("receituarios").insert({
+        lead_id: lead.id,
+        aces_id: agent.aces_id,
+        source_message_id: message.messageId,
+        source_attachment_id: attachment.id,
+        agent_tool_run_id: toolRunId,
+        occurrence_key: occurrenceKey,
+        status,
+        od_sphere: extraction.odSphere,
+        od_cylinder: extraction.odCylinder,
+        od_axis: extraction.odAxis,
+        oe_sphere: extraction.oeSphere,
+        oe_cylinder: extraction.oeCylinder,
+        oe_axis: extraction.oeAxis,
+        addition: extraction.addition,
+        distance_pd: extraction.distancePd,
+        near_pd: extraction.nearPd,
+        patient_name: extraction.patientName,
+        prescriber_name: extraction.prescriberName,
+        prescriber_registration: extraction.prescriberRegistration,
+        prescription_date: extraction.prescriptionDate,
+        expires_at: extraction.expiresAt,
+        observacoes: extraction.observations,
+        analysis_model: modelName,
+        raw_extraction: outputSnapshot,
+        extraction_confidence: extraction.confidence,
+        matched_lens_price_rule_id: matchedRule?.id ?? null,
+        quoted_price_cents: matchedRule?.priceCents ?? null,
+      });
+      if (prescriptionError) throw new HttpError(500, "Nao foi possivel salvar o receituario", prescriptionError);
+      await this.serviceClient.from("message_history").update({ content: agentContext })
+        .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
+      await this.agentsClient.from("agent_tool_runs").update({
+        status: valid ? "succeeded" : "waiting_input",
+        output_snapshot: outputSnapshot,
+        completed_at: new Date().toISOString(),
+      }).eq("id", toolRunId).eq("aces_id", agent.aces_id);
+      await this.enqueueBiEvent({
+        acesId: agent.aces_id,
+        aggregateType: "agent_tool_run",
+        aggregateId: toolRunId,
+        eventType: valid ? "tool.prescription_analyst.succeeded" : "tool.prescription_analyst.needs_new_image",
+        payload: {
+          tool_key: "prescription_analyst", tool_run_id: toolRunId, agent_id: agent.id, lead_id: lead.id,
+          status: valid ? "succeeded" : "waiting_input", duration_ms: Date.now() - startedAt.getTime(),
+          confidence: extraction.confidence, matched_rule_id: matchedRule?.id ?? null, handoff_required: handoffRequired,
+        },
+      });
+      await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
+      return analysis;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Falha ao analisar receituario";
+      await this.agentsClient.from("agent_tool_runs").update({
+        status: "failed", error_code: "prescription_analysis_failed", error_message: errorMessage,
+        completed_at: new Date().toISOString(),
+      }).eq("id", toolRunId).eq("aces_id", agent.aces_id);
+      await this.enqueueBiEvent({
+        acesId: agent.aces_id, aggregateType: "agent_tool_run", aggregateId: toolRunId,
+        eventType: "tool.prescription_analyst.failed",
+        payload: { tool_key: "prescription_analyst", tool_run_id: toolRunId, agent_id: agent.id, lead_id: lead.id, status: "failed", error: errorMessage },
+      });
+      throw error;
+    }
+  }
+
+  private async processBufferedOpticsImages(agent: AgentRow, lead: LeadRow, entries: ParsedWebhookMessage[]) {
+    const analyses = new Map<string, OpticsImageAnalysis>();
+    for (const entry of entries) {
+      if (entry.mediaKind !== "image" || !entry.messageId) continue;
+      try {
+        const analysis = await this.processPrescriptionImage(agent, lead, entry);
+        if (analysis && typeof analysis === "object") analyses.set(entry.messageId, analysis);
+      } catch {
+        // Preserve the conversation even if the internal visual worker is temporarily unavailable.
+      }
+    }
+    return analyses;
+  }
+
+  private async findLatestFaceMessageId(acesId: number, leadId: string) {
+    const { data, error } = await this.serviceClient.from("message_history")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("lead_id", leadId)
+      .eq("direction", "inbound")
+      .like("content", "%kind=face%")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel localizar a foto de rosto do lead", error);
+    return data?.id ? String(data.id) : null;
+  }
+
+  private async applyVisagismDecision(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    decision: VisagismDecision;
+    latestInbound: LatestLeadInboundMessage | null;
+    bufferedEntries: ParsedWebhookMessage[];
+    imageAnalyses: Map<string, OpticsImageAnalysis>;
+  }) {
+    if (params.agent.template_key !== "optics-consultant") {
+      return { status: "not_applicable" as const };
+    }
+
+    const answers = await this.persistVisagismLeadAnswers({
+      agent: params.agent,
+      lead: params.lead,
+      decision: params.decision,
+      sourceMessageId: params.latestInbound?.id ?? null,
+    });
+    const binding = await this.getEnabledAgentTool(params.agent, "visagism");
+    if (!this.visagismToolEnabled || !this.visagismInternalRuntimeEnabled || !binding) {
+      return { status: "unavailable" as const };
+    }
+    if (!params.decision.requested && !params.decision.should_start) {
+      return { status: "idle" as const };
+    }
+
+    const answerKeys = new Set(answers.map((answer) => answer.question_key));
+    const missingAnswerKeys = ["desired_perception", "desired_feeling"].filter((key) => !answerKeys.has(key));
+    const currentFaceEntry = [...params.bufferedEntries].reverse().find((entry) => {
+      const analysis = entry.messageId ? params.imageAnalyses.get(entry.messageId) : null;
+      return analysis?.kind === "face";
+    });
+    const sourceMessageId = currentFaceEntry?.messageId ?? await this.findLatestFaceMessageId(params.agent.aces_id, params.lead.id);
+    const faceAnalysis = currentFaceEntry?.messageId
+      ? params.imageAnalyses.get(currentFaceEntry.messageId)?.face ?? null
+      : null;
+
+    if (missingAnswerKeys.length > 0 || !sourceMessageId) {
+      return {
+        status: "waiting_input" as const,
+        missingAnswerKeys,
+        missingImage: !sourceMessageId,
+      };
+    }
+
+    return this.startVisagismRunInternal({
+      agent: params.agent,
+      lead: params.lead,
+      sourceMessageId,
+      excludedItemId: null,
+      faceAnalysis,
+    });
+  }
+
   private async queueBufferedProcessing(agent: AgentRow, leadId: string, message: ParsedWebhookMessage) {
     const bufferKey = `crm-ai:buffer:${agent.id}:${leadId}`;
     if (this.redis) {
@@ -4878,11 +7541,13 @@ export class AgentManager {
     const agent = await this.getAgentById(agentId);
     const bufferedEntries = await this.consumeBufferedEntries(agentId, leadId);
 
-    const lead = await this.loadLeadById(leadId, agent.aces_id, agent.created_by);
-    const aiState = await this.resolveLeadAiState(lead.id, agent, lead.instancia);
+    const lead = await this.loadLeadForAgent(agent, leadId);
+    const aiState = await this.resolveLeadAiState(lead.id, agent, agent.instance_name);
     if (!aiState.enabled) {
       return;
     }
+
+    const opticsImageAnalyses = await this.processBufferedOpticsImages(agent, lead, bufferedEntries);
 
     const leadState = await this.getLeadState(agent.id, lead.id);
     const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id);
@@ -4911,6 +7576,7 @@ export class AgentManager {
     if (inboundMessages.length === 0 && latestInbound?.id) {
       inboundMessages.push(latestInbound.id);
     }
+    const runId = latestInbound?.id ?? randomUUID();
 
     try {
       const result = await this.classifyConversation(agent, lead, rules, tags, conversation);
@@ -4919,12 +7585,36 @@ export class AgentManager {
         result.parsed.stage_decision.stage_id && validStageIds.has(result.parsed.stage_decision.stage_id)
           ? result.parsed.stage_decision.stage_id
           : null;
+      const visagismApplication = await this.applyVisagismDecision({
+        agent,
+        lead,
+        decision: result.parsed.visagism,
+        latestInbound,
+        bufferedEntries,
+        imageAnalyses: opticsImageAnalyses,
+      });
       const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, {
         nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
         nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
         handoffTriggered: result.parsed.should_handoff,
+        visagism: asRecord(visagismApplication),
       });
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
+      const visagismRecord = asRecord(visagismApplication);
+      if (visagismRecord.status === "succeeded") {
+        result.parsed.reply_blocks = [];
+      } else if (visagismRecord.status === "waiting_input") {
+        const missing = Array.isArray(visagismRecord.missingAnswerKeys)
+          ? visagismRecord.missingAnswerKeys.map(String)
+          : [];
+        result.parsed.reply_blocks = missing.includes("desired_perception")
+          ? ["Como voce quer ser percebido pelas pessoas?"]
+          : missing.includes("desired_feeling")
+            ? ["Quais valores ou caracteristicas melhor representam quem voce realmente e?"]
+            : visagismRecord.missingImage === true
+              ? ["Para fazer a simulacao, envie uma foto frontal, bem iluminada e sem cortes no rosto."]
+              : result.parsed.reply_blocks;
+      }
       const crmApplication = await this.applyCrmDecisions({
         agent,
         lead,
@@ -4938,16 +7628,17 @@ export class AgentManager {
         response: result.parsed,
         latestInbound,
       });
-      const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
       if (nativeFollowupApplication.needsClarification && result.parsed.reply_blocks.length === 0) {
         result.parsed.reply_blocks.push(AGENT_FOLLOWUP_CLARIFICATION_REPLY);
       } else if (nativeFollowupApplication.scheduled && result.parsed.reply_blocks.length === 0) {
         result.parsed.reply_blocks.push("Combinado. Vou te chamar no horario combinado por aqui.");
       }
-      const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
       let freezeUntil: string | null = null;
       const processedAt = latestInbound?.sent_at ?? bufferedEntries[bufferedEntries.length - 1]?.sentAt ?? new Date().toISOString();
-      const lastAiReplyAt = result.parsed.reply_blocks.length > 0 ? new Date().toISOString() : null;
+      const lastAiReplyAt =
+        result.parsed.reply_blocks.length > 0 || replyResult.parsed.media_asset_key
+          ? new Date().toISOString()
+          : null;
       const tokensIn =
         result.tokensIn === null && replyResult.tokensIn === null
           ? null
@@ -4956,15 +7647,45 @@ export class AgentManager {
         result.tokensOut === null && replyResult.tokensOut === null
           ? null
           : (result.tokensOut ?? 0) + (replyResult.tokensOut ?? 0);
+      const requestedMediaKey = replyResult.parsed.media_asset_key;
 
+      let deliveryFormat: "audio" | "text" | null = null;
       if (result.parsed.reply_blocks.length > 0) {
-        await this.sendReplyBlocks({
+        deliveryFormat = await this.sendReplyBlocks({
           agent,
           lead,
           blocks: result.parsed.reply_blocks,
           sourceType: "ai",
+          runId,
+          hasMediaAttachment: Boolean(requestedMediaKey),
         });
       }
+
+      let mediaDelivery:
+        | { succeeded: boolean; error?: string; duplicated?: boolean; messageId?: string; assetKey?: string }
+        | null = null;
+      if (requestedMediaKey) {
+        mediaDelivery = await this.executeConfiguredMedia({
+          agent,
+          lead,
+          runId,
+          assetKey: requestedMediaKey,
+        });
+
+        if (!mediaDelivery.succeeded && result.parsed.reply_blocks.length === 0) {
+          deliveryFormat = await this.sendReplyBlocks({
+            agent,
+            lead,
+            blocks: ["Nao consegui enviar esse material agora. Posso tentar novamente em instantes."],
+            sourceType: "ai",
+            runId,
+            hasMediaAttachment: true,
+          });
+        }
+      }
+
+      const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
+      const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
 
       if (shouldFreezeLead) {
         freezeUntil = await this.freezeLead(
@@ -4993,6 +7714,7 @@ export class AgentManager {
       }
 
       await this.createRun({
+        runId,
         agentId: agent.id,
         leadId: lead.id,
         messageHistoryIds: inboundMessages,
@@ -5018,6 +7740,7 @@ export class AgentManager {
           reply_model_name: replyResult.modelName,
           reply_used_fallback_model: replyResult.usedFallback,
           reply_generation_attempt: replyResult.attempt,
+          reply_media_asset_key: requestedMediaKey,
           structured: result.parsed,
           crm_application: crmApplication.audit,
           native_followup: {
@@ -5030,6 +7753,9 @@ export class AgentManager {
             audit: nativeFollowupApplication.audit,
           },
           handoff: handoffResult,
+          delivery_format: deliveryFormat,
+          media_delivery: mediaDelivery,
+          visagism: visagismApplication,
           freeze_until: freezeUntil,
         },
         suggestedStageId,
@@ -5039,7 +7765,7 @@ export class AgentManager {
           ? "stage_applied"
           : handoffResult.triggered
             ? "manual_pause"
-            : result.parsed.reply_blocks.length > 0
+            : result.parsed.reply_blocks.length > 0 || mediaDelivery?.succeeded
               ? "reply_only"
               : crmApplication.changed
                 ? "crm_updated"
@@ -5054,6 +7780,7 @@ export class AgentManager {
       });
 
       await this.createRun({
+        runId,
         agentId: agent.id,
         leadId: lead.id,
         messageHistoryIds: inboundMessages,
@@ -5095,12 +7822,29 @@ export class AgentManager {
       },
     };
 
-    const agent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
-    const normalizedContent = await this.normalizeInboundContent(message);
+    const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
     const duplicated = await this.dedupeIncomingMessage(message.messageId);
     if (duplicated) {
       return { ignored: true, reason: "Mensagem duplicada" };
     }
+
+    const existingLeadForRouting = await this.findLeadByPhone(instance.aces_id, message.phone);
+    const isPrimaryInstance =
+      !existingLeadForRouting || existingLeadForRouting.instancia === message.instanceName;
+    const hasAdditionalMembership =
+      existingLeadForRouting && !isPrimaryInstance
+        ? await this.hasActiveLeadInstanceMembership(
+            instance.aces_id,
+            existingLeadForRouting.id,
+            message.instanceName
+          )
+        : false;
+    const instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
+    const agent = instanceAuthorized ? candidateAgent : null;
+    const ownerIdForLead = hasAdditionalMembership ? null : agent?.created_by ?? null;
+    const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
+      ? "[imagem recebida para analise optica]"
+      : await this.normalizeInboundContent(message);
 
     if (message.fromMe) {
       const matchedOutbound = await this.matchOutboundEcho(
@@ -5150,7 +7894,7 @@ export class AgentManager {
         message.phone,
         message.instanceName,
         null,
-        agent?.created_by ?? null
+        ownerIdForLead
       );
 
       const fallbackMatch = await this.matchRecentOutboundMessageFallback(
@@ -5257,7 +8001,7 @@ export class AgentManager {
       message.phone,
       message.instanceName,
       message.pushName,
-      agent?.created_by ?? null
+      ownerIdForLead
     );
     const savedMessage = await this.saveMessage({
       leadId: lead.id,
@@ -5837,12 +8581,15 @@ export class AgentManager {
       provider: "gemini",
       model: AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: false,
+      temperature: 0.4,
       buffer_wait_ms: 15000,
       human_pause_minutes: 60,
       auto_apply_threshold: 0.85,
       handoff_enabled: false,
       handoff_prompt: null,
       handoff_target_phone: null,
+      template_key: null,
+      template_version: null,
       created_by: context.crmUserId,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -6093,6 +8840,636 @@ export class AgentManager {
       success: true,
       normalizedNumber: recipient.finalNumber,
     };
+  }
+
+  private async loadVisagismLeadAnswers(acesId: number, leadId: string) {
+    const { data, error } = await this.serviceClient
+      .from("lead_tool_answers")
+      .select("question_key, answer_text, answer_value, answered_at")
+      .eq("aces_id", acesId)
+      .eq("lead_id", leadId)
+      .eq("tool_key", "visagism")
+      .in("question_key", ["desired_perception", "desired_feeling"])
+      .order("answered_at", { ascending: true });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar as respostas de visagismo", error);
+    return (data ?? []) as VisagismLeadAnswerRow[];
+  }
+
+  private async persistVisagismLeadAnswers(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    decision: VisagismDecision;
+    sourceMessageId: string | null;
+  }) {
+    const existingAnswers = await this.loadVisagismLeadAnswers(params.agent.aces_id, params.lead.id);
+    const existingKeys = new Set(existingAnswers.map((answer) => answer.question_key));
+    const candidates = [
+      {
+        questionKey: "desired_perception",
+        answer:
+          params.decision.desired_perception_answer ??
+          (existingKeys.has("desired_perception") ? null : params.lead.como_quer_ser_percebido),
+      },
+      {
+        questionKey: "desired_feeling",
+        answer:
+          params.decision.desired_feeling_answer ??
+          (existingKeys.has("desired_feeling") ? null : params.lead.qual_imagem_passar),
+      },
+    ].filter((item): item is { questionKey: string; answer: string } => Boolean(item.answer?.trim()));
+
+    if (candidates.length > 0) {
+      const answeredAt = new Date().toISOString();
+      const { error } = await this.serviceClient.from("lead_tool_answers").upsert(
+        candidates.map((item) => ({
+          aces_id: params.agent.aces_id,
+          lead_id: params.lead.id,
+          tool_key: "visagism",
+          question_key: item.questionKey,
+          answer_text: item.answer.trim(),
+          answer_value: null,
+          source_message_id: params.sourceMessageId,
+          answered_at: answeredAt,
+        })),
+        { onConflict: "aces_id,lead_id,tool_key,question_key" }
+      );
+      if (error) throw new HttpError(500, "Nao foi possivel salvar a qualificacao do visagismo", error);
+    }
+
+    const legacyUpdates: JsonRecord = {};
+    if (params.decision.desired_perception_answer) {
+      legacyUpdates.como_quer_ser_percebido = params.decision.desired_perception_answer;
+    }
+    if (params.decision.desired_feeling_answer) {
+      legacyUpdates.qual_imagem_passar = params.decision.desired_feeling_answer;
+    }
+    if (Object.keys(legacyUpdates).length > 0) {
+      const { error } = await this.serviceClient.from("leads").update(legacyUpdates)
+        .eq("id", params.lead.id).eq("aces_id", params.agent.aces_id);
+      if (error) throw new HttpError(500, "Nao foi possivel espelhar a qualificacao legada", error);
+    }
+
+    return this.loadVisagismLeadAnswers(params.agent.aces_id, params.lead.id);
+  }
+
+  private async findLatestVisagismSelection(acesId: number, leadId: string) {
+    const { data, error } = await this.agentsClient
+      .from("agent_tool_runs")
+      .select("output_snapshot")
+      .eq("aces_id", acesId)
+      .eq("lead_id", leadId)
+      .eq("tool_key", "visagism")
+      .eq("status", "succeeded")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel carregar a ultima selecao de visagismo", error);
+    const snapshot = asRecord(data?.output_snapshot);
+    return {
+      selectedItemId: asString(snapshot.selected_item_id),
+    };
+  }
+
+  private async listActiveVisagismCatalog(acesId: number) {
+    const { data, error } = await this.agentsClient
+      .from("visagism_catalog_items")
+      .select("*")
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .order("display_order", { ascending: true })
+      .order("created_at", { ascending: false });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar o catalogo ativo de visagismo", error);
+    return (data ?? []) as VisagismCatalogItemRow[];
+  }
+
+  private async matchVisagismCatalogItem(params: {
+    catalog: VisagismCatalogItemRow[];
+    answers: VisagismLeadAnswerRow[];
+    faceAnalysis: FaceAnalysis | null;
+    excludedItemId: string | null;
+    priorSelectedItemId: string | null;
+  }) {
+    const excluded = new Set(
+      [params.excludedItemId, params.priorSelectedItemId].filter((id): id is string => Boolean(id))
+    );
+    const alternatives = params.catalog.filter((item) => !excluded.has(item.id));
+    const eligible = alternatives.length > 0 ? alternatives : params.catalog;
+    if (eligible.length === 0) return null;
+
+    const fallback = pickVisagismCatalogItem({
+      catalog: eligible.map((item) => ({
+        id: item.id,
+        productCode: item.product_code,
+        displayOrder: item.display_order,
+      })),
+    });
+    const fallbackItem = eligible.find((item) => item.id === fallback?.id) ?? eligible[0];
+
+    try {
+      const prompt = [
+        "Voce seleciona uma unica armacao para um atendimento de visagismo.",
+        "Retorne somente JSON com selected_item_id e reason.",
+        "O selected_item_id deve ser exatamente um ID da lista recebida.",
+        `Analise facial: ${JSON.stringify(params.faceAnalysis)}`,
+        `Qualificacao: ${JSON.stringify(params.answers.map((answer) => ({ question: answer.question_key, answer: answer.answer_text })))}`,
+        `Catalogo permitido: ${JSON.stringify(eligible.map((item) => ({
+          item_id: item.id,
+          product: item.product_code,
+          description: item.recommendation_description,
+          attributes: item.attributes,
+        })))}`,
+      ].join("\n");
+      const { result, modelName } = await this.generateGeminiContent(this.visagismMatchingWorkerModel, prompt);
+      const parsed = asRecord(JSON.parse(result.response.text().trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "")));
+      const selectedId = asString(parsed.selected_item_id);
+      const selected = eligible.find((item) => item.id === selectedId);
+      if (!selected) throw new Error("Worker selecionou item fora do catalogo autorizado");
+      return { item: selected, modelName, reason: asString(parsed.reason), usedFallback: false };
+    } catch (error) {
+      return {
+        item: fallbackItem,
+        modelName: this.visagismMatchingWorkerModel,
+        reason: `fallback_deterministico:${truncateText(error instanceof Error ? error.message : "erro desconhecido", 200)}`,
+        usedFallback: true,
+      };
+    }
+  }
+
+  private async startVisagismRunInternal(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    sourceMessageId: string | null;
+    excludedItemId: string | null;
+    faceAnalysis: FaceAnalysis | null;
+  }) {
+    if (!this.visagismToolEnabled || !this.visagismInternalRuntimeEnabled) {
+      throw new HttpError(409, "Visagismo interno esta desativado por feature flag");
+    }
+    const binding = await this.getEnabledAgentTool(params.agent, "visagism");
+    if (!binding) throw new HttpError(409, "Tool Visagismo precisa estar pronta e habilitada");
+
+    const [answers, sourceAttachment, catalog, previousSelection] = await Promise.all([
+      this.loadVisagismLeadAnswers(params.agent.aces_id, params.lead.id),
+      this.loadLatestLeadImageAttachment(params.agent.aces_id, params.lead.id, params.sourceMessageId),
+      this.listActiveVisagismCatalog(params.agent.aces_id),
+      this.findLatestVisagismSelection(params.agent.aces_id, params.lead.id),
+    ]);
+    const ready = Boolean(sourceAttachment && answers.length >= 2 && catalog.length > 0);
+    const idempotencyKey = `visagism:${params.lead.id}:${sourceAttachment?.messageId ?? "no-image"}`;
+    const { data: existing, error: existingError } = await this.agentsClient
+      .from("agent_tool_runs")
+      .select("id, status, attempt_count, output_snapshot, error_message")
+      .eq("aces_id", params.agent.aces_id)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (existingError) throw new HttpError(500, "Nao foi possivel verificar execucao duplicada", existingError);
+    const idempotencyAction = resolveVisagismIdempotencyAction(existing?.status ?? null, ready);
+    if (existing && idempotencyAction === "return_existing") {
+      return {
+        runId: String(existing.id),
+        status: String(existing.status) as "waiting_input" | "running" | "succeeded" | "failed",
+        selectedItemId: asString(asRecord(existing.output_snapshot).selected_item_id),
+        duplicated: true,
+        error: asString(existing.error_message),
+      };
+    }
+
+    const toolRunId = existing ? String(existing.id) : randomUUID();
+    const inputSnapshot = {
+      source_message_id: sourceAttachment?.messageId ?? null,
+      source_attachment_path: sourceAttachment?.storagePath ?? null,
+      answers,
+      face_analysis: params.faceAnalysis,
+      catalog_item_ids: catalog.map((item) => item.id),
+      excluded_item_id: params.excludedItemId,
+    };
+    if (existing && idempotencyAction === "resume") {
+      const { error } = await this.agentsClient.from("agent_tool_runs").update({
+        status: "running",
+        input_snapshot: inputSnapshot,
+        error_code: null,
+        error_message: null,
+        started_at: new Date().toISOString(),
+        completed_at: null,
+      }).eq("id", toolRunId).eq("aces_id", params.agent.aces_id).eq("status", "waiting_input");
+      if (error) throw new HttpError(500, "Nao foi possivel retomar a execucao de visagismo", error);
+    } else {
+      const { error: insertError } = await this.agentsClient.from("agent_tool_runs").insert({
+        id: toolRunId,
+        aces_id: params.agent.aces_id,
+        agent_id: params.agent.id,
+        agent_tool_id: binding.id,
+        lead_id: params.lead.id,
+        tool_key: "visagism",
+        status: ready ? "running" : "waiting_input",
+        idempotency_key: idempotencyKey,
+        attempt_count: 1,
+        provider: "internal",
+        model: `${this.visagismAnalysisWorkerModel}/${this.visagismMatchingWorkerModel}/${this.visagismImageWorkerModel}`,
+        input_snapshot: inputSnapshot,
+        queued_at: new Date().toISOString(),
+        started_at: ready ? new Date().toISOString() : null,
+      });
+      if (insertError?.code === "23505") {
+        const { data: raced } = await this.agentsClient.from("agent_tool_runs")
+          .select("id, status, output_snapshot").eq("aces_id", params.agent.aces_id)
+          .eq("idempotency_key", idempotencyKey).maybeSingle();
+        return {
+          runId: String(raced?.id),
+          status: String(raced?.status ?? "running") as "waiting_input" | "running" | "succeeded" | "failed",
+          selectedItemId: asString(asRecord(raced?.output_snapshot).selected_item_id),
+          duplicated: true,
+        };
+      }
+      if (insertError) throw new HttpError(500, "Nao foi possivel iniciar a execucao de visagismo", insertError);
+    }
+
+    await this.enqueueBiEvent({
+      acesId: params.agent.aces_id,
+      aggregateType: "tool_run",
+      aggregateId: toolRunId,
+      eventType: ready ? "tool.visagism.started" : "tool.visagism.waiting_input",
+      payload: {
+        tool_key: "visagism",
+        tool_run_id: toolRunId,
+        lead_id: params.lead.id,
+        agent_id: params.agent.id,
+        status: ready ? "running" : "waiting_input",
+        missing_source_image: !sourceAttachment,
+        missing_answers: answers.length < 2,
+        missing_catalog: catalog.length === 0,
+      },
+    });
+    if (!ready || !sourceAttachment) return { runId: toolRunId, status: "waiting_input" as const };
+
+    const match = await this.matchVisagismCatalogItem({
+      catalog,
+      answers,
+      faceAnalysis: params.faceAnalysis,
+      excludedItemId: params.excludedItemId,
+      priorSelectedItemId: previousSelection.selectedItemId,
+    });
+    if (!match) return { runId: toolRunId, status: "waiting_input" as const };
+
+    await this.enqueueBiEvent({
+      acesId: params.agent.aces_id,
+      aggregateType: "tool_run",
+      aggregateId: toolRunId,
+      eventType: "tool.visagism.product_selected",
+      payload: {
+        tool_key: "visagism",
+        tool_run_id: toolRunId,
+        lead_id: params.lead.id,
+        agent_id: params.agent.id,
+        status: "selected",
+        selected_item_id: match.item.id,
+        matching_model: match.modelName,
+        matching_fallback: match.usedFallback,
+      },
+    });
+    return this.executeVisagismRun({
+      toolRunId,
+      agent: params.agent,
+      lead: params.lead,
+      sourceAttachment,
+      answers,
+      faceAnalysis: params.faceAnalysis,
+      selectedItem: match.item,
+      matching: { modelName: match.modelName, reason: match.reason, usedFallback: match.usedFallback },
+    });
+  }
+
+  private async loadLatestLeadImageAttachment(
+    acesId: number,
+    leadId: string,
+    sourceMessageId?: string | null
+  ) {
+    let query = this.serviceClient
+      .from("message_attachments")
+      .select("message_id, storage_bucket, storage_path, file_name, mime_type, file_size, created_at")
+      .eq("aces_id", acesId)
+      .eq("lead_id", leadId)
+      .eq("kind", "image")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (sourceMessageId) {
+      query = query.eq("message_id", sourceMessageId);
+    }
+
+    const { data, error } = await query.maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel carregar a imagem do lead", error);
+    if (!data) return null;
+    return {
+      messageId: String(data.message_id),
+      storagePath: String(data.storage_path),
+      fileName: String(data.file_name ?? "source.jpg"),
+      mimeType: String(data.mime_type ?? "image/jpeg"),
+      fileSize: Number(data.file_size ?? 0),
+    };
+  }
+
+  private async renderVisagismImage(params: {
+    sourceAttachment: { storagePath: string; mimeType: string; fileName: string };
+    selectedItem: VisagismCatalogItemRow;
+    answers: VisagismLeadAnswerRow[];
+    faceAnalysis: FaceAnalysis | null;
+  }) {
+    if (!this.openai || !this.visagismInternalRuntimeEnabled) {
+      throw new Error("Runtime interno de visagismo nao configurado");
+    }
+
+    const perception =
+      params.answers.find((answer) => answer.question_key === "desired_perception")?.answer_text ??
+      "";
+    const feeling =
+      params.answers.find((answer) => answer.question_key === "desired_feeling")?.answer_text ?? "";
+    const prompt = [
+      "Edite a foto do cliente para experimentar a armacao indicada.",
+      "Mantenha o rosto, pele, pose e cenario da foto original o mais fiéis possivel.",
+      "Nao invente objetos, textos ou pessoas adicionais.",
+      "Substitua os oculos existentes pela armacao selecionada quando houver oculos na imagem.",
+      "A primeira imagem e a foto do cliente. A segunda imagem e a armacao exata que deve ser aplicada.",
+      "Nao devolva a foto original sem a armacao e nao substitua a armacao por outro modelo.",
+      `Armacao selecionada: ${params.selectedItem.product_code}.`,
+      `Descricao da armacao: ${params.selectedItem.recommendation_description}.`,
+      params.faceAnalysis ? `Analise facial: ${JSON.stringify(params.faceAnalysis)}.` : null,
+      perception ? `Percepcao desejada: ${perception}.` : null,
+      feeling ? `Sensacao desejada: ${feeling}.` : null,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join(" ");
+
+    const imagesApi = this.openai.images;
+
+    const [{ data: sourceFile, error: sourceError }, frame] = await Promise.all([
+      this.serviceClient.storage.from(CHAT_ATTACHMENTS_BUCKET).download(params.sourceAttachment.storagePath),
+      this.downloadRegisteredMedia(params.selectedItem.source_url),
+    ]);
+    if (sourceError || !sourceFile) throw new HttpError(500, "Nao foi possivel baixar a foto do visagismo", sourceError);
+    if (frame.kind !== "image") throw new Error("O item selecionado nao possui uma imagem de armacao valida");
+    const sourceBuffer = Buffer.from(await sourceFile.arrayBuffer());
+    if (sourceBuffer.byteLength === 0 || sourceBuffer.byteLength > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
+      throw new Error("Tamanho da foto do visagismo invalido");
+    }
+    const imageInputs = await Promise.all([
+      toFile(sourceBuffer, params.sourceAttachment.fileName, { type: params.sourceAttachment.mimeType }),
+      toFile(frame.buffer, `${params.selectedItem.product_code}.${frame.extension}`, { type: frame.mimeType }),
+    ]);
+    const request = createVisagismEditRequest(this.visagismImageWorkerModel, prompt, imageInputs);
+    const response = await invokeVisagismImageEdit(
+      (input) => imagesApi.edit(input),
+      request
+    );
+
+    const item = response?.data?.[0];
+    const base64 = asString(item?.b64_json) ?? null;
+    const url = asString(item?.url) ?? null;
+    if (!base64 && !url) {
+      throw new Error("A imagem gerada pelo worker nao retornou conteudo");
+    }
+
+    if (base64) {
+      const generated = Buffer.from(base64, "base64");
+      if (generated.byteLength === 0) throw new Error("Worker retornou imagem vazia");
+      return generated;
+    }
+
+    const fetched = await axios.get<ArrayBuffer>(url!, { responseType: "arraybuffer", timeout: 30000 });
+    const generated = Buffer.from(fetched.data);
+    if (generated.byteLength === 0) throw new Error("Worker retornou imagem vazia");
+    return generated;
+  }
+
+  private async executeVisagismRun(params: {
+    toolRunId: string;
+    agent: AgentRow;
+    lead: LeadRow;
+    sourceAttachment: { storagePath: string; mimeType: string; fileName: string; messageId: string };
+    answers: VisagismLeadAnswerRow[];
+    faceAnalysis: FaceAnalysis | null;
+    selectedItem: VisagismCatalogItemRow;
+    matching: { modelName: string; reason: string | null; usedFallback: boolean };
+  }) {
+    const snapshot: VisagismRunSnapshot = {
+      desiredPerception:
+        params.answers.find((answer) => answer.question_key === "desired_perception")?.answer_text ??
+        null,
+      desiredFeeling:
+        params.answers.find((answer) => answer.question_key === "desired_feeling")?.answer_text ??
+        null,
+      selectedItemId: params.selectedItem.id,
+      analysis: {
+        answers_count: params.answers.length,
+        source_message_id: params.sourceAttachment.messageId,
+        face: params.faceAnalysis,
+        matching: params.matching,
+      },
+      image: {},
+    };
+
+    let generated: Buffer;
+    let outputStoragePath: string | null = null;
+    let dispatched = false;
+    let retryUsed = false;
+    try {
+      try {
+        generated = await this.renderVisagismImage({
+          sourceAttachment: params.sourceAttachment,
+          selectedItem: params.selectedItem,
+          answers: params.answers,
+          faceAnalysis: params.faceAnalysis,
+        });
+      } catch (firstError) {
+        if (!isTransientVisagismError(firstError)) throw firstError;
+        retryUsed = true;
+        await this.agentsClient.from("agent_tool_runs").update({ attempt_count: 2 }).eq("id", params.toolRunId);
+        generated = await this.renderVisagismImage({
+          sourceAttachment: params.sourceAttachment,
+          selectedItem: params.selectedItem,
+          answers: params.answers,
+          faceAnalysis: params.faceAnalysis,
+        });
+      }
+
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: params.toolRunId,
+        eventType: "tool.visagism.image_generated",
+        payload: {
+          tool_key: "visagism",
+          tool_run_id: params.toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          status: "generated",
+          selected_item_id: params.selectedItem.id,
+          image_model: this.visagismImageWorkerModel,
+        },
+      });
+
+      const messageId = randomUUID();
+      const attachmentId = randomUUID();
+      const fileName = `visagism-${params.toolRunId}.png`;
+      const storagePath = buildAttachmentStoragePath({
+        acesId: params.agent.aces_id,
+        leadId: params.lead.id,
+        messageId,
+        attachmentId,
+        fileName,
+      });
+
+      const { error: uploadError } = await this.serviceClient.storage
+        .from(CHAT_ATTACHMENTS_BUCKET)
+        .upload(storagePath, generated, { contentType: "image/png", upsert: false });
+      if (uploadError) throw new HttpError(500, "Nao foi possivel salvar a imagem de visagismo", uploadError);
+      outputStoragePath = storagePath;
+
+      const mediaUrl = await this.createSignedDownloadUrl(storagePath);
+      const phone = requireValue(params.lead.contact_phone, "Lead sem telefone para envio do visagismo");
+      const instanceName = requireValue(
+        params.agent.instance_name || params.lead.instancia,
+        "Instancia de envio nao definida"
+      );
+      const transport = await this.resolveEvolutionTransport(instanceName, params.agent.aces_id);
+      const provider = new EvolutionWhatsAppProvider({
+        evolutionApiUrl: transport.apiUrl,
+        evolutionApiKey: transport.apiKey,
+      });
+      const caption = "Aqui esta a armacao que mais combina com voce!";
+      const sendInput: SendMediaInput = {
+        instanceName: transport.instanceName,
+        to: phone,
+        mediaUrl,
+        mimeType: "image/png",
+        fileName,
+        kind: "image",
+        caption,
+        sourceType: "ai",
+      };
+      let providerResult: SendResult;
+      try {
+        providerResult = await provider.sendMedia(sendInput);
+      } catch (firstError) {
+        if (retryUsed || !isTransientVisagismError(firstError)) throw firstError;
+        retryUsed = true;
+        await this.agentsClient.from("agent_tool_runs").update({ attempt_count: 2 }).eq("id", params.toolRunId);
+        providerResult = await provider.sendMedia(sendInput);
+      }
+      dispatched = true;
+      const sentAt = new Date().toISOString();
+      await this.saveMessage({
+        id: messageId,
+        leadId: params.lead.id,
+        acesId: params.lead.aces_id,
+        content: caption,
+        direction: "outbound",
+        sourceType: "ai",
+        instanceName,
+        conversationId: `ai-visagism:${params.toolRunId}`,
+        sentAt,
+        provider: providerResult.provider,
+        providerMessageId: providerResult.providerMessageId,
+        providerStatus: providerResult.providerStatus,
+        providerPayloadSummary: {
+          tool_key: "visagism",
+          selected_item_id: params.selectedItem.id,
+          matching_model: params.matching.modelName,
+          provider: summarizeProviderPayload(providerResult.raw),
+        },
+        senderAgentId: params.agent.id,
+      });
+      await this.insertStoredMessageAttachment({
+        attachmentId,
+        messageId,
+        acesId: params.lead.aces_id,
+        leadId: params.lead.id,
+        kind: "image",
+        mimeType: "image/png",
+        storagePath,
+        fileName,
+        fileSize: generated.byteLength,
+      });
+      await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "succeeded",
+          output_snapshot: {
+            ...snapshot,
+            output_message_id: messageId,
+            output_attachment_id: attachmentId,
+            selected_item_id: params.selectedItem.id,
+          },
+          completed_at: sentAt,
+        })
+        .eq("id", params.toolRunId);
+
+      const { count: simulationsCount } = await this.agentsClient.from("agent_tool_runs")
+        .select("id", { count: "exact", head: true })
+        .eq("aces_id", params.agent.aces_id)
+        .eq("lead_id", params.lead.id)
+        .eq("tool_key", "visagism")
+        .eq("status", "succeeded");
+
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: params.toolRunId,
+        eventType: "tool.visagism.sent",
+        payload: {
+          tool_key: "visagism",
+          tool_run_id: params.toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          status: "succeeded",
+          selected_item_id: params.selectedItem.id,
+          facts: [
+            snapshot.desiredPerception
+              ? { namespace: "visagism", fact_key: "desired_perception", value_type: "text", value: snapshot.desiredPerception }
+              : null,
+            snapshot.desiredFeeling
+              ? { namespace: "visagism", fact_key: "desired_feeling", value_type: "text", value: snapshot.desiredFeeling }
+              : null,
+            params.faceAnalysis?.faceShape
+              ? { namespace: "face", fact_key: "shape", value_type: "text", value: params.faceAnalysis.faceShape }
+              : null,
+            { namespace: "visagism", fact_key: "selected_product_id", value_type: "text", value: params.selectedItem.id },
+            { namespace: "visagism", fact_key: "simulations_count", value_type: "numeric", value: Number(simulationsCount ?? 1) },
+          ].filter(Boolean),
+        },
+      });
+
+      return { runId: params.toolRunId, status: "succeeded" as const, selectedItemId: params.selectedItem.id };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha desconhecida no visagismo";
+      if (outputStoragePath && !dispatched) {
+        await this.serviceClient.storage.from(CHAT_ATTACHMENTS_BUCKET).remove([outputStoragePath]);
+      }
+      await this.agentsClient
+        .from("agent_tool_runs")
+        .update({
+          status: "failed",
+          error_message: truncateText(message, 1000),
+          output_snapshot: snapshot,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", params.toolRunId);
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "tool_run",
+        aggregateId: params.toolRunId,
+        eventType: "tool.visagism.failed",
+        payload: {
+          tool_key: "visagism",
+          tool_run_id: params.toolRunId,
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          status: "failed",
+          error: truncateText(message, 500),
+        },
+      });
+      return { runId: params.toolRunId, status: "failed" as const, error: message };
+    }
   }
 
   validateWebhookSecret(headerValue?: string | null) {

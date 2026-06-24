@@ -7,10 +7,12 @@
   "scripts": {
     "dev": "tsx watch api-server.ts",
     "automation:worker": "tsx automation-worker.ts",
+    "optics:ops": "tsx optics-template-ops.ts",
+    "optics:ops:prod": "node dist/optics-template-ops.js",
     "schema:check": "tsx schema-preflight.ts",
     "build": "tsc",
     "start": "node dist/api-server.js",
-    "test": "jest",
+    "test": "node --import tsx --test tests/audio-idempotency.test.ts tests/prescription-matching.test.ts tests/visagism-selection.test.ts tests/optics-image-analysis.test.ts tests/visagism-delivery.test.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,json,md}\""
   },

@@ -614,9 +614,19 @@ export function startAutomationWorker() {
     process.env.AGENT_FOLLOWUP_META_TEMPLATE_NAME?.trim() || null;
   const agentFollowupMetaTemplateLanguage =
     process.env.AGENT_FOLLOWUP_META_TEMPLATE_LANGUAGE?.trim() || "pt_BR";
+  const biProjectionEnabled = process.env.BI_PROJECTION_WORKER_ENABLED === "true";
+  const biProjectionBatchSizeRaw = Number(process.env.BI_PROJECTION_BATCH_SIZE ?? 100);
+  const biProjectionBatchSize = Number.isFinite(biProjectionBatchSizeRaw)
+    ? Math.max(1, Math.min(biProjectionBatchSizeRaw, 500))
+    : 100;
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     db: { schema: "crm" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const agentsSupabase = createClient(supabaseUrl, serviceRoleKey, {
+    db: { schema: "agents" },
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
@@ -638,6 +648,7 @@ export function startAutomationWorker() {
   let calendarFollowupRunning = false;
   let agentFollowupRunning = false;
   let chatCleanupRunning = false;
+  let biProjectionRunning = false;
   const holidayCacheYears = new Set<number>();
   let lastFreezeRepairAt = 0;
 
@@ -970,7 +981,7 @@ export function startAutomationWorker() {
       return;
     }
 
-    const { error } = await supabase.from("ai_lead_state").upsert(
+    const { error } = await agentsSupabase.from("ai_lead_state").upsert(
       {
         agent_id: followup.agent_id,
         lead_id: followup.lead_id,
@@ -1686,6 +1697,25 @@ export function startAutomationWorker() {
     }
   }
 
+  async function processBiProjection() {
+    if (!biProjectionEnabled || biProjectionRunning) return;
+    biProjectionRunning = true;
+
+    try {
+      while (true) {
+        const { data, error } = await supabase.rpc("rpc_project_bi_outbox_batch", {
+          p_limit: biProjectionBatchSize,
+        });
+        if (error) throw error;
+
+        const processed = Number(data ?? 0);
+        if (!Number.isFinite(processed) || processed < biProjectionBatchSize) return;
+      }
+    } finally {
+      biProjectionRunning = false;
+    }
+  }
+
   const timer = setInterval(() => {
     processDueExecutions().catch((error) => {
       console.error("[automation-worker] Erro no ciclo do worker:", error);
@@ -1714,6 +1744,14 @@ export function startAutomationWorker() {
     });
   }, chatAttachmentsCleanupIntervalMs);
 
+  const biProjectionTimer = biProjectionEnabled
+    ? setInterval(() => {
+        processBiProjection().catch((error) => {
+          console.error("[automation-worker] Erro na projecao do BI:", error);
+        });
+      }, pollMs)
+    : null;
+
   processDueExecutions().catch((error) => {
     console.error("[automation-worker] Erro na execucao inicial:", error);
   });
@@ -1734,6 +1772,12 @@ export function startAutomationWorker() {
     console.error("[automation-worker] Erro na limpeza inicial de anexos do chat:", error);
   });
 
+  if (biProjectionEnabled) {
+    processBiProjection().catch((error) => {
+      console.error("[automation-worker] Erro na projecao inicial do BI:", error);
+    });
+  }
+
   console.log(
     `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes; limpeza de anexos a cada ${chatAttachmentsCleanupIntervalMs}ms; follow-up calendario ${
       calendarFollowupEnabled
@@ -1743,13 +1787,14 @@ export function startAutomationWorker() {
       agentFollowupEnabled
         ? `ativo com lote ${agentFollowupBatchSize}${agentFollowupDryRun ? " em dry-run" : ""}`
         : "desativado"
-    }`
+    }; projecao BI ${biProjectionEnabled ? `ativa com lote ${biProjectionBatchSize}` : "desativada"}`
   );
 
   return {
     processDueExecutions,
     processDueCalendarFollowups,
     processDueAgentFollowups,
+    processBiProjection,
     cleanupExpiredChatAttachments,
     stop() {
       clearInterval(timer);
@@ -1760,6 +1805,9 @@ export function startAutomationWorker() {
         clearInterval(agentFollowupTimer);
       }
       clearInterval(chatCleanupTimer);
+      if (biProjectionTimer) {
+        clearInterval(biProjectionTimer);
+      }
     },
   };
 }

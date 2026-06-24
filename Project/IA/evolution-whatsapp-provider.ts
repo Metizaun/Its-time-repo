@@ -7,6 +7,7 @@ import {
   type SendResult,
   type SendTemplateInput,
   type SendTextInput,
+  type SendVoiceNoteInput,
   WhatsAppProviderError,
   type WhatsAppProvider,
 } from "./whatsapp-provider.js";
@@ -65,6 +66,32 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
           fileName: input.fileName,
           caption: input.caption?.trim() || undefined,
           delay: 1000,
+        },
+        {
+          headers: { apikey: this.config.evolutionApiKey },
+        }
+      );
+
+      return {
+        provider: "evolution",
+        providerMessageId: extractEvolutionMessageId(response.data),
+        providerStatus: "sent",
+        raw: summarizeProviderPayload(response.data),
+      };
+    } catch (error) {
+      throw buildEvolutionProviderError(error);
+    }
+  }
+
+  async sendVoiceNote(input: SendVoiceNoteInput): Promise<SendResult> {
+    try {
+      const response = await axios.post(
+        `${this.config.evolutionApiUrl}/message/sendWhatsAppAudio/${encodeURIComponent(input.instanceName)}`,
+        {
+          number: toEvolutionJid(input.to),
+          audio: input.mediaUrl,
+          delay: 1000,
+          encoding: true,
         },
         {
           headers: { apikey: this.config.evolutionApiKey },

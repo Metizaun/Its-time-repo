@@ -10,6 +10,7 @@ import {
   type SendMediaInput,
   type SendTemplateInput,
   type SendTextInput,
+  type SendVoiceNoteInput,
   type WhatsAppProvider,
   WhatsAppProviderError,
   type WhatsAppProviderName,
@@ -48,6 +49,7 @@ export class WhatsAppProviderRegistry {
       sendText: (input) => this.sendEvolutionText(input),
       sendTemplate: (input) => this.sendEvolutionTemplate(input),
       sendMedia: (input) => this.sendEvolutionMedia(input),
+      sendVoiceNote: (input) => this.sendEvolutionVoiceNote(input),
     };
 
     this.metaProvider = new MetaWhatsAppProvider({
@@ -168,6 +170,17 @@ export class WhatsAppProviderRegistry {
       });
     }
     return resolved.provider.sendMedia({ ...input, instanceName: resolved.instanceName });
+  }
+
+  private async sendEvolutionVoiceNote(input: SendVoiceNoteInput) {
+    const resolved = await this.resolveEvolutionProvider(input.instanceName);
+    if (!resolved.provider.sendVoiceNote) {
+      throw new WhatsAppProviderError("Provider Evolution sem suporte a audio", {
+        provider: "evolution",
+        kind: "permanent",
+      });
+    }
+    return resolved.provider.sendVoiceNote({ ...input, instanceName: resolved.instanceName });
   }
 
   private resolveSecret(secretRef: string) {

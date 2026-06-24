@@ -1,7 +1,12 @@
 import { useState, useCallback, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { AIAgent } from "@/types";
+import {
+  deleteCrmBackend,
+  getCrmBackend,
+  patchCrmBackend,
+  postCrmBackend,
+} from "@/services/crmBackend";
 
 interface AgentPayload {
   name: string;
@@ -15,13 +20,26 @@ interface AgentPayload {
   handoff_enabled?: boolean;
   handoff_prompt?: string | null;
   handoff_target_phone?: string | null;
+  templateKey?: string | null;
 }
 
-function buildAgentSaveError(err: any, instanceName?: string) {
-  const code = String(err?.code ?? "");
-  const constraint = String(err?.constraint ?? "").toLowerCase();
-  const details = String(err?.details ?? "").toLowerCase();
-  const message = String(err?.message ?? "");
+function errorDetails(err: unknown) {
+  return typeof err === "object" && err !== null
+    ? (err as Record<string, unknown>)
+    : {};
+}
+
+function errorMessage(err: unknown, fallback: string) {
+  const message = errorDetails(err).message;
+  return typeof message === "string" && message.trim() ? message : fallback;
+}
+
+function buildAgentSaveError(err: unknown, instanceName?: string) {
+  const detailsRecord = errorDetails(err);
+  const code = String(detailsRecord.code ?? "");
+  const constraint = String(detailsRecord.constraint ?? "").toLowerCase();
+  const details = String(detailsRecord.details ?? "").toLowerCase();
+  const message = String(detailsRecord.message ?? "");
   const normalizedMessage = message.toLowerCase();
   const instanceLabel = instanceName ? ` "${instanceName}"` : "";
 
@@ -75,39 +93,25 @@ export function useAgents() {
       setLoading(true);
       setError(null);
 
-      const { data, error: fetchError } = await supabase
-        .from("ai_agents")
-        .select("*")
-        .order("created_at", { ascending: true });
-
-      if (fetchError) throw fetchError;
-
-      setAgents((data as AIAgent[]) || []);
-    } catch (err: any) {
+      const response = await getCrmBackend<{ agents?: AIAgent[] }>("/api/ai-agents");
+      setAgents(response.agents ?? []);
+    } catch (err: unknown) {
+      const message = errorMessage(err, "Nao foi possivel carregar os agentes.");
       console.error("Erro ao carregar agentes:", err);
-      setError(err.message);
-      toast.error("Erro ao carregar agentes", { description: err.message });
+      setError(message);
+      toast.error("Erro ao carregar agentes", { description: message });
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const findConflictingAgent = useCallback(async (instanceName: string, currentAgentId?: string) => {
-    let query = supabase
-      .from("ai_agents")
-      .select("id, name, instance_name")
-      .eq("instance_name", instanceName);
-
-    if (currentAgentId) {
-      query = query.neq("id", currentAgentId);
-    }
-
-    const { data, error: lookupError } = await query.maybeSingle();
-
-    if (lookupError) throw lookupError;
-
-    return data;
-  }, []);
+  const findConflictingAgent = useCallback(
+    async (instanceName: string, currentAgentId?: string) =>
+      agents.find(
+        (agent) => agent.instance_name === instanceName && agent.id !== currentAgentId
+      ) ?? null,
+    [agents]
+  );
 
   const upsertAgent = useCallback(
     async (payload: AgentPayload, agentId?: string) => {
@@ -123,25 +127,41 @@ export function useAgents() {
 
         if (agentId) {
           // Edição
-          const { error: updateError } = await supabase
-            .from("ai_agents")
-            .update({ ...payload, updated_at: new Date().toISOString() })
-            .eq("id", agentId);
-
-          if (updateError) throw updateError;
+          await patchCrmBackend(`/api/ai-agents/${encodeURIComponent(agentId)}`, {
+            name: payload.name,
+            instanceName: payload.instance_name,
+            systemPrompt: payload.system_prompt,
+            model: payload.model,
+            isActive: payload.is_active,
+            temperature: payload.temperature,
+            bufferWaitMs: payload.buffer_wait_ms,
+            humanPauseMinutes: payload.human_pause_minutes,
+            handoffEnabled: payload.handoff_enabled,
+            handoffPrompt: payload.handoff_prompt,
+            handoffTargetPhone: payload.handoff_target_phone,
+          });
           toast.success("Agente atualizado com sucesso");
         } else {
           // Criação
-          const { error: insertError } = await supabase
-            .from("ai_agents")
-            .insert({ ...payload, provider: "gemini" });
-
-          if (insertError) throw insertError;
+          await postCrmBackend("/api/ai-agents", {
+            name: payload.name,
+            instanceName: payload.instance_name,
+            systemPrompt: payload.system_prompt,
+            model: payload.model,
+            isActive: payload.is_active,
+            temperature: payload.temperature,
+            bufferWaitMs: payload.buffer_wait_ms,
+            humanPauseMinutes: payload.human_pause_minutes,
+            handoffEnabled: payload.handoff_enabled,
+            handoffPrompt: payload.handoff_prompt,
+            handoffTargetPhone: payload.handoff_target_phone,
+            templateKey: payload.templateKey || undefined,
+          });
           toast.success("Agente criado com sucesso");
         }
 
         await fetchAgents();
-      } catch (err: any) {
+      } catch (err: unknown) {
         const friendlyError = buildAgentSaveError(err, payload.instance_name);
         console.error("Erro ao salvar agente:", err);
         toast.error("Erro ao salvar agente", { description: friendlyError.message });
@@ -158,12 +178,9 @@ export function useAgents() {
       try {
         setStatusAgentId(agentId);
 
-        const { error: toggleError } = await supabase
-          .from("ai_agents")
-          .update({ is_active: isActive, updated_at: new Date().toISOString() })
-          .eq("id", agentId);
-
-        if (toggleError) throw toggleError;
+        await patchCrmBackend(`/api/ai-agents/${encodeURIComponent(agentId)}`, {
+          isActive,
+        });
 
         // Optimistic update
         setAgents((prev) =>
@@ -171,9 +188,10 @@ export function useAgents() {
         );
 
         toast.success(isActive ? "Agente ativado" : "Agente pausado");
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const message = errorMessage(err, "Nao foi possivel alterar o status do agente.");
         console.error("Erro ao alterar status do agente:", err);
-        toast.error("Erro ao alterar status", { description: err.message });
+        toast.error("Erro ao alterar status", { description: message });
         // Reverte em caso de falha
         await fetchAgents();
       } finally {
@@ -188,21 +206,17 @@ export function useAgents() {
       try {
         setDeletingAgentId(agentId);
 
-        const { error: deleteError } = await supabase
-          .from("ai_agents")
-          .delete()
-          .eq("id", agentId);
-
-        if (deleteError) throw deleteError;
+        await deleteCrmBackend(`/api/ai-agents/${encodeURIComponent(agentId)}`);
 
         setAgents((prev) => prev.filter((agent) => agent.id !== agentId));
         toast.success("Agente apagado com sucesso", {
           description: agentName ? `${agentName} foi removido.` : undefined,
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const message = errorMessage(err, "Nao foi possivel apagar o agente.");
         console.error("Erro ao apagar agente:", err);
         toast.error("Erro ao apagar agente", {
-          description: err.message || "Não foi possível apagar o agente.",
+          description: message,
         });
         await fetchAgents();
         throw err;

@@ -8,7 +8,7 @@ O problema que este padrao evita: um agente visivel para o cliente, como Sarah, 
 
 ## 2. Regra central
 
-- `crm.ai_agents.model` representa o modelo do agente que responde ao lead.
+- `agents.ai_agents.model` representa o modelo do agente que responde ao lead.
 - Workers internos devem ter modelo proprio, definido por constante e, quando necessario, por variavel de ambiente.
 - O frontend de Agentes deve exibir apenas configuracoes do agente de atendimento, nao configuracoes internas de workers.
 
@@ -39,14 +39,14 @@ Checklist minimo:
 
 - Definir funcao unica do worker.
 - Separar entrada operacional de mensagem enviada ao cliente.
-- Declarar modelo do worker sem depender de `crm.ai_agents.model`.
+- Declarar modelo do worker sem depender de `agents.ai_agents.model`.
 - Auditar o modelo usado em logs, runs ou tabela de jobs.
 - Registrar falhas transientes e permanentes com contexto suficiente.
 - Seguir o padrao de retries, locks e idempotencia do worker atual.
 
 ## 4. O que e proibido
 
-- Reutilizar `crm.ai_agents.model` para analise interna de CRM.
+- Reutilizar `agents.ai_agents.model` para analise interna de CRM.
 - Mostrar worker interno no frontend como se fosse agente de atendimento.
 - Misturar resposta ao lead e decisao operacional na mesma configuracao.
 - Criar worker generico sem nome, tarefa, modelo e auditoria explicitos.
@@ -70,5 +70,5 @@ Checklist minimo:
 
 - Quando uma feature precisar responder ao lead e tambem atualizar CRM, trate como dois papeis: geracao de resposta e analise operacional.
 - Se houver uma unica chamada de modelo por limitacao tecnica temporaria, documentar o risco e abrir tarefa para separar as chamadas.
-- Alteracoes de default em `crm.ai_agents.model` devem ser revisadas como mudanca de comportamento do agente de atendimento.
+- Alteracoes de default em `agents.ai_agents.model` devem ser revisadas como mudanca de comportamento do agente de atendimento.
 - Alteracoes de modelos de worker devem ser feitas em constantes/envs especificas do worker.
