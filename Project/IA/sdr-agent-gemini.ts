@@ -5041,42 +5041,51 @@ export class AgentManager {
   }
 
   private async normalizeInboundContent(message: ParsedWebhookMessage) {
-    if (message.content.trim()) {
-      return message.content.trim();
-    }
-
-    if (!message.mediaKind) {
-      return "[mensagem sem texto]";
-    }
-
-    if (this.openai) {
-      try {
-        const normalized = await this.normalizeMediaWithOpenAi(message);
-        if (normalized) {
-          return normalized;
-        }
-      } catch (error) {
-        console.warn("[crm-ai] Falha ao normalizar midia com OpenAI, usando fallback:", error);
+    try {
+      if (message.content.trim()) {
+        return message.content.trim();
       }
+
+      if (!message.mediaKind) {
+        return "[mensagem sem texto]";
+      }
+
+      if (this.openai) {
+        try {
+          const normalized = await this.normalizeMediaWithOpenAi(message);
+          if (normalized) {
+            return normalized;
+          }
+        } catch (error) {
+          console.warn("[crm-ai] Falha ao normalizar midia com OpenAI, usando fallback:", error);
+        }
+      }
+
+      if (!this.gemini) {
+        return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
+      }
+
+      const mediaPart = await this.buildMediaPart(message);
+      if (!mediaPart) {
+        return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
+      }
+
+      const modelName = this.crmAnalysisWorkerModel;
+      const prompt =
+        message.mediaKind === "audio"
+          ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
+          : "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.";
+
+      const { result } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
+      return result.response.text().trim() || (message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]");
+    } catch (error) {
+      console.warn("[crm-ai] Falha ao normalizar conteudo de entrada, usando fallback:", error);
+      return message.mediaKind === "audio"
+        ? "[audio recebido]"
+        : message.mediaKind === "image"
+          ? "[imagem recebida]"
+          : "[mensagem sem texto]";
     }
-
-    if (!this.gemini) {
-      return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
-    }
-
-    const mediaPart = await this.buildMediaPart(message);
-    if (!mediaPart) {
-      return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
-    }
-
-    const modelName = this.crmAnalysisWorkerModel;
-    const prompt =
-      message.mediaKind === "audio"
-        ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
-        : "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.";
-
-    const { result } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
-    return result.response.text().trim() || (message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]");
   }
 
   private async normalizeMediaWithOpenAi(message: ParsedWebhookMessage) {
@@ -5141,12 +5150,26 @@ export class AgentManager {
       return null;
     }
 
+    if (!this.isSupportedGeminiMediaMimeType(media.mimeType)) {
+      console.warn("[crm-ai] MIME de midia nao suportado pelo Gemini, usando fallback:", media.mimeType);
+      return null;
+    }
+
     return {
       inlineData: {
         mimeType: media.mimeType,
         data: media.buffer.toString("base64"),
       },
     };
+  }
+
+  private isSupportedGeminiMediaMimeType(mimeType: string) {
+    const normalized = mimeType.toLowerCase();
+    return (
+      normalized.startsWith("image/") ||
+      normalized.startsWith("audio/") ||
+      normalized === "application/pdf"
+    );
   }
 
   private async resolveMediaBytes(message: ParsedWebhookMessage) {
