@@ -1,0 +1,18 @@
+{
+  "event": "messages.upsert",
+  "instance": "lavie",
+  "data": {
+    "key": {
+      "remoteJid": "103899771998284@lid",
+      "senderPn": "555193269431@s.whatsapp.net",
+      "fromMe": false,
+      "id": "msg-lid-sender-pn"
+    },
+    "pushName": "Contato LID SenderPn",
+    "message": {
+      "conversation": "Primeira mensagem"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1712750500
+  }
+}

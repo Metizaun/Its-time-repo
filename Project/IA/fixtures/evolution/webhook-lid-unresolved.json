@@ -1,0 +1,18 @@
+{
+  "event": "messages.upsert",
+  "instance": "lavie",
+  "data": {
+    "key": {
+      "remoteJid": "403899771998284@lid",
+      "senderLid": "403899771998284@lid",
+      "fromMe": false,
+      "id": "msg-lid-unresolved"
+    },
+    "pushName": null,
+    "message": {
+      "conversation": "Mensagem sem PN resolvido"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1712750800
+  }
+}

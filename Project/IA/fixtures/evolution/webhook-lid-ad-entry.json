@@ -1,0 +1,18 @@
+{
+  "event": "messages.upsert",
+  "instance": "lavie",
+  "data": {
+    "key": {
+      "remoteJid": "503899771998284@lid",
+      "senderPn": "555194445555@s.whatsapp.net",
+      "fromMe": false,
+      "id": "msg-lid-ad-entry"
+    },
+    "pushName": null,
+    "message": {
+      "conversation": "Oi, vi o anuncio"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1712750900
+  }
+}

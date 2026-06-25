@@ -1,0 +1,18 @@
+{
+  "event": "messages.upsert",
+  "instance": "lavie",
+  "data": {
+    "key": {
+      "remoteJid": "303899771998284@lid",
+      "remoteJidAlt": "555198887777@s.whatsapp.net",
+      "fromMe": false,
+      "id": "msg-lid-remote-jid-alt"
+    },
+    "pushName": "Contato LID RemoteJidAlt",
+    "message": {
+      "conversation": "Mensagem via remoteJidAlt"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1712750700
+  }
+}

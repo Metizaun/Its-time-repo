@@ -444,7 +444,7 @@ type LeadAiControlState = {
 type ParsedWebhookMessage = {
   instanceName: string;
   fromMe: boolean;
-  phone: string;
+  phone: string | null;
   content: string;
   messageId: string | null;
   conversationId: string | null;
@@ -459,6 +459,17 @@ type ParsedWebhookMessage = {
 };
 
 export type WebhookPayload = JsonRecord;
+
+type WebhookContactIdentity = {
+  phone: string | null;
+  remoteJid: string | null;
+  remoteJidAlt: string | null;
+  senderPn: string | null;
+  participantPn: string | null;
+  senderLid: string | null;
+  usedField: string | null;
+  lidOnly: boolean;
+};
 
 type CreateAgentInput = {
   name: string;
@@ -740,6 +751,232 @@ function normalizePhone(phone: string): string {
     return clean.slice(2);
   }
   return clean;
+}
+
+function isLidIdentifier(value: string | null | undefined) {
+  return String(value ?? "").trim().toLowerCase().endsWith("@lid");
+}
+
+function isPhoneBasedIdentifier(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw || isLidIdentifier(raw)) {
+    return false;
+  }
+
+  if (raw.includes("@")) {
+    const localPart = raw.split("@", 1)[0] ?? "";
+    return /^\d{10,15}$/.test(localPart);
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+function extractPhoneBasedIdentifier(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!isPhoneBasedIdentifier(raw)) {
+    return null;
+  }
+
+  return raw.includes("@") ? (raw.split("@", 1)[0] ?? null) : raw.replace(/\D/g, "");
+}
+
+export function resolveWebhookContactIdentity(payload: WebhookPayload): WebhookContactIdentity {
+  const root = asRecord(payload);
+  const data = asRecord(root.data);
+  const key = asRecord(data.key);
+
+  const remoteJid = asString(key.remoteJid) ?? asString(data.remoteJid) ?? asString(root.remoteJid);
+  const remoteJidAlt =
+    asString(key.remoteJidAlt) ?? asString(data.remoteJidAlt) ?? asString(root.remoteJidAlt);
+  const senderPn = asString(key.senderPn) ?? asString(data.senderPn) ?? asString(root.senderPn);
+  const participantPn =
+    asString(key.participantPn) ??
+    asString(data.participantPn) ??
+    asString(root.participantPn) ??
+    asString(key.participant) ??
+    asString(asRecord(data.sender).participant);
+  const senderLid = asString(key.senderLid) ?? asString(data.senderLid) ?? asString(root.senderLid);
+  const legacyCandidates = [
+    ["data.sender", asString(data.sender)],
+    ["root.sender", asString(root.sender)],
+    ["root.from", asString(root.from)],
+    ["data.from", asString(data.from)],
+  ] as const;
+
+  const prioritizedCandidates = isLidIdentifier(remoteJid)
+    ? ([
+        ["senderPn", senderPn],
+        ["participantPn", participantPn],
+        ["remoteJidAlt", remoteJidAlt],
+        ...legacyCandidates,
+      ] as const)
+    : ([
+        ["remoteJid", remoteJid],
+        ["senderPn", senderPn],
+        ["participantPn", participantPn],
+        ["remoteJidAlt", remoteJidAlt],
+        ...legacyCandidates,
+      ] as const);
+
+  for (const [usedField, candidate] of prioritizedCandidates) {
+    const phone = extractPhoneBasedIdentifier(candidate);
+    if (phone) {
+      return {
+        phone,
+        remoteJid,
+        remoteJidAlt,
+        senderPn,
+        participantPn,
+        senderLid,
+        usedField,
+        lidOnly: false,
+      };
+    }
+  }
+
+  return {
+    phone: null,
+    remoteJid,
+    remoteJidAlt,
+    senderPn,
+    participantPn,
+    senderLid,
+    usedField: null,
+    lidOnly: isLidIdentifier(remoteJid) || isLidIdentifier(remoteJidAlt) || isLidIdentifier(senderLid),
+  };
+}
+
+export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWebhookMessage {
+  const root = asRecord(payload);
+  const data = asRecord(root.data);
+  const key = asRecord(data.key);
+  const message = asRecord(data.message);
+  const messageContext = asRecord(root.message ?? data.messageData ?? data);
+  const messageType =
+    asString(data.messageType) ??
+    asString(root.messageType) ??
+    asString(messageContext.messageType);
+
+  const instanceName =
+    asString(root.instance) ??
+    asString(root.instanceName) ??
+    asString(data.instance) ??
+    asString(data.instanceName) ??
+    asString(asRecord(root.sender).instance) ??
+    asString(asRecord(root.apikey).instance);
+
+  const identity = resolveWebhookContactIdentity(payload);
+  const sender = asRecord(data.sender);
+  const contact = asRecord(data.contact);
+  const pushName = normalizeLeadDisplayName(
+    asString(data.pushName) ??
+      asString(data.pushname) ??
+      asString(data.senderName) ??
+      asString(data.notifyName) ??
+      asString(data.verifiedBizName) ??
+      asString(root.pushName) ??
+      asString(root.senderName) ??
+      asString(root.notifyName) ??
+      asString(sender.pushName) ??
+      asString(sender.name) ??
+      asString(contact.pushName) ??
+      asString(contact.name)
+  );
+  const messageId = asString(key.id) ?? asString(root.messageId) ?? asString(data.messageId);
+  const fromMe = Boolean(key.fromMe ?? data.fromMe ?? root.fromMe);
+  const sentAtRaw = data.messageTimestamp ?? root.messageTimestamp ?? root.timestamp ?? Date.now();
+  const sentAt =
+    typeof sentAtRaw === "number"
+      ? new Date(sentAtRaw * (sentAtRaw > 1_000_000_000_000 ? 1 : 1000)).toISOString()
+      : new Date(String(sentAtRaw)).toISOString();
+
+  const textCandidates = [
+    asString(message.conversation),
+    asString(asRecord(message.extendedTextMessage).text),
+    asString(asRecord(message.imageMessage).caption),
+    asString(asRecord(message.videoMessage).caption),
+    asString(asRecord(root.text).text),
+    asString(root.body),
+    asString(data.body),
+    asString(messageContext.content),
+  ].filter((item): item is string => Boolean(item));
+
+  const imageMessage = asRecord(message.imageMessage);
+  const audioMessage = asRecord(message.audioMessage);
+  const documentMessage = asRecord(message.documentMessage);
+  const sharedMediaBase64 =
+    asString(message.base64) ??
+    asString(messageContext.base64) ??
+    asString(data.base64) ??
+    asString(root.base64);
+  const imageUrl =
+    asString(imageMessage.url) ??
+    asString(imageMessage.mediaUrl) ??
+    asString(asRecord(root.image).url);
+  const audioUrl =
+    asString(audioMessage.url) ??
+    asString(audioMessage.mediaUrl) ??
+    asString(asRecord(root.audio).url) ??
+    asString(documentMessage.url);
+  const inferredAudio =
+    messageType === "audioMessage" ||
+    Object.keys(audioMessage).length > 0 ||
+    (Object.keys(documentMessage).length > 0 &&
+      ((asString(documentMessage.mimetype) ?? asString(documentMessage.mime_type) ?? "").startsWith("audio/")));
+  const inferredImage = messageType === "imageMessage" || Object.keys(imageMessage).length > 0;
+  const imageBase64 =
+    asString(imageMessage.base64) ??
+    asString(asRecord(root.image).base64) ??
+    (inferredImage ? sharedMediaBase64 : null);
+  const audioBase64 =
+    asString(audioMessage.base64) ??
+    asString(asRecord(root.audio).base64) ??
+    asString(documentMessage.base64) ??
+    (inferredAudio ? sharedMediaBase64 : null);
+  const mediaKind =
+    inferredAudio || audioBase64 || audioUrl
+      ? "audio"
+      : inferredImage || imageBase64 || imageUrl
+        ? "image"
+        : null;
+  const mediaMimeType =
+    asString(audioMessage.mimetype) ??
+    asString(audioMessage.mime_type) ??
+    asString(imageMessage.mimetype) ??
+    asString(imageMessage.mime_type) ??
+    asString(documentMessage.mimetype) ??
+    asString(documentMessage.mime_type) ??
+    (mediaKind === "audio" ? "audio/ogg" : mediaKind === "image" ? "image/jpeg" : null);
+
+  if (!instanceName) {
+    throw new HttpError(400, "Webhook sem instancia identificavel");
+  }
+
+  return {
+    instanceName,
+    fromMe,
+    phone: identity.phone,
+    content: textCandidates[0] ?? "",
+    messageId,
+    conversationId: identity.remoteJid ?? identity.phone ?? null,
+    sentAt,
+    pushName,
+    mediaKind,
+    mediaMimeType,
+    mediaBase64: audioBase64 ?? imageBase64 ?? null,
+    mediaUrl: audioUrl ?? imageUrl ?? null,
+    messageType,
+    raw: {
+      ...root,
+      remoteJid: identity.remoteJid ?? root.remoteJid ?? null,
+      remoteJidAlt: identity.remoteJidAlt ?? root.remoteJidAlt ?? null,
+      senderPn: identity.senderPn ?? root.senderPn ?? null,
+      participantPn: identity.participantPn ?? root.participantPn ?? null,
+      senderLid: identity.senderLid ?? root.senderLid ?? null,
+      _crmWebhookIdentity: identity,
+    },
+  };
 }
 
 function normalizeLeadDisplayName(value: string | null | undefined) {
@@ -4987,138 +5224,7 @@ export class AgentManager {
   }
 
   private parseWebhookPayload(payload: WebhookPayload): ParsedWebhookMessage {
-    const root = asRecord(payload);
-    const data = asRecord(root.data);
-    const key = asRecord(data.key);
-    const message = asRecord(data.message);
-    const messageContext = asRecord(root.message ?? data.messageData ?? data);
-    const messageType =
-      asString(data.messageType) ??
-      asString(root.messageType) ??
-      asString(messageContext.messageType);
-
-    const instanceName =
-      asString(root.instance) ??
-      asString(root.instanceName) ??
-      asString(data.instance) ??
-      asString(data.instanceName) ??
-      asString(asRecord(root.sender).instance) ??
-      asString(asRecord(root.apikey).instance);
-
-    const remoteJid = asString(key.remoteJid) ?? asString(data.remoteJid) ?? asString(root.remoteJid);
-    const sender = asRecord(data.sender);
-    const contact = asRecord(data.contact);
-    const pushName = normalizeLeadDisplayName(
-      asString(data.pushName) ??
-        asString(data.pushname) ??
-        asString(data.senderName) ??
-        asString(data.notifyName) ??
-        asString(data.verifiedBizName) ??
-        asString(root.pushName) ??
-        asString(root.senderName) ??
-        asString(root.notifyName) ??
-        asString(sender.pushName) ??
-        asString(sender.name) ??
-        asString(contact.pushName) ??
-        asString(contact.name)
-    );
-    const messageId = asString(key.id) ?? asString(root.messageId) ?? asString(data.messageId);
-    const fromMe = Boolean(key.fromMe ?? data.fromMe ?? root.fromMe);
-    const sentAtRaw = data.messageTimestamp ?? root.messageTimestamp ?? root.timestamp ?? Date.now();
-    const sentAt =
-      typeof sentAtRaw === "number"
-        ? new Date(sentAtRaw * (sentAtRaw > 1_000_000_000_000 ? 1 : 1000)).toISOString()
-        : new Date(String(sentAtRaw)).toISOString();
-
-    const phoneCandidate =
-      asString(remoteJid)?.replace(/@.+$/, "") ??
-      asString(data.sender) ??
-      asString(root.sender) ??
-      asString(root.from) ??
-      asString(data.from);
-
-    const textCandidates = [
-      asString(message.conversation),
-      asString(asRecord(message.extendedTextMessage).text),
-      asString(asRecord(message.imageMessage).caption),
-      asString(asRecord(message.videoMessage).caption),
-      asString(asRecord(root.text).text),
-      asString(root.body),
-      asString(data.body),
-      asString(messageContext.content),
-    ].filter((item): item is string => Boolean(item));
-
-    const imageMessage = asRecord(message.imageMessage);
-    const audioMessage = asRecord(message.audioMessage);
-    const documentMessage = asRecord(message.documentMessage);
-    const sharedMediaBase64 =
-      asString(message.base64) ??
-      asString(messageContext.base64) ??
-      asString(data.base64) ??
-      asString(root.base64);
-    const imageUrl =
-      asString(imageMessage.url) ??
-      asString(imageMessage.mediaUrl) ??
-      asString(asRecord(root.image).url);
-    const audioUrl =
-      asString(audioMessage.url) ??
-      asString(audioMessage.mediaUrl) ??
-      asString(asRecord(root.audio).url) ??
-      asString(documentMessage.url);
-    const inferredAudio =
-      messageType === "audioMessage" ||
-      Object.keys(audioMessage).length > 0 ||
-      (Object.keys(documentMessage).length > 0 &&
-        ((asString(documentMessage.mimetype) ?? asString(documentMessage.mime_type) ?? "").startsWith("audio/")));
-    const inferredImage = messageType === "imageMessage" || Object.keys(imageMessage).length > 0;
-    const imageBase64 =
-      asString(imageMessage.base64) ??
-      asString(asRecord(root.image).base64) ??
-      (inferredImage ? sharedMediaBase64 : null);
-    const audioBase64 =
-      asString(audioMessage.base64) ??
-      asString(asRecord(root.audio).base64) ??
-      asString(documentMessage.base64) ??
-      (inferredAudio ? sharedMediaBase64 : null);
-    const mediaKind =
-      inferredAudio || audioBase64 || audioUrl
-        ? "audio"
-        : inferredImage || imageBase64 || imageUrl
-          ? "image"
-          : null;
-    const mediaMimeType =
-      asString(audioMessage.mimetype) ??
-      asString(audioMessage.mime_type) ??
-      asString(imageMessage.mimetype) ??
-      asString(imageMessage.mime_type) ??
-      asString(documentMessage.mimetype) ??
-      asString(documentMessage.mime_type) ??
-      (mediaKind === "audio" ? "audio/ogg" : mediaKind === "image" ? "image/jpeg" : null);
-
-    if (!instanceName) {
-      throw new HttpError(400, "Webhook sem instancia identificavel");
-    }
-
-    if (!phoneCandidate) {
-      throw new HttpError(400, "Webhook sem telefone identificavel");
-    }
-
-    return {
-      instanceName,
-      fromMe,
-      phone: phoneCandidate,
-      content: textCandidates[0] ?? "",
-      messageId,
-      conversationId: remoteJid ?? phoneCandidate,
-      sentAt,
-      pushName,
-      mediaKind,
-      mediaMimeType,
-      mediaBase64: audioBase64 ?? imageBase64 ?? null,
-      mediaUrl: audioUrl ?? imageUrl ?? null,
-      messageType,
-      raw: root,
-    };
+    return parseEvolutionWebhookPayload(payload);
   }
 
   private async normalizeInboundContent(message: ParsedWebhookMessage) {
@@ -7926,11 +8032,32 @@ export class AgentManager {
       },
     };
 
-    const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
     const duplicated = await this.dedupeIncomingMessage(message.messageId);
     if (duplicated) {
       return { ignored: true, reason: "Mensagem duplicada" };
     }
+
+    if (!message.phone) {
+      console.warn("[crm-ai] Webhook recebido sem PN resolvido para identificador LID:", {
+        instanceName: message.instanceName,
+        remoteInstanceName: parsedMessage.instanceName,
+        acesId: instance.aces_id,
+        messageId: message.messageId,
+        remoteJid: asString(message.raw.remoteJid),
+        remoteJidAlt: asString(message.raw.remoteJidAlt),
+        senderPn: asString(message.raw.senderPn),
+        participantPn: asString(message.raw.participantPn),
+        senderLid: asString(message.raw.senderLid),
+        identity: asRecord(message.raw._crmWebhookIdentity),
+      });
+
+      return {
+        ignored: true,
+        reason: "Identificador LID sem telefone resolvido",
+      };
+    }
+
+    const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
 
     const existingLeadForRouting = await this.findLeadByPhone(instance.aces_id, message.phone);
     const isPrimaryInstance =

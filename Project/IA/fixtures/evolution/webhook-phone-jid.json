@@ -1,0 +1,17 @@
+{
+  "event": "messages.upsert",
+  "instance": "lavie",
+  "data": {
+    "key": {
+      "remoteJid": "555191234567@s.whatsapp.net",
+      "fromMe": false,
+      "id": "msg-phone-jid"
+    },
+    "pushName": "Contato Classico",
+    "message": {
+      "conversation": "Ola"
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1712750400
+  }
+}
