@@ -4737,12 +4737,12 @@ export class AgentManager {
     }
   }
 
-  private async dedupeIncomingMessage(messageId: string | null) {
+  private async dedupeIncomingMessage(messageId: string | null, scope = "global") {
     if (!messageId || !this.redis) {
       return false;
     }
 
-    const key = `crm-ai:inbound:${messageId}`;
+    const key = `crm-ai:inbound:${scope}:${messageId}`;
     const stored = await this.redis.set(key, "1", "EX", 600, "NX");
     return stored !== "OK";
   }
@@ -4899,8 +4899,32 @@ export class AgentManager {
           provider,
           providerMessageId
         );
-        if (existing) {
+        if (existing && existing.direction === params.direction) {
           return existing;
+        }
+
+        const retryPayload = {
+          ...payload,
+          provider_message_id: null,
+        };
+        const { data: retryData, error: retryError } = await this.serviceClient
+          .from("message_history")
+          .insert(retryPayload)
+          .select("*")
+          .single();
+
+        if (!retryError) {
+          await this.serviceClient
+            .from("leads")
+            .update({
+              last_message_at: sentAt,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", params.leadId)
+            .eq("aces_id", params.acesId);
+
+          await this.invalidateChatMessagesCache(params.acesId, params.leadId);
+          return retryData as MessageRow;
         }
       }
 
@@ -8204,7 +8228,8 @@ export class AgentManager {
       "evolution",
       message.messageId
     );
-    if (existingProviderMessage) {
+    const expectedDirection = message.fromMe ? "outbound" : "inbound";
+    if (existingProviderMessage && existingProviderMessage.direction === expectedDirection) {
       console.info("[crm-ai-webhook] Mensagem Evolution ja registrada no CRM:", {
         acesId: instance.aces_id,
         leadId: existingProviderMessage.lead_id,
@@ -8224,7 +8249,13 @@ export class AgentManager {
       };
     }
 
-    const duplicated = await this.dedupeIncomingMessage(message.messageId);
+    const dedupeScope = [
+      instance.aces_id,
+      message.instanceName,
+      message.fromMe ? "outbound" : "inbound",
+      message.phone,
+    ].join(":");
+    const duplicated = await this.dedupeIncomingMessage(message.messageId, dedupeScope);
     if (duplicated) {
       return { ignored: true, reason: "Mensagem duplicada" };
     }
@@ -8350,7 +8381,6 @@ export class AgentManager {
         conversationId: message.conversationId,
         sentAt: message.sentAt,
         provider: "evolution",
-        providerMessageId: message.messageId,
         providerStatus: "accepted",
       });
       await this.tryPersistWebhookMediaAttachment({
