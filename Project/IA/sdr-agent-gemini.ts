@@ -699,6 +699,17 @@ function asString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function pickFirstString(...values: unknown[]) {
+  for (const value of values) {
+    const parsed = asString(value);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function asBoolean(value: unknown): boolean | null {
   if (typeof value === "boolean") {
     return value;
@@ -785,23 +796,109 @@ export function resolveWebhookContactIdentity(payload: WebhookPayload): WebhookC
   const root = asRecord(payload);
   const data = asRecord(root.data);
   const key = asRecord(data.key);
+  const messageData = asRecord(data.messageData);
+  const messageDataKey = asRecord(messageData.key);
+  const rootMessage = asRecord(root.message);
+  const rootMessageKey = asRecord(rootMessage.key);
+  const sender = asRecord(data.sender);
+  const rootSender = asRecord(root.sender);
+  const contact = asRecord(data.contact);
+  const rootContact = asRecord(root.contact);
 
-  const remoteJid = asString(key.remoteJid) ?? asString(data.remoteJid) ?? asString(root.remoteJid);
-  const remoteJidAlt =
-    asString(key.remoteJidAlt) ?? asString(data.remoteJidAlt) ?? asString(root.remoteJidAlt);
-  const senderPn = asString(key.senderPn) ?? asString(data.senderPn) ?? asString(root.senderPn);
-  const participantPn =
-    asString(key.participantPn) ??
-    asString(data.participantPn) ??
-    asString(root.participantPn) ??
-    asString(key.participant) ??
-    asString(asRecord(data.sender).participant);
-  const senderLid = asString(key.senderLid) ?? asString(data.senderLid) ?? asString(root.senderLid);
+  const remoteJid = pickFirstString(
+    key.remoteJid,
+    messageDataKey.remoteJid,
+    rootMessageKey.remoteJid,
+    data.remoteJid,
+    messageData.remoteJid,
+    root.remoteJid,
+    sender.id,
+    sender.jid,
+    rootSender.id,
+    rootSender.jid,
+    contact.id,
+    contact.jid,
+    rootContact.id,
+    rootContact.jid
+  );
+  const remoteJidAlt = pickFirstString(
+    key.remoteJidAlt,
+    messageDataKey.remoteJidAlt,
+    rootMessageKey.remoteJidAlt,
+    data.remoteJidAlt,
+    messageData.remoteJidAlt,
+    root.remoteJidAlt,
+    sender.remoteJidAlt,
+    sender.altJid,
+    sender.phone,
+    sender.pn,
+    rootSender.remoteJidAlt,
+    rootSender.altJid,
+    rootSender.phone,
+    rootSender.pn,
+    contact.remoteJidAlt,
+    contact.altJid,
+    contact.phone,
+    contact.pn,
+    rootContact.remoteJidAlt,
+    rootContact.altJid,
+    rootContact.phone,
+    rootContact.pn
+  );
+  const senderPn = pickFirstString(
+    key.senderPn,
+    messageDataKey.senderPn,
+    rootMessageKey.senderPn,
+    data.senderPn,
+    messageData.senderPn,
+    root.senderPn,
+    sender.senderPn,
+    sender.phone,
+    sender.pn,
+    rootSender.senderPn,
+    rootSender.phone,
+    rootSender.pn
+  );
+  const participantPn = pickFirstString(
+    key.participantPn,
+    messageDataKey.participantPn,
+    rootMessageKey.participantPn,
+    data.participantPn,
+    messageData.participantPn,
+    root.participantPn,
+    key.participant,
+    messageDataKey.participant,
+    rootMessageKey.participant,
+    sender.participant,
+    rootSender.participant,
+    contact.participant,
+    rootContact.participant
+  );
+  const senderLid = pickFirstString(
+    key.senderLid,
+    messageDataKey.senderLid,
+    rootMessageKey.senderLid,
+    data.senderLid,
+    messageData.senderLid,
+    root.senderLid,
+    sender.senderLid,
+    sender.lid,
+    rootSender.senderLid,
+    rootSender.lid,
+    contact.senderLid,
+    contact.lid,
+    rootContact.senderLid,
+    rootContact.lid
+  );
   const legacyCandidates = [
     ["data.sender", asString(data.sender)],
     ["root.sender", asString(root.sender)],
     ["root.from", asString(root.from)],
     ["data.from", asString(data.from)],
+    ["sender.id", pickFirstString(sender.id, sender.jid, sender.phone, sender.pn)],
+    ["rootSender.id", pickFirstString(rootSender.id, rootSender.jid, rootSender.phone, rootSender.pn)],
+    ["contact.id", pickFirstString(contact.id, contact.jid, contact.phone, contact.pn)],
+    ["rootContact.id", pickFirstString(rootContact.id, rootContact.jid, rootContact.phone, rootContact.pn)],
   ] as const;
 
   const prioritizedCandidates = isLidIdentifier(remoteJid)
@@ -959,7 +1056,10 @@ export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWeb
     phone: identity.phone,
     content: textCandidates[0] ?? "",
     messageId,
-    conversationId: identity.remoteJid ?? identity.phone ?? null,
+    conversationId:
+      isLidIdentifier(identity.remoteJid) && identity.phone
+        ? `${identity.phone}@s.whatsapp.net`
+        : identity.remoteJidAlt ?? identity.remoteJid ?? identity.phone ?? null,
     sentAt,
     pushName,
     mediaKind,

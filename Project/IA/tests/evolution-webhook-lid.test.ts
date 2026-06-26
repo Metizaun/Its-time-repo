@@ -33,7 +33,7 @@ test("quando remoteJid vier com @lid, senderPn tem prioridade", () => {
   assert.equal(identity.phone, "555193269431");
   assert.equal(identity.usedField, "senderPn");
   assert.equal(parsed.phone, "555193269431");
-  assert.equal(parsed.conversationId, "103899771998284@lid");
+  assert.equal(parsed.conversationId, "555193269431@s.whatsapp.net");
 });
 
 test("participantPn resolve o telefone quando senderPn nao vier", () => {
@@ -54,6 +54,7 @@ test("remoteJidAlt phone-based e usado quando nao houver senderPn ou participant
   assert.equal(identity.phone, "555198887777");
   assert.equal(identity.usedField, "remoteJidAlt");
   assert.equal(parsed.phone, "555198887777");
+  assert.equal(parsed.conversationId, "555198887777@s.whatsapp.net");
 });
 
 test("payload com apenas @lid nao devolve telefone e preserva estado de lidOnly", () => {
@@ -75,4 +76,40 @@ test("entrada de anuncio com pushName nulo continua resolvendo o PN real", () =>
   assert.equal(parsed.phone, "555194445555");
   assert.equal(parsed.pushName, null);
   assert.equal(parsed.content, "Oi, vi o anuncio");
+});
+
+test("payload LID com remoteJidAlt aninhado em messageData.key continua resolvendo o telefone", () => {
+  const payload = {
+    event: "messages.upsert",
+    instance: "lavie",
+    data: {
+      messageData: {
+        key: {
+          remoteJid: "201318052454578@lid",
+          remoteJidAlt: "555199160161@s.whatsapp.net",
+          fromMe: false,
+          id: "msg-lid-message-data-key",
+        },
+      },
+      key: {
+        remoteJid: "201318052454578@lid",
+        fromMe: false,
+        id: "msg-lid-message-data-key",
+      },
+      pushName: "Michelli",
+      message: {
+        conversation: "Oi, ah que bom! Obrigada!!",
+      },
+      messageType: "conversation",
+      messageTimestamp: 1782491623,
+    },
+  } satisfies WebhookPayload;
+
+  const identity = resolveWebhookContactIdentity(payload);
+  const parsed = parseEvolutionWebhookPayload(payload);
+
+  assert.equal(identity.phone, "555199160161");
+  assert.equal(identity.usedField, "remoteJidAlt");
+  assert.equal(parsed.phone, "555199160161");
+  assert.equal(parsed.conversationId, "555199160161@s.whatsapp.net");
 });
