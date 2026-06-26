@@ -194,14 +194,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-async function loadExistingConversationIds(env: EnvMap, instanceName: string, sinceIso: string) {
+async function loadExistingMessageKeys(env: EnvMap, instanceName: string, sinceIso: string) {
   const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     db: { schema: "crm" },
   });
 
   const { data, error } = await supabase
     .from("message_history")
-    .select("conversation_id, sent_at, direction")
+    .select("conversation_id, sent_at, direction, provider, provider_message_id")
     .eq("instance", instanceName)
     .eq("direction", "inbound")
     .gte("sent_at", sinceIso);
@@ -210,14 +210,118 @@ async function loadExistingConversationIds(env: EnvMap, instanceName: string, si
     throw error;
   }
 
-  const map = new Set<string>();
+  const conversationSentAt = new Set<string>();
+  const providerMessageIds = new Set<string>();
   for (const row of data ?? []) {
     const conversationId = String(row.conversation_id ?? "").trim();
     const sentAt = toSecondPrecisionIso(row.sent_at);
-    if (!conversationId || !sentAt) continue;
-    map.add(`${conversationId}::${sentAt}`);
+    if (conversationId && sentAt) {
+      conversationSentAt.add(`${conversationId}::${sentAt}`);
+    }
+
+    if (row.provider === "evolution" && row.provider_message_id) {
+      providerMessageIds.add(String(row.provider_message_id));
+    }
   }
-  return map;
+  return { conversationSentAt, providerMessageIds };
+}
+
+function extractEvolutionMessages(value: unknown): EvolutionMessageRecord[] {
+  if (Array.isArray(value)) {
+    return value as EvolutionMessageRecord[];
+  }
+
+  const root = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  for (const candidate of [
+    root.messages,
+    root.records,
+    root.data,
+    (root.messages as { records?: unknown } | undefined)?.records,
+    (root.data as { records?: unknown } | undefined)?.records,
+  ]) {
+    if (Array.isArray(candidate)) {
+      return candidate as EvolutionMessageRecord[];
+    }
+  }
+
+  return [];
+}
+
+function buildRecoveryCandidate(params: {
+  chat: EvolutionChatRecord;
+  message: EvolutionMessageRecord;
+  remoteInstanceName: string;
+  sinceMs: number;
+}) {
+  const key = params.message.key;
+  if (!key || key.fromMe !== false) {
+    return null;
+  }
+
+  const remoteJid = String(key.remoteJid ?? params.chat.remoteJid ?? "");
+  if (!remoteJid.endsWith("@lid")) {
+    return null;
+  }
+
+  const phoneJid = normalizePhoneJid(key.remoteJidAlt);
+  if (!phoneJid) {
+    return null;
+  }
+
+  const sentAtRaw = params.message.messageTimestamp;
+  const sentAtMs =
+    typeof sentAtRaw === "number"
+      ? sentAtRaw * (sentAtRaw > 1_000_000_000_000 ? 1 : 1000)
+      : Date.parse(String(sentAtRaw ?? ""));
+
+  if (!Number.isFinite(sentAtMs) || sentAtMs < params.sinceMs) {
+    return null;
+  }
+
+  const sentAtIso = toSecondPrecisionIso(sentAtMs);
+  if (!sentAtIso) {
+    return null;
+  }
+
+  const messageId = String(key.id ?? params.message.id ?? "").trim();
+  if (!messageId) {
+    return null;
+  }
+
+  return {
+    messageId,
+    remoteJid,
+    phoneJid,
+    pushName: params.chat.pushName ?? params.message.pushName ?? null,
+    sentAtIso,
+    contentPreview: asConversationText(params.message.message) ?? null,
+    messageType: params.message.messageType ?? null,
+    source: params.message.source ?? null,
+    payload: {
+      event: "messages.upsert",
+      instance: params.remoteInstanceName,
+      data: {
+        key: {
+          id: messageId,
+          fromMe: false,
+          remoteJid,
+          remoteJidAlt: phoneJid,
+        },
+        pushName: params.chat.pushName ?? params.message.pushName ?? null,
+        message: params.message.message ?? {},
+        messageType: params.message.messageType ?? "conversation",
+        messageTimestamp: Math.floor(sentAtMs / 1000),
+        messageData: {
+          key: {
+            id: messageId,
+            fromMe: false,
+            remoteJid,
+            remoteJidAlt: phoneJid,
+          },
+        },
+      },
+    },
+  } satisfies RecoveryCandidate;
 }
 
 async function fetchLidInboundCandidates(params: {
@@ -225,6 +329,7 @@ async function fetchLidInboundCandidates(params: {
   apiKey: string;
   remoteInstanceName: string;
   sinceIso: string;
+  messagesPerChat: number;
 }) {
   const chats = await fetchJson<EvolutionChatRecord[]>(
     `${params.apiUrl}/chat/findChats/${encodeURIComponent(params.remoteInstanceName)}`,
@@ -239,7 +344,17 @@ async function fetchLidInboundCandidates(params: {
   );
 
   const candidates: RecoveryCandidate[] = [];
+  const seenMessageIds = new Set<string>();
   const sinceMs = Date.parse(params.sinceIso);
+
+  const pushCandidate = (candidate: RecoveryCandidate | null) => {
+    if (!candidate || seenMessageIds.has(candidate.messageId)) {
+      return;
+    }
+
+    seenMessageIds.add(candidate.messageId);
+    candidates.push(candidate);
+  };
 
   for (const chat of chats) {
     const remoteJid = String(chat.remoteJid ?? "");
@@ -248,68 +363,44 @@ async function fetchLidInboundCandidates(params: {
     }
 
     const lastMessage = chat.lastMessage;
-    if (!lastMessage?.key || lastMessage.key.fromMe !== false) {
+    pushCandidate(buildRecoveryCandidate({ chat, message: lastMessage ?? {}, remoteInstanceName: params.remoteInstanceName, sinceMs }));
+
+    if (params.messagesPerChat <= 0) {
       continue;
     }
 
-    const phoneJid = normalizePhoneJid(lastMessage.key.remoteJidAlt);
-    if (!phoneJid) {
-      continue;
-    }
-
-    const sentAtRaw = lastMessage.messageTimestamp;
-    const sentAtMs =
-      typeof sentAtRaw === "number"
-        ? sentAtRaw * (sentAtRaw > 1_000_000_000_000 ? 1 : 1000)
-        : Date.parse(String(sentAtRaw ?? ""));
-
-    if (!Number.isFinite(sentAtMs) || sentAtMs < sinceMs) {
-      continue;
-    }
-
-    const sentAtIso = toSecondPrecisionIso(sentAtMs);
-    if (!sentAtIso) {
-      continue;
-    }
-    const messageId = String(lastMessage.key.id ?? "").trim();
-    if (!messageId) {
-      continue;
-    }
-
-    candidates.push({
-      messageId,
-      remoteJid,
-      phoneJid,
-      pushName: chat.pushName ?? lastMessage.pushName ?? null,
-      sentAtIso,
-      contentPreview: asConversationText(lastMessage.message) ?? null,
-      messageType: lastMessage.messageType ?? null,
-      source: lastMessage.source ?? null,
-      payload: {
-        event: "messages.upsert",
-        instance: params.remoteInstanceName,
-        data: {
-          key: {
-            id: messageId,
-            fromMe: false,
-            remoteJid,
-            remoteJidAlt: phoneJid,
+    try {
+      const response = await fetchJson<unknown>(
+        `${params.apiUrl}/chat/findMessages/${encodeURIComponent(params.remoteInstanceName)}`,
+        {
+          method: "POST",
+          headers: {
+            apikey: params.apiKey,
+            "content-type": "application/json",
           },
-          pushName: chat.pushName ?? lastMessage.pushName ?? null,
-          message: lastMessage.message ?? {},
-          messageType: lastMessage.messageType ?? "conversation",
-          messageTimestamp: Math.floor(sentAtMs / 1000),
-          messageData: {
-            key: {
-              id: messageId,
-              fromMe: false,
-              remoteJid,
-              remoteJidAlt: phoneJid,
+          body: JSON.stringify({
+            where: {
+              key: {
+                remoteJid,
+              },
             },
-          },
+            limit: params.messagesPerChat,
+          }),
         },
-      },
-    });
+      );
+
+      for (const message of extractEvolutionMessages(response)) {
+        pushCandidate(buildRecoveryCandidate({ chat, message, remoteInstanceName: params.remoteInstanceName, sinceMs }));
+      }
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          warning: "findMessages_failed",
+          remoteJid,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
+    }
   }
 
   candidates.sort((left, right) => left.sentAtIso.localeCompare(right.sentAtIso));
@@ -323,6 +414,7 @@ async function main() {
   const instanceName = String(args.instance ?? "Lavie");
   const remoteInstanceName = String(args["remote-instance"] ?? "lavie");
   const sinceIso = String(args.since ?? "2026-06-24T00:00:00Z");
+  const messagesPerChat = Number(args["messages-per-chat"] ?? 50);
   const shouldApply = args.apply === true;
   const disableRedis = args["disable-redis"] === true || shouldApply;
 
@@ -331,7 +423,7 @@ async function main() {
     SUPABASE_SERVICE_ROLE_KEY: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   };
 
-  const existing = await loadExistingConversationIds(env, instanceName, sinceIso);
+  const existing = await loadExistingMessageKeys(env, instanceName, sinceIso);
   const manager = buildManager({ disableRedis });
   const apiUrl = requireEnv("EVOLUTION_API_URL").replace(/\/$/, "");
   const localApiKey = requireEnv("EVOLUTION_API_KEY");
@@ -344,9 +436,14 @@ async function main() {
     apiKey: remoteApiKey,
     remoteInstanceName,
     sinceIso,
+    messagesPerChat: Number.isFinite(messagesPerChat) ? messagesPerChat : 50,
   });
 
-  const missing = candidates.filter((candidate) => !existing.has(`${candidate.phoneJid}::${candidate.sentAtIso}`));
+  const missing = candidates.filter(
+    (candidate) =>
+      !existing.providerMessageIds.has(candidate.messageId) &&
+      !existing.conversationSentAt.has(`${candidate.phoneJid}::${candidate.sentAtIso}`)
+  );
 
   console.log(
     JSON.stringify(
@@ -355,6 +452,7 @@ async function main() {
         instanceName,
         remoteInstanceName,
         sinceIso,
+        messagesPerChat,
         foundCandidates: candidates.length,
         missingCandidates: missing.length,
         preview: missing.slice(0, 20).map((item) => ({

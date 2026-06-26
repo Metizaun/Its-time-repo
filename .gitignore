@@ -35,6 +35,7 @@ DEPLOY_ENV_VPS.local.md
 .vercel
 supabase/.branches/
 Meta-API/
+referencias/*.referencia
 update/*
 !update/guias/
 update/guias/*

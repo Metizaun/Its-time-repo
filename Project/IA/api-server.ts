@@ -5,6 +5,7 @@ import {
   AgentManager,
   DEFAULT_SYSTEM_MESSAGE,
   HttpError,
+  parseEvolutionWebhookPayload,
   type WebhookPayload,
 } from "./sdr-agent-gemini.js";
 import { assertRuntimeSchemaCompatibility } from "./schema-preflight.js";
@@ -22,6 +23,64 @@ type RawBodyRequest = Request & {
 };
 
 type CrmUserRole = "NENHUM" | "VENDEDOR" | "ADMIN";
+
+function asString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function summarizeEvolutionWebhookPayload(payload: WebhookPayload) {
+  const root = asRecord(payload);
+  const data = asRecord(root.data);
+  const key = asRecord(data.key);
+  const messageData = asRecord(data.messageData);
+  const messageDataKey = asRecord(messageData.key);
+
+  try {
+    const parsed = parseEvolutionWebhookPayload(payload);
+    return {
+      event: asString(root.event),
+      instance: parsed.instanceName,
+      messageId: parsed.messageId,
+      fromMe: parsed.fromMe,
+      phone: parsed.phone,
+      conversationId: parsed.conversationId,
+      messageType: parsed.messageType,
+      remoteJid: asString(parsed.raw.remoteJid),
+      remoteJidAlt: asString(parsed.raw.remoteJidAlt),
+      senderPn: asString(parsed.raw.senderPn),
+      participantPn: asString(parsed.raw.participantPn),
+    };
+  } catch {
+    return {
+      event: asString(root.event),
+      instance:
+        asString(root.instance) ??
+        asString(root.instanceName) ??
+        asString(data.instance) ??
+        asString(data.instanceName),
+      messageId: asString(key.id) ?? asString(messageDataKey.id) ?? asString(root.messageId),
+      fromMe: Boolean(key.fromMe ?? messageDataKey.fromMe ?? data.fromMe ?? root.fromMe),
+      phone: null,
+      conversationId: null,
+      messageType: asString(data.messageType) ?? asString(root.messageType),
+      remoteJid: asString(key.remoteJid) ?? asString(messageDataKey.remoteJid) ?? asString(data.remoteJid),
+      remoteJidAlt:
+        asString(key.remoteJidAlt) ??
+        asString(messageDataKey.remoteJidAlt) ??
+        asString(data.remoteJidAlt),
+      senderPn: asString(key.senderPn) ?? asString(messageDataKey.senderPn) ?? asString(data.senderPn),
+      participantPn:
+        asString(key.participantPn) ??
+        asString(messageDataKey.participantPn) ??
+        asString(data.participantPn),
+    };
+  }
+}
 
 function requireEnv(name: string) {
   const value = process.env[name];
@@ -195,7 +254,7 @@ const metaAdminService = new MetaAdminService({
 const app = express();
 app.use(
   express.json({
-    limit: "50mb",
+    limit: process.env.JSON_BODY_LIMIT ?? process.env.WEBHOOK_JSON_LIMIT ?? "150mb",
     verify: (req, _res, buf) => {
       if (req.url?.startsWith("/api/webhook/meta")) {
         (req as RawBodyRequest).rawBody = Buffer.from(buf);
@@ -244,6 +303,8 @@ const authMiddleware = asyncHandler(async (req: AuthenticatedRequest, _res, next
 });
 
 const webhookHandler = asyncHandler(async (req, res) => {
+  const startedAt = Date.now();
+  const summary = summarizeEvolutionWebhookPayload(req.body as WebhookPayload);
   const providedSecret =
     req.header("x-webhook-secret") ||
     req.header("x-evolution-secret") ||
@@ -253,8 +314,22 @@ const webhookHandler = asyncHandler(async (req, res) => {
     throw new HttpError(401, "Webhook da Evolution sem credencial valida");
   }
 
-  const result = await manager.processEvolutionWebhook(req.body as WebhookPayload);
-  res.status(202).json(result);
+  try {
+    const result = await manager.processEvolutionWebhook(req.body as WebhookPayload);
+    console.info("[crm-ai-webhook] Evolution webhook processado:", {
+      ...summary,
+      result,
+      elapsedMs: Date.now() - startedAt,
+    });
+    res.status(202).json(result);
+  } catch (error) {
+    console.error("[crm-ai-webhook] Evolution webhook falhou:", {
+      ...summary,
+      error: error instanceof Error ? error.message : String(error),
+      elapsedMs: Date.now() - startedAt,
+    });
+    throw error;
+  }
 });
 
 const metaWebhookHandler = asyncHandler(async (req, res) => {
@@ -1294,11 +1369,23 @@ app.delete(
   })
 );
 
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof HttpError) {
     return res.status(error.statusCode).json({
       error: error.message,
       details: error.details ?? null,
+    });
+  }
+
+  const payloadError = error as { type?: string; status?: number; limit?: number; length?: number };
+  if (payloadError.type === "entity.too.large") {
+    console.warn("[crm-ai-backend] Payload JSON acima do limite:", {
+      path: req.path,
+      limit: payloadError.limit,
+      length: payloadError.length,
+    });
+    return res.status(413).json({
+      error: "Payload do webhook acima do limite aceito",
     });
   }
 

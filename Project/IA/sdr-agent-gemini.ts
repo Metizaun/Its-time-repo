@@ -4747,6 +4747,31 @@ export class AgentManager {
     return stored !== "OK";
   }
 
+  private async findMessageByProviderMessageId(
+    acesId: number,
+    provider: "evolution" | "meta",
+    providerMessageId: string | null
+  ) {
+    const messageId = providerMessageId?.trim();
+    if (!messageId) {
+      return null;
+    }
+
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, provider, provider_message_id, provider_status")
+      .eq("aces_id", acesId)
+      .eq("provider", provider)
+      .eq("provider_message_id", messageId)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel verificar mensagem ja registrada", error);
+    }
+
+    return (data as MessageRow | null) ?? null;
+  }
+
   private chatMessagesCacheKey(acesId: number, leadId: string) {
     return `crm-chat:messages:${acesId}:${leadId}`;
   }
@@ -4857,6 +4882,28 @@ export class AgentManager {
       .single();
 
     if (error) {
+      const errorRecord = asRecord(error);
+      const provider = params.provider ?? null;
+      const providerMessageId = params.providerMessageId ?? null;
+      const isDuplicateProviderMessage =
+        provider &&
+        providerMessageId &&
+        (errorRecord.code === "23505" ||
+          String(errorRecord.message ?? "")
+            .toLowerCase()
+            .includes("duplicate"));
+
+      if (isDuplicateProviderMessage) {
+        const existing = await this.findMessageByProviderMessageId(
+          params.acesId,
+          provider,
+          providerMessageId
+        );
+        if (existing) {
+          return existing;
+        }
+      }
+
       throw new HttpError(500, "Nao foi possivel registrar a mensagem no CRM", error);
     }
 
@@ -8132,11 +8179,6 @@ export class AgentManager {
       },
     };
 
-    const duplicated = await this.dedupeIncomingMessage(message.messageId);
-    if (duplicated) {
-      return { ignored: true, reason: "Mensagem duplicada" };
-    }
-
     if (!message.phone) {
       console.warn("[crm-ai] Webhook recebido sem PN resolvido para identificador LID:", {
         instanceName: message.instanceName,
@@ -8155,6 +8197,36 @@ export class AgentManager {
         ignored: true,
         reason: "Identificador LID sem telefone resolvido",
       };
+    }
+
+    const existingProviderMessage = await this.findMessageByProviderMessageId(
+      instance.aces_id,
+      "evolution",
+      message.messageId
+    );
+    if (existingProviderMessage) {
+      console.info("[crm-ai-webhook] Mensagem Evolution ja registrada no CRM:", {
+        acesId: instance.aces_id,
+        leadId: existingProviderMessage.lead_id,
+        messageHistoryId: existingProviderMessage.id,
+        providerMessageId: message.messageId,
+        direction: existingProviderMessage.direction,
+        instanceName: message.instanceName,
+        phone: message.phone,
+        conversationId: existingProviderMessage.conversation_id,
+      });
+
+      return {
+        ignored: true,
+        reason: "Mensagem Evolution ja registrada no CRM",
+        leadId: existingProviderMessage.lead_id,
+        messageHistoryId: existingProviderMessage.id,
+      };
+    }
+
+    const duplicated = await this.dedupeIncomingMessage(message.messageId);
+    if (duplicated) {
+      return { ignored: true, reason: "Mensagem duplicada" };
     }
 
     const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
@@ -8277,6 +8349,9 @@ export class AgentManager {
         instanceName: message.instanceName,
         conversationId: message.conversationId,
         sentAt: message.sentAt,
+        provider: "evolution",
+        providerMessageId: message.messageId,
+        providerStatus: "accepted",
       });
       await this.tryPersistWebhookMediaAttachment({
         acesId: instance.aces_id,
@@ -8344,6 +8419,9 @@ export class AgentManager {
       instanceName: message.instanceName,
       conversationId: message.conversationId,
       sentAt: message.sentAt,
+      provider: "evolution",
+      providerMessageId: message.messageId,
+      providerStatus: "accepted",
     });
     await this.tryPersistWebhookMediaAttachment({
       acesId: instance.aces_id,
