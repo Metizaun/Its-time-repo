@@ -13,6 +13,8 @@ import { startAutomationWorker } from "./automation-worker.js";
 import { MetaWebhookProcessor } from "./meta-webhook.js";
 import { MetaTemplateService } from "./meta-template-service.js";
 import { MetaAdminService } from "./meta-admin-service.js";
+import { GupshupWebhookProcessor } from "./gupshup-webhook.js";
+import { GupshupAdminService } from "./gupshup-admin-service.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -228,6 +230,9 @@ const manager = new AgentManager({
   chatAttachmentUploadIntentTtlMinutes: Number(
     process.env.CHAT_ATTACHMENTS_UPLOAD_INTENT_TTL_MINUTES ?? 120
   ),
+  instancePhoneAllowlists: {
+    mamis: ["554199031152"],
+  },
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -247,6 +252,16 @@ const metaTemplateService = new MetaTemplateService({
 });
 
 const metaAdminService = new MetaAdminService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
+const gupshupWebhookProcessor = new GupshupWebhookProcessor({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
+const gupshupAdminService = new GupshupAdminService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
 });
@@ -277,7 +292,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-webhook-secret, x-evolution-secret, x-hub-signature-256"
+    "Content-Type, Authorization, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256"
   );
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
 
@@ -342,6 +357,25 @@ const metaWebhookHandler = asyncHandler(async (req, res) => {
   res.status(202).json(result);
 });
 
+const gupshupWebhookHandler = asyncHandler(async (req, res) => {
+  const configuredSecret = process.env.GUPSHUP_WEBHOOK_SECRET?.trim() || null;
+  const providedSecret =
+    req.header("x-gupshup-secret") ||
+    req.header("x-webhook-secret") ||
+    asString(req.query.secret);
+
+  if (configuredSecret && providedSecret !== configuredSecret) {
+    throw new HttpError(401, "Webhook da Gupshup sem credencial valida");
+  }
+
+  if (!configuredSecret && process.env.NODE_ENV === "production") {
+    throw new HttpError(503, "GUPSHUP_WEBHOOK_SECRET nao configurado");
+  }
+
+  const result = await gupshupWebhookProcessor.processWebhook(req.body);
+  res.status(202).json(result);
+});
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -361,6 +395,7 @@ app.get("/api/webhook/meta", (req, res) => {
 });
 
 app.post("/api/webhook/meta", metaWebhookHandler);
+app.post("/api/webhook/gupshup", gupshupWebhookHandler);
 app.post("/webhook/evolution", webhookHandler);
 app.post("/api/webhook/evolution", webhookHandler);
 
@@ -449,6 +484,101 @@ app.get(
 
     const result = await metaAdminService.listTemplates(context.acesId, instanceName);
     res.json({ success: true, ...result });
+  })
+);
+
+app.get(
+  "/api/gupshup/channels",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem consultar canais Gupshup");
+    }
+
+    const channels = await gupshupAdminService.listChannels(context.acesId);
+    res.json({ success: true, channels });
+  })
+);
+
+app.post(
+  "/api/gupshup/channels",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem configurar canais Gupshup");
+    }
+
+    const instanceName = asString(req.body.instanceName);
+    const appName = asString(req.body.appName);
+    const apiKey = asString(req.body.apiKey);
+    const phoneNumber = asString(req.body.phoneNumber);
+    if (!instanceName || !appName || !apiKey || !phoneNumber) {
+      throw new HttpError(400, "instanceName, appName, apiKey e phoneNumber sao obrigatorios");
+    }
+
+    const requestedStatus = asString(req.body.status);
+    const status = ["draft", "active", "disabled"].includes(requestedStatus ?? "")
+      ? (requestedStatus as "draft" | "active" | "disabled")
+      : "draft";
+    const channel = await gupshupAdminService.upsertChannel({
+      acesId: context.acesId,
+      instanceName,
+      appId: asString(req.body.appId),
+      appName,
+      apiKey,
+      phoneNumber,
+      status,
+    });
+
+    res.json({ success: true, channel });
+  })
+);
+
+app.get(
+  "/api/gupshup/templates",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem consultar templates Gupshup");
+    }
+
+    const instanceName = asString(req.query.instanceName);
+    if (!instanceName) throw new HttpError(400, "instanceName e obrigatorio");
+
+    const result = await gupshupAdminService.listTemplates(context.acesId, instanceName);
+    res.json({ success: true, ...result });
+  })
+);
+
+app.post(
+  "/api/gupshup/templates",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem criar templates Gupshup");
+    }
+
+    const instanceName = asString(req.body.instanceName);
+    const elementName = asString(req.body.elementName);
+    const content = asString(req.body.content);
+    if (!instanceName || !elementName || !content) {
+      throw new HttpError(400, "instanceName, elementName e content sao obrigatorios");
+    }
+
+    const template = await gupshupAdminService.createTemplate(context.acesId, instanceName, {
+      elementName,
+      content,
+      languageCode: asString(req.body.languageCode) ?? undefined,
+      category: asString(req.body.category) ?? undefined,
+      templateType: asString(req.body.templateType) ?? undefined,
+      vertical: asString(req.body.vertical) ?? undefined,
+      example: asString(req.body.example) ?? undefined,
+    });
+    res.status(201).json({ success: true, template });
   })
 );
 
@@ -940,6 +1070,10 @@ app.post(
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
           : undefined,
+      unansweredFollowupEnabled:
+        typeof req.body.unansweredFollowupEnabled === "boolean"
+          ? req.body.unansweredFollowupEnabled
+          : undefined,
       templateKey:
         typeof req.body.templateKey === "string" ? req.body.templateKey : undefined,
     });
@@ -981,6 +1115,10 @@ app.patch(
       handoffTargetPhone:
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
+          : undefined,
+      unansweredFollowupEnabled:
+        typeof req.body.unansweredFollowupEnabled === "boolean"
+          ? req.body.unansweredFollowupEnabled
           : undefined,
     });
 
@@ -1075,6 +1213,10 @@ app.post("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRe
       typeof req.body.handoffTargetPhone === "string"
         ? req.body.handoffTargetPhone
         : undefined,
+    unansweredFollowupEnabled:
+      typeof req.body.unansweredFollowupEnabled === "boolean"
+        ? req.body.unansweredFollowupEnabled
+        : undefined,
     templateKey:
       typeof req.body.templateKey === "string" ? req.body.templateKey : undefined,
   });
@@ -1114,6 +1256,10 @@ app.patch(
       handoffTargetPhone:
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
+          : undefined,
+      unansweredFollowupEnabled:
+        typeof req.body.unansweredFollowupEnabled === "boolean"
+          ? req.body.unansweredFollowupEnabled
           : undefined,
     });
 

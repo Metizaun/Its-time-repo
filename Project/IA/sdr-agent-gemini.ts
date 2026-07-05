@@ -17,6 +17,7 @@ import {
   summarizeProviderPayload,
   type SendMediaInput,
   type SendResult,
+  type WhatsAppProviderName,
   WhatsAppProviderError,
 } from "./whatsapp-provider.js";
 
@@ -105,6 +106,7 @@ type AgentRow = {
   handoff_enabled: boolean;
   handoff_prompt: string | null;
   handoff_target_phone: string | null;
+  unanswered_followup_enabled: boolean;
   template_key: string | null;
   template_version: number | null;
   created_by: string | null;
@@ -312,7 +314,7 @@ type MessageRow = {
   created_by: string | null;
   sent_at: string;
   conversation_id: string | null;
-  provider?: "evolution" | "meta" | null;
+  provider?: WhatsAppProviderName | null;
   provider_message_id?: string | null;
   provider_status?: string | null;
   provider_error_code?: string | null;
@@ -485,6 +487,7 @@ type CreateAgentInput = {
   handoffEnabled?: boolean;
   handoffPrompt?: string;
   handoffTargetPhone?: string;
+  unansweredFollowupEnabled?: boolean;
   templateKey?: string | null;
 };
 
@@ -673,6 +676,7 @@ type ServiceConfig = {
   chatCacheTtlSeconds?: number;
   chatSignedDownloadTtlSeconds?: number;
   chatAttachmentUploadIntentTtlMinutes?: number;
+  instancePhoneAllowlists?: Record<string, string[]>;
 };
 
 export class HttpError extends Error {
@@ -1140,6 +1144,11 @@ function phoneVariants(phone: string): string[] {
   }
 
   return Array.from(variants).filter(Boolean);
+}
+
+function phoneMatchesAllowedList(phone: string, allowedPhones: string[]) {
+  const actualVariants = new Set(phoneVariants(phone));
+  return allowedPhones.some((allowedPhone) => phoneVariants(allowedPhone).some((variant) => actualVariants.has(variant)));
 }
 
 function wait(ms: number) {
@@ -1717,6 +1726,88 @@ export function isTransientVisagismError(error: unknown) {
   return /\b(408|429|500|502|503|504)\b/i.test(message) || /temporar|timeout|unavailable|try again/i.test(message);
 }
 
+export type UnansweredFollowupGenerationInput = {
+  agentName: string;
+  systemPrompt: string;
+  model: string;
+  leadName: string | null;
+  recentMessages: Array<{
+    direction: "inbound" | "outbound";
+    content: string;
+  }>;
+};
+
+export function createUnansweredFollowupGenerator(config: {
+  geminiApiKey: string;
+  fallbackModels?: string[];
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
+}) {
+  const gemini = new GoogleGenerativeAI(config.geminiApiKey);
+  const fallbackModels = config.fallbackModels?.map((model) => model.trim()).filter(Boolean) ?? [];
+  const maxRetries = Math.max(1, config.maxRetries ?? 3);
+  const retryBaseDelayMs = Math.max(250, config.retryBaseDelayMs ?? 1000);
+
+  return async (input: UnansweredFollowupGenerationInput) => {
+    const conversation = input.recentMessages
+      .map((message) => {
+        const speaker = message.direction === "inbound" ? "Lead" : input.agentName;
+        return `${speaker}: ${truncateText(message.content, 500)}`;
+      })
+      .join("\n");
+    const prompt = [
+      input.systemPrompt,
+      "",
+      "Tarefa especial: follow-up de conversa sem resposta.",
+      "A ultima mensagem foi enviada pelo atendimento ha pelo menos duas horas e o lead ainda nao respondeu.",
+      "Escreva uma unica mensagem curta, natural e contextual para retomar o assunto sem pressao.",
+      "Nao invente fatos, descontos, urgencia ou compromissos. Nao repita literalmente a ultima mensagem.",
+      "Nao use saudacao generica se o historico permitir uma retomada mais especifica.",
+      "Retorne JSON puro no formato {\"message\":\"texto pronto para WhatsApp\"}.",
+      "",
+      `Lead: ${input.leadName ?? "nao informado"}`,
+      `Historico recente:\n${conversation}`,
+    ].join("\n");
+    const candidates = Array.from(new Set([input.model.trim(), ...fallbackModels].filter(Boolean)));
+    let lastError: unknown = null;
+
+    for (const modelName of candidates) {
+      const model = gemini.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0.6,
+          maxOutputTokens: 180,
+          responseMimeType: "application/json",
+        },
+      });
+
+      for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+        try {
+          const result = await model.generateContent(prompt);
+          const cleaned = result.response
+            .text()
+            .trim()
+            .replace(/^```json\s*/i, "")
+            .replace(/^```\s*/i, "")
+            .replace(/\s*```$/, "");
+          const parsed = asRecord(JSON.parse(cleaned));
+          const message = asString(parsed.message);
+          if (!message) throw new Error("Gemini retornou follow-up vazio");
+          return truncateText(message, 600);
+        } catch (error) {
+          lastError = error;
+          if (!isTransientGeminiError(error) || attempt >= maxRetries) break;
+          await wait(retryBaseDelayMs * 2 ** (attempt - 1));
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Nao foi possivel gerar o follow-up contextual");
+  };
+}
+
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
@@ -1765,6 +1856,7 @@ export class AgentManager {
   private readonly prescriptionWorkerEnabled: boolean;
   private readonly prescriptionWorkerModel: string;
   private readonly toolMediaAllowedHosts: Set<string>;
+  private readonly instancePhoneAllowlists: Record<string, string[]>;
 
   constructor(private readonly config: ServiceConfig) {
     this.authClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -1829,6 +1921,7 @@ export class AgentManager {
         .map((host) => host.trim().toLowerCase())
         .filter(Boolean)
     );
+    this.instancePhoneAllowlists = config.instancePhoneAllowlists ?? {};
   }
 
   async authenticate(authHeader?: string): Promise<AuthContext> {
@@ -3029,7 +3122,24 @@ export class AgentManager {
         throw new HttpError(500, "Nao foi possivel criar o agente pelo template", error);
       }
 
-      const agent = data as AgentRow;
+      let agent = data as AgentRow;
+      if (input.unansweredFollowupEnabled !== undefined) {
+        const { data: updatedAgent, error: updateError } = await this.agentsClient
+          .from("ai_agents")
+          .update({ unanswered_followup_enabled: input.unansweredFollowupEnabled })
+          .eq("id", agent.id)
+          .eq("aces_id", context.acesId)
+          .select("*")
+          .single();
+        if (updateError) {
+          throw new HttpError(
+            500,
+            "Nao foi possivel configurar o follow-up de inatividade",
+            updateError
+          );
+        }
+        agent = updatedAgent as AgentRow;
+      }
       await this.syncMissingStageRules(agent);
       await this.syncPlatformToolReadiness(agent.id, agent.aces_id);
       return agent;
@@ -3050,6 +3160,7 @@ export class AgentManager {
       handoff_enabled: input.handoffEnabled ?? false,
       handoff_prompt: input.handoffPrompt?.trim() || null,
       handoff_target_phone: input.handoffTargetPhone?.trim() || null,
+      unanswered_followup_enabled: input.unansweredFollowupEnabled ?? true,
       created_by: context.crmUserId,
     };
 
@@ -3646,6 +3757,9 @@ export class AgentManager {
     if (input.handoffEnabled !== undefined) payload.handoff_enabled = input.handoffEnabled;
     if (input.handoffPrompt !== undefined) payload.handoff_prompt = input.handoffPrompt.trim() || null;
     if (input.handoffTargetPhone !== undefined) payload.handoff_target_phone = input.handoffTargetPhone.trim() || null;
+    if (input.unansweredFollowupEnabled !== undefined) {
+      payload.unanswered_followup_enabled = input.unansweredFollowupEnabled;
+    }
 
     const { data, error } = await this.agentsClient
       .from("ai_agents")
@@ -4657,7 +4771,7 @@ export class AgentManager {
       return "human";
     }
 
-    if (origin === "agent_followup") {
+    if (origin === "agent_followup" || origin === "unanswered_followup") {
       return "ai";
     }
 
@@ -4749,7 +4863,7 @@ export class AgentManager {
 
   private async findMessageByProviderMessageId(
     acesId: number,
-    provider: "evolution" | "meta",
+    provider: WhatsAppProviderName,
     providerMessageId: string | null
   ) {
     const messageId = providerMessageId?.trim();
@@ -4827,6 +4941,38 @@ export class AgentManager {
     }
   }
 
+  private async updateLeadAfterMessage(params: {
+    leadId: string;
+    acesId: number;
+    sentAt: string;
+    inbound: boolean;
+  }) {
+    const leadUpdate: Record<string, unknown> = {
+      last_message_at: params.sentAt,
+      updated_at: new Date().toISOString(),
+    };
+    if (params.inbound) leadUpdate.last_lead_inbound_at = params.sentAt;
+
+    const { error: leadError } = await this.serviceClient
+      .from("leads")
+      .update(leadUpdate)
+      .eq("id", params.leadId)
+      .eq("aces_id", params.acesId);
+    if (leadError) {
+      throw new HttpError(500, "Nao foi possivel atualizar a atividade do lead", leadError);
+    }
+
+    if (params.inbound) {
+      const { error: resetError } = await this.serviceClient.rpc(
+        "rpc_reset_unanswered_followup",
+        { p_lead_id: params.leadId }
+      );
+      if (resetError) {
+        throw new HttpError(500, "Nao foi possivel rearmar o follow-up do lead", resetError);
+      }
+    }
+  }
+
   private async saveMessage(params: {
     id?: string;
     leadId: string;
@@ -4838,7 +4984,7 @@ export class AgentManager {
     createdBy?: string | null;
     conversationId?: string | null;
     sentAt?: string;
-    provider?: "evolution" | "meta" | null;
+    provider?: WhatsAppProviderName | null;
     providerMessageId?: string | null;
     providerStatus?: "accepted" | "sent" | "failed" | null;
     providerErrorCode?: string | null;
@@ -4914,14 +5060,12 @@ export class AgentManager {
           .single();
 
         if (!retryError) {
-          await this.serviceClient
-            .from("leads")
-            .update({
-              last_message_at: sentAt,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", params.leadId)
-            .eq("aces_id", params.acesId);
+          await this.updateLeadAfterMessage({
+            leadId: params.leadId,
+            acesId: params.acesId,
+            sentAt,
+            inbound: params.direction === "inbound",
+          });
 
           await this.invalidateChatMessagesCache(params.acesId, params.leadId);
           return retryData as MessageRow;
@@ -4931,14 +5075,12 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel registrar a mensagem no CRM", error);
     }
 
-    await this.serviceClient
-      .from("leads")
-      .update({
-        last_message_at: sentAt,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", params.leadId)
-      .eq("aces_id", params.acesId);
+    await this.updateLeadAfterMessage({
+      leadId: params.leadId,
+      acesId: params.acesId,
+      sentAt,
+      inbound: params.direction === "inbound",
+    });
 
     await this.invalidateChatMessagesCache(params.acesId, params.leadId);
 
@@ -8193,6 +8335,11 @@ export class AgentManager {
       return { ignored: true, reason: "Instancia nao cadastrada no CRM" };
     }
 
+    const allowedPhones = this.instancePhoneAllowlists[instance.instancia];
+    if (allowedPhones?.length && parsedMessage.phone && !phoneMatchesAllowedList(parsedMessage.phone, allowedPhones)) {
+      return { ignored: true, reason: "Telefone nao autorizado para esta instancia" };
+    }
+
     const message: ParsedWebhookMessage = {
       ...parsedMessage,
       instanceName: instance.instancia,
@@ -9028,6 +9175,7 @@ export class AgentManager {
       handoff_enabled: false,
       handoff_prompt: null,
       handoff_target_phone: null,
+      unanswered_followup_enabled: true,
       template_key: null,
       template_version: null,
       created_by: context.crmUserId,
