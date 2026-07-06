@@ -377,6 +377,10 @@ const gupshupWebhookHandler = asyncHandler(async (req, res) => {
   res.status(202).json(result);
 });
 
+const gupshupWebhookProbeHandler = (_req: Request, res: Response) => {
+  res.status(204).end();
+};
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -396,6 +400,8 @@ app.get("/api/webhook/meta", (req, res) => {
 });
 
 app.post("/api/webhook/meta", metaWebhookHandler);
+app.get("/api/webhook/gupshup", gupshupWebhookProbeHandler);
+app.head("/api/webhook/gupshup", gupshupWebhookProbeHandler);
 app.post("/api/webhook/gupshup", gupshupWebhookHandler);
 app.post("/webhook/evolution", webhookHandler);
 app.post("/api/webhook/evolution", webhookHandler);
