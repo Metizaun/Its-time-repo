@@ -443,7 +443,7 @@ type LeadAiControlState = {
   reason: LeadAiReason;
 };
 
-type ParsedWebhookMessage = {
+export type ParsedWebhookMessage = {
   instanceName: string;
   fromMe: boolean;
   phone: string | null;
@@ -452,11 +452,13 @@ type ParsedWebhookMessage = {
   conversationId: string | null;
   sentAt: string;
   pushName: string | null;
-  mediaKind: "audio" | "image" | null;
+  mediaKind: "audio" | "image" | "document" | null;
   mediaMimeType: string | null;
   mediaBase64: string | null;
   mediaUrl: string | null;
   messageType: string | null;
+  fileName?: string | null;
+  provider: WhatsAppProviderName;
   raw: JsonRecord;
 };
 
@@ -1071,6 +1073,7 @@ export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWeb
     mediaBase64: audioBase64 ?? imageBase64 ?? null,
     mediaUrl: audioUrl ?? imageUrl ?? null,
     messageType,
+    provider: "evolution",
     raw: {
       ...root,
       remoteJid: identity.remoteJid ?? root.remoteJid ?? null,
@@ -5181,7 +5184,22 @@ export class AgentManager {
   }
 
   private async loadLeadForAgent(agent: AgentRow, leadId: string) {
-    const lead = await this.loadLeadById(leadId, agent.aces_id);
+    const { data, error } = await this.serviceClient
+      .from("leads")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
+      .eq("id", leadId)
+      .eq("aces_id", agent.aces_id)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar o lead", error);
+    }
+
+    if (!data) {
+      throw new HttpError(404, "Lead nao encontrado");
+    }
+
+    const lead = data as LeadRow;
     const isPrimaryInstance = lead.instancia === agent.instance_name;
     const isAdditionalInstance = isPrimaryInstance
       ? false
@@ -5562,27 +5580,46 @@ export class AgentManager {
       }
 
       if (!this.gemini) {
-        return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
+        return message.mediaKind === "audio"
+          ? "[audio recebido]"
+          : message.mediaKind === "document"
+            ? "[documento recebido]"
+            : "[imagem recebida]";
       }
 
       const mediaPart = await this.buildMediaPart(message);
       if (!mediaPart) {
-        return message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]";
+        return message.mediaKind === "audio"
+          ? "[audio recebido]"
+          : message.mediaKind === "document"
+            ? "[documento recebido]"
+            : "[imagem recebida]";
       }
 
       const modelName = this.crmAnalysisWorkerModel;
       const prompt =
         message.mediaKind === "audio"
           ? "Transcreva em portugues brasileiro o conteudo principal deste audio de WhatsApp. Responda apenas com o texto transcrito."
-          : "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.";
+          : message.mediaKind === "document"
+            ? "Leia o documento recebido no WhatsApp e descreva de forma objetiva o conteudo principal. Responda apenas com a descricao."
+            : "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.";
 
       const { result } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
-      return result.response.text().trim() || (message.mediaKind === "audio" ? "[audio recebido]" : "[imagem recebida]");
+      return (
+        result.response.text().trim() ||
+        (message.mediaKind === "audio"
+          ? "[audio recebido]"
+          : message.mediaKind === "document"
+            ? "[documento recebido]"
+            : "[imagem recebida]")
+      );
     } catch (error) {
       console.warn("[crm-ai] Falha ao normalizar conteudo de entrada, usando fallback:", error);
       return message.mediaKind === "audio"
         ? "[audio recebido]"
-        : message.mediaKind === "image"
+        : message.mediaKind === "document"
+          ? "[documento recebido]"
+          : message.mediaKind === "image"
           ? "[imagem recebida]"
           : "[mensagem sem texto]";
     }
@@ -5675,7 +5712,13 @@ export class AgentManager {
   private async resolveMediaBytes(message: ParsedWebhookMessage) {
     const mimeType =
       message.mediaMimeType ??
-      (message.mediaKind === "audio" ? "audio/ogg" : message.mediaKind === "image" ? "image/jpeg" : "application/octet-stream");
+      (message.mediaKind === "audio"
+        ? "audio/ogg"
+        : message.mediaKind === "image"
+          ? "image/jpeg"
+          : message.mediaKind === "document"
+            ? "application/pdf"
+            : "application/octet-stream");
 
     if (message.mediaBase64) {
       const buffer = decodeBase64Payload(message.mediaBase64);
@@ -8647,6 +8690,121 @@ export class AgentManager {
     };
   }
 
+  async processProviderInboundWebhook(acesId: number, message: ParsedWebhookMessage) {
+    if (message.fromMe) {
+      return { ignored: true, reason: "Evento outbound ignorado no webhook inbound" };
+    }
+
+    if (!message.phone) {
+      return { ignored: true, reason: "Webhook sem telefone do lead" };
+    }
+
+    const allowedPhones = this.instancePhoneAllowlists[message.instanceName];
+    if (allowedPhones?.length && !phoneMatchesAllowedList(message.phone, allowedPhones)) {
+      return { ignored: true, reason: "Telefone nao autorizado para esta instancia" };
+    }
+
+    const existingProviderMessage = await this.findMessageByProviderMessageId(
+      acesId,
+      message.provider,
+      message.messageId
+    );
+    if (existingProviderMessage?.direction === "inbound") {
+      return {
+        ignored: true,
+        reason: `Mensagem ${message.provider} ja registrada no CRM`,
+        leadId: existingProviderMessage.lead_id,
+        messageHistoryId: existingProviderMessage.id,
+      };
+    }
+
+    const dedupeScope = [acesId, message.provider, message.instanceName, "inbound", message.phone].join(":");
+    if (await this.dedupeIncomingMessage(message.messageId, dedupeScope)) {
+      return { ignored: true, reason: "Mensagem duplicada" };
+    }
+
+    const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, acesId);
+    const existingLeadForRouting = await this.findLeadByPhone(acesId, message.phone);
+    const isPrimaryInstance = !existingLeadForRouting || existingLeadForRouting.instancia === message.instanceName;
+    const hasAdditionalMembership =
+      existingLeadForRouting && !isPrimaryInstance
+        ? await this.hasActiveLeadInstanceMembership(acesId, existingLeadForRouting.id, message.instanceName)
+        : false;
+    const instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
+    const agent = instanceAuthorized ? candidateAgent : null;
+    const ownerIdForLead = hasAdditionalMembership ? null : agent?.created_by ?? null;
+    const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
+      ? "[imagem recebida para analise optica]"
+      : await this.normalizeInboundContent(message);
+
+    const lead = await this.findOrCreateLead(
+      acesId,
+      message.phone,
+      message.instanceName,
+      message.pushName,
+      ownerIdForLead,
+      { preferAttendanceStage: true }
+    );
+    const savedMessage = await this.saveMessage({
+      leadId: lead.id,
+      acesId,
+      content: normalizedContent,
+      direction: "inbound",
+      sourceType: "lead",
+      instanceName: message.instanceName,
+      conversationId: message.conversationId,
+      sentAt: message.sentAt,
+      provider: message.provider,
+      providerMessageId: message.messageId,
+      providerStatus: "accepted",
+      providerPayloadSummary: summarizeProviderPayload(message.raw),
+    });
+    await this.tryPersistWebhookMediaAttachment({
+      acesId,
+      leadId: lead.id,
+      messageId: savedMessage.id,
+      message,
+    });
+
+    const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
+    if (!agent || !aiState.enabled) {
+      return {
+        success: true,
+        leadId: lead.id,
+        queued: false,
+        agentId: agent?.id ?? null,
+        capturedOnly: true,
+        reason:
+          aiState.reason === "manual_off"
+            ? "Mensagem registrada com IA desligada para este lead"
+            : aiState.reason === "auto_pause"
+              ? "Mensagem registrada com IA pausada por atendimento humano"
+              : aiState.reason === "global_inactive"
+                ? "Mensagem registrada com agente global desligado"
+                : "Mensagem registrada sem agente configurado",
+      };
+    }
+
+    await this.upsertLeadState(agent.id, lead.id, {
+      last_inbound_at: message.sentAt,
+      status: "active",
+    });
+
+    await this.queueBufferedProcessing(agent, lead.id, {
+      ...message,
+      content: normalizedContent,
+      messageId: savedMessage.id,
+    });
+
+    return {
+      success: true,
+      leadId: lead.id,
+      queued: true,
+      agentId: agent.id,
+      bypassingGlobalInactive: aiState.bypassingGlobalInactive,
+    };
+  }
+
   async createChatAttachmentUploadUrl(context: AuthContext, input: ChatAttachmentUploadUrlInput) {
     const leadId = String(input.leadId ?? "").trim();
     if (!isUuid(leadId)) {
@@ -8955,8 +9113,10 @@ export class AgentManager {
     return Boolean(data);
   }
 
-  private getDefaultWebhookMediaMimeType(kind: "audio" | "image") {
-    return kind === "audio" ? "audio/ogg" : "image/jpeg";
+  private getDefaultWebhookMediaMimeType(kind: "audio" | "image" | "document") {
+    if (kind === "audio") return "audio/ogg";
+    if (kind === "document") return "application/pdf";
+    return "image/jpeg";
   }
 
   private getWebhookMediaFileName(message: ParsedWebhookMessage, mimeType: string) {
@@ -8965,7 +9125,9 @@ export class AgentManager {
     const mediaPayload =
       message.mediaKind === "audio"
         ? asRecord(payloadMessage.audioMessage)
-        : asRecord(payloadMessage.imageMessage);
+        : message.mediaKind === "document"
+          ? asRecord(payloadMessage.documentMessage)
+          : asRecord(payloadMessage.imageMessage);
     const documentPayload = asRecord(payloadMessage.documentMessage);
     const providedFileName =
       asString(mediaPayload.fileName) ??
@@ -8979,7 +9141,11 @@ export class AgentManager {
 
     const extension = this.getFileExtensionFromMimeType(
       mimeType,
-      message.mediaKind === "audio" ? "ogg" : "jpg"
+      message.mediaKind === "audio"
+        ? "ogg"
+        : message.mediaKind === "document"
+          ? "pdf"
+          : "jpg"
     );
     const messageSuffix = message.messageId ? sanitizeStorageFileName(message.messageId) : String(Date.now());
     return `whatsapp-${message.mediaKind}-${messageSuffix}.${extension}`;

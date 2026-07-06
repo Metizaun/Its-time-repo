@@ -1,4 +1,4 @@
-export type WhatsAppProviderName = "evolution" | "meta";
+export type WhatsAppProviderName = "evolution" | "meta" | "gupshup";
 
 export type WhatsAppSourceType = "manual" | "ai" | "automation" | "system";
 

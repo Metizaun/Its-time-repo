@@ -8,7 +8,8 @@ export type OutboundEchoOrigin =
   | "ai"
   | "automation"
   | "calendar_followup"
-  | "agent_followup";
+  | "agent_followup"
+  | "unanswered_followup";
 
 type RegisterOutboundEchoParams = {
   client: SupabaseClient;

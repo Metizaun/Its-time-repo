@@ -259,6 +259,7 @@ const metaAdminService = new MetaAdminService({
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  processInboundMessage: (acesId, message) => manager.processProviderInboundWebhook(acesId, message),
 });
 
 const gupshupAdminService = new GupshupAdminService({
