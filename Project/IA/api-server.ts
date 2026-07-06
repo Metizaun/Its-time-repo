@@ -396,8 +396,8 @@ const gupshupWebhookHandler = asyncHandler(async (req, res) => {
     throw new HttpError(503, "GUPSHUP_WEBHOOK_SECRET nao configurado");
   }
 
-  const result = await gupshupWebhookProcessor.processWebhook(req.body);
-  res.status(202).json(result);
+  await gupshupWebhookProcessor.processWebhook(req.body);
+  res.status(204).end();
 });
 
 const gupshupWebhookProbeHandler = (_req: Request, res: Response) => {
