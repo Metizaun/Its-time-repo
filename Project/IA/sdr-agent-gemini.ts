@@ -8208,7 +8208,9 @@ export class AgentManager {
     }
 
     const inactivityRemainingMs = this.getCrmAnalysisInactivityRemainingMs(latestInbound?.sent_at ?? null);
-    if (inactivityRemainingMs > 0) {
+    // Fresh webhook buffers should keep the conversational AI responsive; delayed rechecks are only
+    // useful for background CRM analysis when no new inbound batch is waiting right now.
+    if (bufferedEntries.length === 0 && inactivityRemainingMs > 0) {
       this.scheduleCrmAnalysisAfterInactivity(agent.id, lead.id, inactivityRemainingMs);
       return;
     }
