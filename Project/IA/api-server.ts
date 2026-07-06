@@ -358,7 +358,30 @@ const metaWebhookHandler = asyncHandler(async (req, res) => {
   res.status(202).json(result);
 });
 
+function isGupshupValidationProbe(req: Request): boolean {
+  const rawBody = (req as RawBodyRequest).rawBody;
+  if (rawBody && rawBody.length > 0) {
+    return false;
+  }
+
+  const body =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? asRecord(req.body)
+      : null;
+
+  if (body && Object.keys(body).length > 0) {
+    return false;
+  }
+
+  return true;
+}
+
 const gupshupWebhookHandler = asyncHandler(async (req, res) => {
+  if (isGupshupValidationProbe(req)) {
+    res.status(204).end();
+    return;
+  }
+
   const configuredSecret = process.env.GUPSHUP_WEBHOOK_SECRET?.trim() || null;
   const providedSecret =
     req.header("x-gupshup-secret") ||
