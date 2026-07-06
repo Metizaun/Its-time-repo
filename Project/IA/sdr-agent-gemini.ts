@@ -8,6 +8,7 @@ import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
+import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
 import {
   matchOutboundEcho,
   registerOutboundEcho,
@@ -5899,6 +5900,58 @@ export class AgentManager {
     return fallback;
   }
 
+  private async resolveInstanceTextProvider(instanceName: string): Promise<WhatsAppProviderName> {
+    const metaClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
+      db: { schema: "meta" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data, error } = await metaClient
+      .from("instance")
+      .select("provider")
+      .eq("instance_name", instanceName)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel resolver o provider da instancia", error);
+    }
+
+    if (data?.provider === "gupshup") return "gupshup";
+    if (data?.provider === "meta") return "meta";
+    return "evolution";
+  }
+
+  private async resolveGupshupTextProvider(instanceName: string) {
+    const gupshupClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
+      db: { schema: "gupshup" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data, error } = await gupshupClient
+      .from("channel")
+      .select("api_key, app_name, phone_number")
+      .eq("instance_name", instanceName)
+      .eq("status", "active")
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar o canal Gupshup da instancia", error);
+    }
+
+    if (!data?.api_key || !data?.app_name || !data?.phone_number) {
+      throw new WhatsAppProviderError("Canal Gupshup ativo sem credenciais completas", {
+        provider: "gupshup",
+        kind: "permanent",
+      });
+    }
+
+    return new GupshupWhatsAppProvider({
+      apiKey: String(data.api_key),
+      appName: String(data.app_name),
+      phoneNumber: String(data.phone_number),
+    });
+  }
+
   private async sendWhatsAppMessage(
     instanceName: string,
     phone: string,
@@ -5911,6 +5964,34 @@ export class AgentManager {
     }
   ) {
     const recipient = resolveWhatsappRecipient(phone);
+    const providerName = await this.resolveInstanceTextProvider(instanceName);
+
+    if (providerName === "gupshup") {
+      const provider = await this.resolveGupshupTextProvider(instanceName);
+      try {
+        await provider.sendText({
+          instanceName,
+          to: phone,
+          text: content,
+          sourceType: "manual",
+        });
+        return;
+      } catch (error) {
+        console.error("[crm-ai] Falha ao enviar mensagem na Gupshup:", {
+          acesId: context?.acesId ?? null,
+          leadId: context?.leadId ?? null,
+          agentId: context?.agentId ?? null,
+          sourceType: context?.sourceType ?? null,
+          instanceName,
+          phoneRaw: phone,
+          phoneNormalized: recipient.normalized,
+          phoneFinal: recipient.finalNumber,
+          error: error instanceof Error ? error.message : error,
+        });
+        throw error;
+      }
+    }
+
     const transport = await this.resolveEvolutionTransport(instanceName, context?.acesId);
 
     try {
