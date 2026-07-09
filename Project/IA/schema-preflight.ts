@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
+const AUTOMATION_MEDIA_BUCKET = "automation-media";
 const CALENDAR_FOLLOWUP_MIGRATION =
   "supabase/migrations/20260615223657_add_calendar_followup_dispatch.sql";
 const AGENT_FOLLOWUP_MIGRATION =
@@ -14,6 +15,12 @@ const AGENTS_TOOLS_BI_MIGRATION =
   "supabase/migrations/20260622215036_create_agents_tools_and_bi_foundation.sql";
 const PRESCRIPTION_ANALYST_MIGRATION =
   "supabase/migrations/20260623210142_add_prescription_analyst_foundation.sql";
+const META_WHATSAPP_FOUNDATION_MIGRATION =
+  "supabase/migrations/20260526023423_add_meta_whatsapp_foundation.sql";
+const GUPSHUP_FOUNDATION_MIGRATION =
+  "supabase/migrations/20260707201001_add_gupshup_channel_foundation.sql";
+const RB_BILLING_REFACTOR_MIGRATION =
+  "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -39,6 +46,15 @@ const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/rtf",
+];
+const AUTOMATION_MEDIA_ALLOWED_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "application/pdf",
 ];
 
 type SchemaPreflightConfig = {
@@ -479,6 +495,61 @@ async function validateChatAttachmentsStorage(
   return null;
 }
 
+async function validateAutomationMediaStorage(
+  serviceClient: StorageBucketLookupClient
+) {
+  const migration =
+    "supabase/migrations/20260707103000_add_direct_automation_media_uploads.sql";
+  const { data, error } = await serviceClient.storage.getBucket(AUTOMATION_MEDIA_BUCKET);
+
+  if (error) {
+    return buildManualSchemaFailure(
+      "storage.bucket automation-media",
+      migration,
+      error.message
+    );
+  }
+
+  if (!data) {
+    return buildManualSchemaFailure(
+      "storage.bucket automation-media",
+      migration,
+      "Bucket nao encontrado"
+    );
+  }
+
+  if (!data.public) {
+    return buildManualSchemaFailure(
+      "storage.bucket automation-media",
+      migration,
+      "Bucket deve ser publico"
+    );
+  }
+
+  if (data.file_size_limit !== CHAT_ATTACHMENTS_FILE_SIZE_LIMIT) {
+    return buildManualSchemaFailure(
+      "storage.bucket automation-media",
+      migration,
+      `file_size_limit esperado ${CHAT_ATTACHMENTS_FILE_SIZE_LIMIT}, recebido ${data.file_size_limit}`
+    );
+  }
+
+  const actualMimeTypes = new Set(data.allowed_mime_types ?? []);
+  const missingMimeTypes = AUTOMATION_MEDIA_ALLOWED_MIME_TYPES.filter(
+    (mimeType) => !actualMimeTypes.has(mimeType)
+  );
+
+  if (missingMimeTypes.length > 0) {
+    return buildManualSchemaFailure(
+      "storage.bucket automation-media",
+      migration,
+      `allowed_mime_types ausentes: ${missingMimeTypes.join(", ")}`
+    );
+  }
+
+  return null;
+}
+
 export async function assertRuntimeSchemaCompatibility(
   config: SchemaPreflightConfig = {}
 ) {
@@ -496,6 +567,11 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const gupshupClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "gupshup" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const agentsClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     db: { schema: "agents" },
     auth: { persistSession: false, autoRefreshToken: false },
@@ -506,8 +582,14 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const rbClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "rb" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
     validateChatAttachmentsStorage(serviceClient),
+    validateAutomationMediaStorage(serviceClient),
     validateSelectedColumns(
       calendarClient,
       "events",
@@ -535,7 +617,14 @@ export async function assertRuntimeSchemaCompatibility(
       "instance",
       ["instance_name", "provider", "meta_channel_id"],
       "meta.instance (provider)",
-      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+      META_WHATSAPP_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      gupshupClient,
+      "channel",
+      ["id", "aces_id", "instance_name", "app_id", "app_name", "api_key", "phone_number", "status"],
+      "gupshup.channel",
+      GUPSHUP_FOUNDATION_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -561,9 +650,9 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       serviceClient,
       "v_lead_details",
-      ["id", "aces_id"],
-      "crm.v_lead_details.aces_id",
-      "supabase/migrations/20260618205533_fix_dashboard_scope_and_external_webhook_sync.sql"
+      ["id", "aces_id", "interaction_mode", "manual_pending_state", "manual_pending_since"],
+      "crm.v_lead_details manual handoff fields",
+      "supabase/migrations/20260708211239_handoff_internal_chat_manual.sql"
     ),
     validateSelectedColumns(
       agentsClient,
@@ -615,6 +704,33 @@ export async function assertRuntimeSchemaCompatibility(
       ["id", "aces_id", "agent_id", "agent_tool_id", "lead_id", "status", "idempotency_key"],
       "agents.agent_tool_runs",
       AGENTS_TOOLS_BI_MIGRATION
+    ),
+    validateSelectedColumns(
+      rbClient,
+      "sync_runs",
+      ["id", "aces_id", "agent_tool_id", "agent_id", "local_run_date", "status", "payload_summary"],
+      "rb.sync_runs",
+      "supabase/migrations/20260708180000_rb_schema_segregation.sql"
+    ),
+    validateSelectedColumns(
+      rbClient,
+      "lead_metadata",
+      [
+        "lead_id",
+        "aces_id",
+        "clie_id",
+        "cpf_cnpj",
+        "store_emp_id",
+        "store_emp_cpf_cnpj",
+        "total_amount",
+        "titles_count",
+        "titles",
+        "next_due_date",
+        "last_sync_at",
+        "pix_key",
+      ],
+      "rb.lead_metadata",
+      "supabase/migrations/20260708180000_rb_schema_segregation.sql"
     ),
     validateSelectedColumns(
       agentsClient,
@@ -707,6 +823,27 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       serviceClient,
+      "automation_funnels",
+      ["id", "daily_dispatch_enabled", "daily_dispatch_time"],
+      "crm.automation_funnels (disparo diario)",
+      "supabase/migrations/20260709140504_add_daily_dispatch_to_automation_funnels.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_funnels",
+      ["id", "entry_source"],
+      "crm.automation_funnels.entry_source",
+      RB_BILLING_REFACTOR_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_steps",
+      ["id", "rb_message_kind", "rb_days_offset", "rb_payment_type_ids"],
+      "crm.automation_steps (RB message config)",
+      RB_BILLING_REFACTOR_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
       "automation_executions",
       ["id", "dispatch_meta"],
       "crm.automation_executions.dispatch_meta",
@@ -725,7 +862,7 @@ export async function assertRuntimeSchemaCompatibility(
         "provider_payload_summary",
       ],
       "crm.automation_executions (Meta provider status)",
-      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+      META_WHATSAPP_FOUNDATION_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -740,7 +877,31 @@ export async function assertRuntimeSchemaCompatibility(
         "provider_payload_summary",
       ],
       "crm.message_history (Meta provider status)",
-      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+      META_WHATSAPP_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_media_assets",
+      [
+        "id",
+        "aces_id",
+        "instance_name",
+        "display_name",
+        "source_url",
+        "storage_bucket",
+        "storage_path",
+        "media_kind",
+        "mime_type",
+        "file_name",
+        "file_size",
+        "default_caption",
+        "upload_status",
+        "is_active",
+        "created_at",
+        "updated_at",
+      ],
+      "crm.automation_media_assets",
+      "supabase/migrations/20260707103000_add_direct_automation_media_uploads.sql"
     ),
     validateSelectedColumns(
       serviceClient,
@@ -803,7 +964,7 @@ export async function assertRuntimeSchemaCompatibility(
         "last_template_sync_at",
       ],
       "meta.whatsapp_channels",
-      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+      META_WHATSAPP_FOUNDATION_MIGRATION
     ),
     validateSelectedColumns(
       metaClient,
@@ -822,7 +983,7 @@ export async function assertRuntimeSchemaCompatibility(
         "last_synced_at",
       ],
       "meta.whatsapp_templates",
-      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+      META_WHATSAPP_FOUNDATION_MIGRATION
     ),
     validateSelectedColumns(
       metaClient,
@@ -840,7 +1001,7 @@ export async function assertRuntimeSchemaCompatibility(
         "payload_summary",
       ],
       "meta.whatsapp_provider_status_events",
-      "supabase/migrations/20260521205000_add_meta_whatsapp_foundation.sql"
+      META_WHATSAPP_FOUNDATION_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,

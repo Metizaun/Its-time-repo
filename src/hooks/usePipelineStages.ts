@@ -15,7 +15,25 @@ type CrmProfileResponse = {
   };
 };
 
-export function usePipelineStages() {
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeStage(row: Record<string, unknown>): PipelineStage {
+  return {
+    ...(row as Omit<
+      PipelineStage,
+      "classifier_positive_signals" | "classifier_negative_signals" | "classifier_examples"
+    >),
+    pipeline_id: String(row.pipeline_id ?? ""),
+    classifier_description: String(row.classifier_description ?? ""),
+    classifier_positive_signals: normalizeStringArray(row.classifier_positive_signals),
+    classifier_negative_signals: normalizeStringArray(row.classifier_negative_signals),
+    classifier_examples: normalizeStringArray(row.classifier_examples),
+  };
+}
+
+export function usePipelineStages(pipelineId?: string | null) {
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [loading, setLoading] = useState(true);
   const { session } = useAuth();
@@ -47,21 +65,26 @@ export function usePipelineStages() {
         return;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("pipeline_stages")
         .select("*")
-        .eq("aces_id", acesId)
-        .order("position", { ascending: true });
+        .eq("aces_id", acesId);
+
+      if (pipelineId) {
+        query = query.eq("pipeline_id", pipelineId);
+      }
+
+      const { data, error } = await query.order("position", { ascending: true });
 
       if (error) throw error;
-      setStages(data || []);
+      setStages((data || []).map((row) => normalizeStage(row as Record<string, unknown>)));
     } catch (error: any) {
       console.error("Erro ao carregar etapas do pipeline:", error);
       toast.error("Erro ao carregar etapas do pipeline");
     } finally {
       setLoading(false);
     }
-  }, [fetchCurrentAcesId, isAuthenticated]);
+  }, [fetchCurrentAcesId, isAuthenticated, pipelineId]);
 
   useEffect(() => {
     fetchStages();
@@ -101,12 +124,23 @@ export function usePipelineStages() {
     };
   }, [fetchStages]);
 
-  const createStage = async (stageData: { name: string; color: string; category: PipelineStage["category"] }) => {
+  const createStage = async (stageData: {
+    name: string;
+    color: string;
+    category: PipelineStage["category"];
+    pipeline_id?: string | null;
+    classifier_description?: string;
+    classifier_positive_signals?: string[];
+    classifier_negative_signals?: string[];
+    classifier_examples?: string[];
+  }) => {
     try {
       const maxPosition = stages.length > 0 ? Math.max(...stages.map((s) => s.position)) : -1;
 
       const acesId = await fetchCurrentAcesId();
       if (!acesId) throw new Error("Nao foi possivel encontrar a empresa do usuario logado.");
+      const targetPipelineId = stageData.pipeline_id ?? pipelineId;
+      if (!targetPipelineId) throw new Error("Selecione um pipeline antes de criar a etapa.");
 
       const { data, error } = await supabase
         .from("pipeline_stages")
@@ -116,7 +150,12 @@ export function usePipelineStages() {
           category: stageData.category,
           position: maxPosition + 1,
           aces_id: acesId,
+          pipeline_id: targetPipelineId,
           is_funnel_stage: false,
+          classifier_description: stageData.classifier_description?.trim() ?? "",
+          classifier_positive_signals: stageData.classifier_positive_signals ?? [],
+          classifier_negative_signals: stageData.classifier_negative_signals ?? [],
+          classifier_examples: stageData.classifier_examples ?? [],
         })
         .select()
         .single();
@@ -124,7 +163,9 @@ export function usePipelineStages() {
       if (error) throw error;
 
       if (data) {
-        setStages((prev) => [...prev, data].sort((a, b) => a.position - b.position));
+        setStages((prev) =>
+          [...prev, normalizeStage(data as Record<string, unknown>)].sort((a, b) => a.position - b.position)
+        );
       }
 
       notifyStagesUpdated();
@@ -149,7 +190,9 @@ export function usePipelineStages() {
       if (error) throw error;
 
       if (data) {
-        setStages((prev) => prev.map((stage) => (stage.id === id ? data : stage)));
+        setStages((prev) =>
+          prev.map((stage) => (stage.id === id ? normalizeStage(data as Record<string, unknown>) : stage))
+        );
       }
 
       notifyStagesUpdated();
@@ -264,7 +307,9 @@ export function usePipelineStages() {
       if (data) {
         setStages((previousStages) =>
           previousStages
-            .map((currentStage) => (currentStage.id === stageId ? data : currentStage))
+            .map((currentStage) =>
+              currentStage.id === stageId ? normalizeStage(data as Record<string, unknown>) : currentStage
+            )
             .sort((left, right) => left.position - right.position)
         );
       }

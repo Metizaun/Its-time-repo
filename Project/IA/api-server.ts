@@ -10,6 +10,7 @@ import {
 } from "./sdr-agent-gemini.js";
 import { assertRuntimeSchemaCompatibility } from "./schema-preflight.js";
 import { startAutomationWorker } from "./automation-worker.js";
+import { RbBillingWorker } from "./rb-billing-worker.js";
 import { MetaWebhookProcessor } from "./meta-webhook.js";
 import { MetaTemplateService } from "./meta-template-service.js";
 import { MetaAdminService } from "./meta-admin-service.js";
@@ -254,6 +255,13 @@ const metaTemplateService = new MetaTemplateService({
 const metaAdminService = new MetaAdminService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
+const rbBillingWorker = new RbBillingWorker({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  mockFixturePath: process.env.RB_BILLING_MOCK_FIXTURE_PATH,
+  pollMs: Number(process.env.RB_BILLING_WORKER_POLL_MS ?? 60000),
 });
 
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
@@ -657,6 +665,45 @@ app.get(
   })
 );
 
+app.get(
+  "/api/automation/media-assets",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const instanceName = asString(req.query.instanceName);
+    const assets = await manager.listAutomationMediaAssets(req.authContext!, instanceName);
+    res.json({ success: true, assets });
+  })
+);
+
+app.post(
+  "/api/automation/media-assets/upload-url",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const mediaKind = req.body.kind === "document" ? "document" : "image";
+    const result = await manager.createAutomationMediaUploadUrl(req.authContext!, {
+      instanceName: String(req.body.instanceName ?? ""),
+      fileName: String(req.body.fileName ?? ""),
+      mimeType: String(req.body.mimeType ?? ""),
+      fileSize: Number(req.body.fileSize ?? 0),
+      kind: mediaKind,
+    });
+
+    res.json(result);
+  })
+);
+
+app.post(
+  "/api/automation/media-assets/complete-upload",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.completeAutomationMediaUpload(
+      req.authContext!,
+      String(req.body.assetId ?? "")
+    );
+    res.json(result);
+  })
+);
+
 app.post(
   "/api/buscar-leads",
   authMiddleware,
@@ -936,6 +983,19 @@ app.put(
 );
 
 app.post(
+  "/api/chat/leads/:leadId/handoff/finalize",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const leadId = getSingleParam(req.params.leadId);
+    const result = await manager.finalizeHumanHandoff(req.authContext!, {
+      leadId,
+      stageId: String(req.body.stageId ?? ""),
+    });
+    res.json(result);
+  })
+);
+
+app.post(
   "/api/ai-agents/handoff/test",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -1100,6 +1160,8 @@ app.post(
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
           : undefined,
+      rbTokenApi:
+        typeof req.body.rbTokenApi === "string" ? req.body.rbTokenApi : undefined,
       unansweredFollowupEnabled:
         typeof req.body.unansweredFollowupEnabled === "boolean"
           ? req.body.unansweredFollowupEnabled
@@ -1243,6 +1305,8 @@ app.post("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRe
       typeof req.body.handoffTargetPhone === "string"
         ? req.body.handoffTargetPhone
         : undefined,
+    rbTokenApi:
+      typeof req.body.rbTokenApi === "string" ? req.body.rbTokenApi : undefined,
     unansweredFollowupEnabled:
       typeof req.body.unansweredFollowupEnabled === "boolean"
         ? req.body.unansweredFollowupEnabled
@@ -1331,6 +1395,27 @@ app.patch(
           : undefined,
     });
     res.json({ success: true, tool });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/rb_billing/bootstrap",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const mode = req.body.mode === "dr_oculos" ? "dr_oculos" : "generic";
+    const result = await manager.bootstrapRbBilling(req.authContext!, agentId, mode);
+    res.status(201).json({ success: true, ...result });
+  })
+);
+
+app.post(
+  "/api/agents/:id/tools/rb_billing/run-now",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const result = await rbBillingWorker.runNowForAgent(req.authContext!.acesId, agentId);
+    res.status(202).json({ success: true, result });
   })
 );
 
@@ -1585,6 +1670,10 @@ async function bootstrap() {
   if (process.env.AUTOMATION_WORKER_ENABLED === "true") {
     startAutomationWorker();
   }
+
+  if (process.env.RB_BILLING_WORKER_ENABLED === "true") {
+    rbBillingWorker.start();
+  }
 }
 
 bootstrap().catch(async (error) => {
@@ -1602,11 +1691,13 @@ bootstrap().catch(async (error) => {
 });
 
 process.on("SIGINT", async () => {
+  rbBillingWorker.stop();
   await manager.dispose();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
+  rbBillingWorker.stop();
   await manager.dispose();
   process.exit(0);
 });

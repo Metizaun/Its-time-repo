@@ -7,6 +7,7 @@ import {
   Route,
   ScanFace,
   ScanLine,
+  Wallet,
   Wrench,
 } from "lucide-react";
 
@@ -22,6 +23,7 @@ const TOOL_ICONS = {
   ai_audio: AudioLines,
   forwarding: Route,
   send_media: Files,
+  rb_billing: Wallet,
   prescription_analyst: ScanLine,
   visagism: ScanFace,
 } as const;

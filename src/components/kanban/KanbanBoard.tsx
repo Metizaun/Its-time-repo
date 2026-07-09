@@ -6,14 +6,15 @@ import { usePipelineStages } from "@/hooks/usePipelineStages";
 
 interface KanbanBoardProps {
   leads: Lead[];
+  pipelineId?: string | null;
   onLeadsChanged?: () => Promise<void> | void;
 }
 
 type DragType = "lead" | "column" | null;
 
-export function KanbanBoard({ leads, onLeadsChanged }: KanbanBoardProps) {
+export function KanbanBoard({ leads, pipelineId, onLeadsChanged }: KanbanBoardProps) {
   const { moveLeadToStage } = useLeadOperations();
-  const { stages, loading, reorderStages } = usePipelineStages();
+  const { stages, loading, reorderStages } = usePipelineStages(pipelineId);
   const [optimisticLeads, setOptimisticLeads] = useState<Lead[]>(leads);
   const [activeDragType, setActiveDragType] = useState<DragType>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);

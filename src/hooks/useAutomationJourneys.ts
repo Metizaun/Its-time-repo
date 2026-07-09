@@ -7,10 +7,14 @@ import {
   cloneRuleNode,
   normalizeRuleNode,
   type AutomationAnchorEvent,
+  type AutomationJourneyEntrySource,
   type AutomationJourney,
   type AutomationReentryMode,
   type AutomationRuleNode,
   type AutomationStep,
+  type AutomationStepContentMode,
+  type AutomationStepMediaKind,
+  type AutomationStepRbMessageKind,
 } from "@/lib/automation";
 
 const EMPTY_JOURNEYS: AutomationJourney[] = [];
@@ -25,6 +29,9 @@ export interface AutomationJourneyPayload {
   dispatch_limit_per_hour: number;
   humanized_dispatch_window_start: string;
   humanized_dispatch_window_end: string;
+  daily_dispatch_enabled: boolean;
+  daily_dispatch_time: string | null;
+  entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -36,7 +43,18 @@ export interface AutomationJourneyPayload {
 export interface AutomationStepPayload {
   label: string;
   delay_minutes: number;
-  message_template: string;
+  message_template: string | null;
+  content_mode: AutomationStepContentMode;
+  media_asset_id: string | null;
+  media_kind: AutomationStepMediaKind | null;
+  media_caption: string | null;
+  gupshup_template_id: string | null;
+  gupshup_template_name: string | null;
+  gupshup_template_language: string | null;
+  gupshup_template_params: string[];
+  rb_message_kind: AutomationStepRbMessageKind | null;
+  rb_days_offset: number | null;
+  rb_payment_type_ids: string[];
   is_active: boolean;
   step_rule: AutomationRuleNode | null;
 }
@@ -50,6 +68,9 @@ function normalizeJourney(row: Record<string, unknown>) {
     dispatch_limit_per_hour: Number(row.dispatch_limit_per_hour ?? 40),
     humanized_dispatch_window_start: String(row.humanized_dispatch_window_start ?? "08:00:00"),
     humanized_dispatch_window_end: String(row.humanized_dispatch_window_end ?? "19:00:00"),
+    daily_dispatch_enabled: Boolean(row.daily_dispatch_enabled),
+    daily_dispatch_time: typeof row.daily_dispatch_time === "string" ? row.daily_dispatch_time : null,
+    entry_source: row.entry_source === "rb" ? "rb" : "conditions",
     anchor_event: (row.anchor_event as AutomationAnchorEvent | null) ?? "stage_entered_at",
     reentry_mode: (row.reentry_mode as AutomationReentryMode | null) ?? "restart_on_match",
     reply_target_stage_id: (row.reply_target_stage_id as string | null) ?? null,
@@ -58,8 +79,37 @@ function normalizeJourney(row: Record<string, unknown>) {
 }
 
 function normalizeStep(row: Record<string, unknown>) {
+  const contentMode = row.content_mode === "media" ? "media" : "text";
+  const mediaKind = row.media_kind === "image" || row.media_kind === "document" ? row.media_kind : null;
+  const params = Array.isArray(row.gupshup_template_params)
+    ? row.gupshup_template_params.filter((item): item is string => typeof item === "string")
+    : [];
+  const rbPaymentTypeIds = Array.isArray(row.rb_payment_type_ids)
+    ? row.rb_payment_type_ids.filter((item): item is string => typeof item === "string")
+    : [];
+  const rbMessageKind =
+    row.rb_message_kind === "reminder" || row.rb_message_kind === "charge" ? row.rb_message_kind : null;
+
   return {
     ...(row as Omit<AutomationStep, "step_rule">),
+    message_template: typeof row.message_template === "string" ? row.message_template : null,
+    content_mode: contentMode,
+    media_asset_id: typeof row.media_asset_id === "string" ? row.media_asset_id : null,
+    media_kind: mediaKind,
+    media_caption: typeof row.media_caption === "string" ? row.media_caption : null,
+    gupshup_template_id: typeof row.gupshup_template_id === "string" ? row.gupshup_template_id : null,
+    gupshup_template_name: typeof row.gupshup_template_name === "string" ? row.gupshup_template_name : null,
+    gupshup_template_language:
+      typeof row.gupshup_template_language === "string" ? row.gupshup_template_language : "pt_BR",
+    gupshup_template_params: params,
+    rb_message_kind: rbMessageKind,
+    rb_days_offset:
+      row.rb_days_offset === null || row.rb_days_offset === undefined
+        ? null
+        : Number.isFinite(Number(row.rb_days_offset))
+          ? Number(row.rb_days_offset)
+          : null,
+    rb_payment_type_ids: rbPaymentTypeIds,
     step_rule: row.step_rule ? normalizeRuleNode(row.step_rule) : null,
   } as AutomationStep;
 }

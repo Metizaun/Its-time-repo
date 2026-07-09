@@ -33,6 +33,13 @@ export type AgentTool = AgentTemplateTool & {
   lastValidatedAt: string | null;
 };
 
+export type RbBillingBootstrapResponse = {
+  tool: AgentTool | null;
+  pipeline?: { id: string; name: string; description: string | null };
+  stages?: Array<{ id: string; name: string }>;
+  stageMapping?: Record<string, string>;
+};
+
 export type ToolMediaAsset = {
   id: string;
   asset_key: string;
@@ -183,5 +190,20 @@ export async function saveLensPriceRule(agentId: string, input: Omit<LensPriceRu
 export async function deactivateLensPriceRule(agentId: string, ruleId: string) {
   return deleteCrmBackend<{ success: boolean }>(
     `/api/agents/${encodeURIComponent(agentId)}/tools/prescription_analyst/lens-price-rules/${encodeURIComponent(ruleId)}`
+  );
+}
+
+export async function bootstrapRbBilling(agentId: string, mode: "dr_oculos" | "generic") {
+  const response = await postCrmBackend<RbBillingBootstrapResponse>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/rb_billing/bootstrap`,
+    { mode }
+  );
+  return response;
+}
+
+export async function runRbBillingNow(agentId: string) {
+  return postCrmBackend<{ success: boolean; result: unknown }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/rb_billing/run-now`,
+    {}
   );
 }

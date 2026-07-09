@@ -28,6 +28,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useAutomationMediaAssets } from "@/hooks/useAutomationMediaAssets";
 import { useAutomationMessageFlow } from "@/hooks/useAutomationMessageFlow";
 import type { Instance } from "@/hooks/useInstances";
 import type { Lead } from "@/hooks/useLeads";
@@ -48,13 +49,18 @@ import {
   type AutomationOwnerOption,
   type AutomationPreviewResult,
   type AutomationRecipeId,
+  type AutomationJourneyEntrySource,
   type AutomationRuleNode,
   type AutomationStep,
+  type AutomationStepContentMode,
+  type AutomationStepMediaKind,
+  type AutomationStepRbMessageKind,
   type AutomationTagOption,
   type AutomationTimeUnit,
 } from "@/lib/automation";
 import { cn } from "@/lib/utils";
 import type { AutomationJourneyPayload, AutomationStepPayload } from "@/hooks/useAutomationJourneys";
+import { uploadAutomationMediaAsset, type AutomationMediaAsset } from "@/services/automationMediaService";
 import type { PipelineStage } from "@/types";
 
 type StepTimingMode = "now" | "after";
@@ -65,6 +71,25 @@ const RECOMMENDED_HUMANIZED_DISPATCH_LIMIT_PER_HOUR = 60;
 const MIN_HUMANIZED_WINDOW_MINUTES = 30;
 const RECOMMENDED_HUMANIZED_WINDOW_MINUTES = 120;
 const LATE_HUMANIZED_WINDOW_END_MINUTES = 21 * 60;
+const RB_PAYMENT_TYPE_OPTIONS = [
+  { id: "1", label: "dinheiro" },
+  { id: "2", label: "cartao" },
+  { id: "3", label: "cheque" },
+  { id: "4", label: "movimento bancario" },
+  { id: "5", label: "credito financeiro" },
+  { id: "6", label: "carne" },
+  { id: "7", label: "pix" },
+] as const;
+const DR_OCULOS_RB_PAYMENT_TYPE_ID = "6";
+
+const RB_MESSAGE_VARIABLES = [
+  { token: "{nome}", label: "Nome do lead", description: "Nome usado nas saudacoes da mensagem." },
+  { token: "{vencimento}", label: "Vencimento", description: "Data de vencimento do titulo." },
+  { token: "{pix}", label: "Pix", description: "Chave Pix configurada para a empresa." },
+  { token: "{DtVencimento}", label: "DtVencimento", description: "Campo legado de vencimento do RB." },
+  { token: "{Vl_liquido}", label: "Vl_liquido", description: "Valor liquido legado exibido no RB." },
+  { token: "{valor_liquido}", label: "valor_liquido", description: "Valor liquido atualizado do titulo." },
+] as const;
 
 type JourneyFormState = {
   id: string | null;
@@ -76,6 +101,9 @@ type JourneyFormState = {
   dispatch_limit_per_hour: number;
   humanized_dispatch_window_start: string;
   humanized_dispatch_window_end: string;
+  daily_dispatch_enabled: boolean;
+  daily_dispatch_time: string;
+  entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: "stage_entered_at" | "last_outbound" | "last_inbound";
@@ -90,7 +118,18 @@ type StepFormState = {
   timing_mode: StepTimingMode;
   delay_value: string;
   delay_unit: AutomationTimeUnit;
+  content_mode: AutomationStepContentMode;
   message_template: string;
+  media_asset_id: string;
+  media_kind: AutomationStepMediaKind;
+  media_caption: string;
+  gupshup_template_id: string;
+  gupshup_template_name: string;
+  gupshup_template_language: string;
+  gupshup_template_params_text: string;
+  rb_message_kind: AutomationStepRbMessageKind;
+  rb_days_offset: string;
+  rb_payment_type_ids: string[];
   is_active: boolean;
   step_rule: AutomationRuleNode;
   step_rule_enabled: boolean;
@@ -122,11 +161,60 @@ function createInitialStepForm(recipeId?: AutomationRecipeId | null): StepFormSt
     timing_mode: (recipe?.suggested_step.delay_minutes ?? 60) === 0 ? "now" : "after",
     delay_value: String(defaultDelay.value),
     delay_unit: defaultDelay.unit,
+    content_mode: "text",
     message_template: recipe?.suggested_step.message_template ?? "",
+    media_asset_id: "",
+    media_kind: "image",
+    media_caption: "",
+    gupshup_template_id: "",
+    gupshup_template_name: "",
+    gupshup_template_language: "pt_BR",
+    gupshup_template_params_text: "",
+    rb_message_kind: "reminder",
+    rb_days_offset: "2",
+    rb_payment_type_ids: [],
     is_active: true,
     step_rule: createRuleGroup("all", []),
     step_rule_enabled: false,
   };
+}
+
+function parseTemplateParams(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatTemplateParams(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join("\n") : "";
+}
+
+function buildRbStepLabel(stepForm: StepFormState) {
+  const daysOffset = Math.max(0, Number(stepForm.rb_days_offset || 0));
+
+  if (stepForm.rb_message_kind === "reminder") {
+    return daysOffset === 0 ? "Vence hoje" : `A vencer (${daysOffset} dias)`;
+  }
+
+  return `Atrasado (${daysOffset} dias)`;
+}
+
+function normalizeInstanceName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .toLowerCase();
+}
+
+function isDrOculosInstance(instanceName: string) {
+  const normalized = normalizeInstanceName(instanceName);
+  return normalized.includes("droculos");
+}
+
+function getSingleRbPaymentTypeId(selectedIds: string[]) {
+  return selectedIds[0] ?? "";
 }
 
 function findAtendimentoStageId(stages: PipelineStage[]) {
@@ -222,6 +310,18 @@ function getHumanizedDispatchQuality(form: JourneyFormState) {
   return { error: null, warnings };
 }
 
+function getDailyDispatchQuality(form: JourneyFormState) {
+  if (form.entry_source !== "rb" || !form.daily_dispatch_enabled) {
+    return { error: null };
+  }
+
+  if (hhmmToMinutes(form.daily_dispatch_time) === null) {
+    return { error: "Informe um horario valido para o disparo diario" };
+  }
+
+  return { error: null };
+}
+
 function getErrorDescription(error: unknown) {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -257,6 +357,9 @@ function buildInitialJourneyForm(params: {
       dispatch_limit_per_hour: 40,
       humanized_dispatch_window_start: "08:00",
       humanized_dispatch_window_end: "19:00",
+      daily_dispatch_enabled: false,
+      daily_dispatch_time: "08:00",
+      entry_source: "conditions",
       entry_rule: createDefaultEntryRule(defaultStageId, params.preselectedInstanceName),
       exit_rule: createDefaultExitRule(),
       anchor_event: "stage_entered_at",
@@ -276,6 +379,9 @@ function buildInitialJourneyForm(params: {
     dispatch_limit_per_hour: params.journey.dispatch_limit_per_hour || 40,
     humanized_dispatch_window_start: toHHMM(params.journey.humanized_dispatch_window_start, "08:00"),
     humanized_dispatch_window_end: toHHMM(params.journey.humanized_dispatch_window_end, "19:00"),
+    daily_dispatch_enabled: params.journey.daily_dispatch_enabled ?? false,
+    daily_dispatch_time: toHHMM(params.journey.daily_dispatch_time, "08:00"),
+    entry_source: params.journey.entry_source ?? "conditions",
     entry_rule: updateDefaultEntryRuleInstance(
       normalizeRuleNode(
         params.journey.entry_rule,
@@ -291,9 +397,17 @@ function buildInitialJourneyForm(params: {
   };
 }
 
-function buildStepLabel(stepForm: StepFormState, anchorEvent: JourneyFormState["anchor_event"]) {
+function buildStepLabel(
+  stepForm: StepFormState,
+  anchorEvent: JourneyFormState["anchor_event"],
+  entrySource: AutomationJourneyEntrySource,
+) {
   if (stepForm.label.trim()) {
     return stepForm.label.trim();
+  }
+
+  if (entrySource === "rb") {
+    return buildRbStepLabel(stepForm);
   }
 
   if (stepForm.timing_mode === "now") {
@@ -309,15 +423,120 @@ function buildStepLabel(stepForm: StepFormState, anchorEvent: JourneyFormState["
 function buildStepPayload(
   stepForm: StepFormState,
   anchorEvent: JourneyFormState["anchor_event"],
+  entrySource: AutomationJourneyEntrySource,
   delayMinutes: number,
 ): AutomationStepPayload {
+  const isMedia = stepForm.content_mode === "media";
+  const isRbJourney = entrySource === "rb";
+
   return {
-    label: buildStepLabel(stepForm, anchorEvent),
+    label: buildStepLabel(stepForm, anchorEvent, entrySource),
     delay_minutes: delayMinutes,
-    message_template: stepForm.message_template.trim(),
+    content_mode: stepForm.content_mode,
+    message_template: isMedia ? null : stepForm.message_template.trim(),
+    media_asset_id: isMedia ? stepForm.media_asset_id : null,
+    media_kind: isMedia ? stepForm.media_kind : null,
+    media_caption: isMedia ? stepForm.media_caption.trim() || null : null,
+    gupshup_template_id: stepForm.gupshup_template_id.trim() || null,
+    gupshup_template_name: stepForm.gupshup_template_name.trim() || null,
+    gupshup_template_language: stepForm.gupshup_template_language.trim() || "pt_BR",
+    gupshup_template_params: parseTemplateParams(stepForm.gupshup_template_params_text),
+    rb_message_kind: isRbJourney ? stepForm.rb_message_kind : null,
+    rb_days_offset: isRbJourney ? Math.max(0, Number(stepForm.rb_days_offset || 0)) : null,
+    rb_payment_type_ids: isRbJourney ? stepForm.rb_payment_type_ids : [],
     is_active: stepForm.is_active,
     step_rule: stepForm.step_rule_enabled ? normalizeRuleNode(stepForm.step_rule, createRuleGroup("all", [])) : null,
   };
+}
+
+function hasStepContent(stepForm: StepFormState) {
+  if (stepForm.content_mode === "media") {
+    return stepForm.media_asset_id.trim().length > 0;
+  }
+
+  return stepForm.message_template.trim().length > 0;
+}
+
+function getStepFormPreview(stepForm: StepFormState) {
+  if (stepForm.content_mode === "media") {
+    return stepForm.media_caption.trim()
+      ? getMessagePreview(stepForm.media_caption, 120)
+      : stepForm.media_kind === "image"
+        ? "Imagem cadastrada para disparo automatico."
+        : "PDF cadastrado para disparo automatico.";
+  }
+
+  return stepForm.message_template.trim()
+    ? getMessagePreview(stepForm.message_template, 120)
+    : "Clique para escrever a primeira mensagem.";
+}
+
+function getAutomationStepPreview(step: AutomationStep) {
+  if (step.content_mode === "media") {
+    return step.media_caption?.trim()
+      ? getMessagePreview(step.media_caption, 120)
+      : step.media_kind === "image"
+        ? "Imagem cadastrada para disparo automatico."
+        : "PDF cadastrado para disparo automatico.";
+  }
+
+  return getMessagePreview(step.message_template ?? "", 120);
+}
+
+function inferMediaKindFromFile(file: File) {
+  const mimeType = file.type.trim().toLowerCase();
+  if (mimeType === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    return "document" as const;
+  }
+
+  if (mimeType.startsWith("image/")) {
+    return "image" as const;
+  }
+
+  return null;
+}
+
+function getStepContentError(
+  stepForm: StepFormState,
+  instanceName: string,
+  pendingMediaFile: File | null,
+  entrySource: AutomationJourneyEntrySource,
+) {
+  if (stepForm.content_mode === "text") {
+    if (!stepForm.message_template.trim()) {
+      return "Escreva a mensagem automatica";
+    }
+  }
+
+  if (!stepForm.media_asset_id.trim() && !pendingMediaFile) {
+    if (stepForm.content_mode === "media") {
+      return "Selecione a imagem ou PDF da automacao";
+    }
+  }
+
+  const effectiveMediaKind = pendingMediaFile ? inferMediaKindFromFile(pendingMediaFile) : stepForm.media_kind;
+  if (stepForm.content_mode === "media" && effectiveMediaKind !== "image" && effectiveMediaKind !== "document") {
+    return "Use apenas imagem ou PDF nesta primeira versao";
+  }
+
+  const isLikelyGupshup = instanceName.trim().toLowerCase().includes("gupshup");
+  const requiresTemplate = isLikelyGupshup && (stepForm.content_mode === "media" || entrySource === "rb");
+  if (requiresTemplate && !stepForm.gupshup_template_id.trim() && !stepForm.gupshup_template_name.trim()) {
+    return "Informe o template Gupshup aprovado para este disparo";
+  }
+
+  if (entrySource === "rb") {
+    if (!stepForm.rb_payment_type_ids.length) {
+      return "Selecione ao menos um tipo de pagamento para a mensagem RB";
+    }
+
+    const rbDaysOffset = Number(stepForm.rb_days_offset || 0);
+    if (!Number.isFinite(rbDaysOffset) || rbDaysOffset < 0) {
+      return "Informe um numero de dias valido para a mensagem RB";
+    }
+  }
+
+  return null;
 }
 
 function AutomationMessageStepCard({
@@ -390,6 +609,7 @@ function AutomationMessageEditorDialog({
   stepForm,
   currentStepDelayMinutes,
   journeyAnchorEvent,
+  entrySource,
   journeySaved,
   savingStep,
   onStepFormChange,
@@ -400,12 +620,18 @@ function AutomationMessageEditorDialog({
   tags,
   instances,
   leadSources,
+  instanceName,
+  mediaAssets,
+  mediaAssetsLoading,
+  pendingMediaFile,
+  onPendingMediaFileChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   stepForm: StepFormState;
   currentStepDelayMinutes: number;
   journeyAnchorEvent: JourneyFormState["anchor_event"];
+  entrySource: AutomationJourneyEntrySource;
   journeySaved: boolean;
   savingStep: boolean;
   onStepFormChange: (updater: (previous: StepFormState) => StepFormState) => void;
@@ -416,7 +642,19 @@ function AutomationMessageEditorDialog({
   tags: AutomationTagOption[];
   instances: Instance[];
   leadSources: AutomationLeadSourceOption[];
+  instanceName: string;
+  mediaAssets: AutomationMediaAsset[];
+  mediaAssetsLoading: boolean;
+  pendingMediaFile: File | null;
+  onPendingMediaFileChange: (file: File | null) => void;
 }) {
+  const selectedMediaAsset = useMemo(
+    () => mediaAssets.find((asset) => asset.id === stepForm.media_asset_id) ?? null,
+    [mediaAssets, stepForm.media_asset_id],
+  );
+  const isRbJourney = entrySource === "rb";
+  const shouldShowGupshupTemplateFields = isRbJourney || stepForm.content_mode === "media";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100vh-3rem)] max-w-3xl overflow-y-auto rounded-3xl border-[var(--border-default)] bg-[var(--color-surface-1)] p-0 text-[var(--color-gray-900)]">
@@ -502,21 +740,271 @@ function AutomationMessageEditorDialog({
             )}
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="step-message" className="text-[var(--color-gray-600)]">
-              Mensagem
-            </Label>
-            <Textarea
-              id="step-message"
-              rows={8}
-              value={stepForm.message_template}
-              onChange={(event) =>
-                onStepFormChange((previous) => ({ ...previous, message_template: event.target.value }))
-              }
-              placeholder="Oi {nome}, sigo por aqui para continuar o atendimento."
-              className="min-h-[210px] resize-none border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)] placeholder:text-[var(--color-gray-500)]"
-            />
-          </div>
+          <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+              <div className="space-y-2">
+                <Label className="text-[var(--color-gray-600)]">Tipo de disparo</Label>
+                <Select
+                  value={stepForm.content_mode}
+                  onValueChange={(value: AutomationStepContentMode) =>
+                    onStepFormChange((previous) => ({ ...previous, content_mode: value }))
+                  }
+                >
+                  <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="text">Texto</SelectItem>
+                    <SelectItem value="media">Midia: imagem ou PDF</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-3 text-sm text-[var(--color-gray-600)]">
+                {stepForm.content_mode === "media"
+                  ? "Envie uma imagem ou PDF direto do seu computador. O arquivo fica disponivel para esta instancia e tambem pode ser reutilizado em outras mensagens da automacao."
+                  : "Mensagem de texto tradicional com variaveis como {nome}, {telefone}, {cidade} e {status}."}
+              </div>
+            </div>
+
+          {stepForm.content_mode === "text" || isRbJourney ? (
+            isRbJourney ? (
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="space-y-2">
+                  <Label htmlFor="step-message" className="text-[var(--color-gray-600)]">
+                    Mensagem
+                  </Label>
+                  <Textarea
+                    id="step-message"
+                    rows={8}
+                    value={stepForm.message_template}
+                    onChange={(event) =>
+                      onStepFormChange((previous) => ({ ...previous, message_template: event.target.value }))
+                    }
+                    placeholder="Oi {nome}, sigo por aqui para continuar o atendimento."
+                    className="min-h-[210px] resize-none border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)] placeholder:text-[var(--color-gray-500)]"
+                  />
+                  <p className="text-xs text-[var(--color-gray-500)]">
+                    Use os campos mapeados ao lado para montar a mensagem sem risco de variar nomes de variaveis.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--color-gray-900)]">Variaveis disponiveis</p>
+                      <p className="mt-1 text-xs text-[var(--color-gray-600)]">
+                        Mapeamento visual dos campos aceitos nesta jornada. Ainda nao ha arrastar e soltar.
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="border-[var(--border-default)] bg-[var(--color-surface-1)]">
+                      Mapeado
+                    </Badge>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    {RB_MESSAGE_VARIABLES.map((variable) => (
+                      <div
+                        key={variable.token}
+                        className="rounded-xl border border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <code className="text-xs font-semibold text-[var(--color-primary-700)]">
+                            {variable.token}
+                          </code>
+                          <span className="text-[11px] font-medium text-[var(--color-gray-500)]">
+                            {variable.label}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-[var(--color-gray-600)]">{variable.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="step-message" className="text-[var(--color-gray-600)]">
+                  Mensagem
+                </Label>
+                <Textarea
+                  id="step-message"
+                  rows={8}
+                  value={stepForm.message_template}
+                  onChange={(event) =>
+                    onStepFormChange((previous) => ({ ...previous, message_template: event.target.value }))
+                  }
+                  placeholder="Oi {nome}, sigo por aqui para continuar o atendimento."
+                  className="min-h-[210px] resize-none border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)] placeholder:text-[var(--color-gray-500)]"
+                />
+              </div>
+            )
+          ) : (
+            <div className="space-y-5 rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-1)] p-4">
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
+                <div className="space-y-2">
+                  <Label htmlFor="automation-media-file" className="text-[var(--color-gray-600)]">
+                    Arquivo do computador
+                  </Label>
+                  <Input
+                    id="automation-media-file"
+                    type="file"
+                    accept="image/*,application/pdf"
+                    disabled={!instanceName.trim()}
+                    onChange={(event) => {
+                      const nextFile = event.target.files?.[0] ?? null;
+                      onPendingMediaFileChange(nextFile);
+
+                      if (!nextFile) {
+                        return;
+                      }
+
+                      const inferredKind = inferMediaKindFromFile(nextFile);
+                      onStepFormChange((previous) => ({
+                        ...previous,
+                        media_asset_id: "",
+                        media_kind: inferredKind ?? previous.media_kind,
+                      }));
+                    }}
+                    className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)] file:mr-4 file:rounded-md file:border-0 file:bg-[var(--color-primary-50)] file:px-3 file:py-2 file:text-sm file:font-medium file:text-[var(--color-primary-700)]"
+                  />
+                  {pendingMediaFile ? (
+                    <div className="rounded-xl border border-[var(--color-primary-200)] bg-[var(--color-primary-50)] px-3 py-2 text-xs text-[var(--color-primary-700)]">
+                      {pendingMediaFile.name} - {stepForm.media_kind === "document" ? "PDF" : "Imagem"}
+                    </div>
+                  ) : null}
+                  {!instanceName.trim() ? (
+                    <p className="text-xs text-amber-600">
+                      Selecione a instancia da jornada antes de enviar a midia.
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-[var(--color-gray-600)]">Tipo</Label>
+                  <Input
+                    value={stepForm.media_kind === "document" ? "PDF" : "Imagem"}
+                    disabled
+                    className="border-[var(--border-input)] bg-[var(--color-surface-2)] text-[var(--color-gray-700)]"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-[var(--color-gray-600)]">Ou reutilize um arquivo desta instancia</Label>
+                <Select
+                  value={stepForm.media_asset_id}
+                  disabled={!instanceName.trim() || mediaAssetsLoading || mediaAssets.length === 0}
+                  onValueChange={(value) => {
+                    const asset = mediaAssets.find((item) => item.id === value);
+                    onPendingMediaFileChange(null);
+                    onStepFormChange((previous) => ({
+                      ...previous,
+                      media_asset_id: value,
+                      media_kind: asset?.media_kind ?? previous.media_kind,
+                      media_caption: previous.media_caption || asset?.default_caption || "",
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                    <SelectValue placeholder={mediaAssetsLoading ? "Carregando arquivos..." : "Selecione imagem ou PDF ja enviado"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {mediaAssets.map((asset) => (
+                      <SelectItem key={asset.id} value={asset.id}>
+                        {asset.media_kind === "image" ? "Imagem" : "PDF"} - {asset.display_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedMediaAsset ? (
+                  <p className="text-xs text-[var(--color-gray-500)]">
+                    Arquivo salvo para a instancia {selectedMediaAsset.instance_name}
+                  </p>
+                ) : mediaAssets.length === 0 && !mediaAssetsLoading && instanceName.trim() ? (
+                  <p className="text-xs text-[var(--color-gray-500)]">
+                    Nenhum arquivo reutilizavel foi enviado ainda para esta instancia.
+                  </p>
+                ) : null}
+                {pendingMediaFile ? (
+                  <p className="text-xs text-[var(--color-primary-700)]">
+                    O arquivo do computador sera usado ao salvar esta mensagem.
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="media-caption" className="text-[var(--color-gray-600)]">
+                  Legenda opcional
+                </Label>
+                <Textarea
+                  id="media-caption"
+                  rows={4}
+                  value={stepForm.media_caption}
+                  onChange={(event) =>
+                    onStepFormChange((previous) => ({ ...previous, media_caption: event.target.value }))
+                  }
+                  placeholder="Oi {nome}, segue o material combinado."
+                  className="min-h-[120px] resize-none border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)] placeholder:text-[var(--color-gray-500)]"
+                />
+              </div>
+
+            </div>
+          )}
+
+          {shouldShowGupshupTemplateFields ? (
+            <div className="space-y-4 rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-1)] p-4">
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_170px]">
+                <div className="space-y-2">
+                  <Label htmlFor="gupshup-template" className="text-[var(--color-gray-600)]">
+                    Template Gupshup aprovado
+                  </Label>
+                  <Input
+                    id="gupshup-template"
+                    value={stepForm.gupshup_template_id}
+                    onChange={(event) =>
+                      onStepFormChange((previous) => ({ ...previous, gupshup_template_id: event.target.value }))
+                    }
+                    placeholder="ID ou element name do template"
+                    className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="gupshup-language" className="text-[var(--color-gray-600)]">
+                    Idioma
+                  </Label>
+                  <Input
+                    id="gupshup-language"
+                    value={stepForm.gupshup_template_language}
+                    onChange={(event) =>
+                      onStepFormChange((previous) => ({ ...previous, gupshup_template_language: event.target.value }))
+                    }
+                    placeholder="pt_BR"
+                    className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="gupshup-params" className="text-[var(--color-gray-600)]">
+                  Parametros do template, um por linha
+                </Label>
+                <Textarea
+                  id="gupshup-params"
+                  rows={3}
+                  value={stepForm.gupshup_template_params_text}
+                  onChange={(event) =>
+                    onStepFormChange((previous) => ({
+                      ...previous,
+                      gupshup_template_params_text: event.target.value,
+                    }))
+                  }
+                  placeholder="{nome}"
+                  className="resize-none border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)] placeholder:text-[var(--color-gray-500)]"
+                />
+              </div>
+            </div>
+          ) : null}
 
           <div className="border-t border-[var(--border-default)]">
             <div className="flex items-center justify-between gap-4 py-4">
@@ -622,6 +1110,7 @@ interface AutomationMessageModalProps {
   createStep: (journeyId: string, payload: AutomationStepPayload) => Promise<AutomationStep>;
   updateStep: (stepId: string, journeyId: string, payload: AutomationStepPayload) => Promise<unknown>;
   deleteStep: (stepId: string, journeyId: string) => Promise<unknown>;
+  rbEnabledInstanceNames: string[];
   showDebugTools?: boolean;
 }
 
@@ -650,6 +1139,7 @@ export function AutomationMessageModal({
   createStep,
   updateStep,
   deleteStep,
+  rbEnabledInstanceNames,
   showDebugTools = false,
 }: AutomationMessageModalProps) {
   const [journeyForm, setJourneyForm] = useState<JourneyFormState>(() =>
@@ -669,6 +1159,7 @@ export function AutomationMessageModal({
   const [stepEditorOpen, setStepEditorOpen] = useState(false);
   const [selectedPreviewLeadId, setSelectedPreviewLeadId] = useState("");
   const [activeTab, setActiveTab] = useState("entry");
+  const [pendingMediaFile, setPendingMediaFile] = useState<File | null>(null);
 
   const orderedSteps = useMemo(() => sortStepsForDisplay(steps), [steps]);
   const atendimentoStageId = useMemo(() => findAtendimentoStageId(stages), [stages]);
@@ -693,6 +1184,25 @@ export function AutomationMessageModal({
       journeyForm.humanized_dispatch_window_start,
     ],
   );
+  const dailyDispatchQuality = useMemo(
+    () => getDailyDispatchQuality(journeyForm),
+    [journeyForm.daily_dispatch_enabled, journeyForm.daily_dispatch_time],
+  );
+  const rbEntryAvailable = useMemo(
+    () =>
+      journeyForm.instance_name.trim().length > 0 &&
+      rbEnabledInstanceNames.includes(journeyForm.instance_name),
+    [journeyForm.instance_name, rbEnabledInstanceNames],
+  );
+  const drOculosRbLocked = useMemo(
+    () => journeyForm.entry_source === "rb" && isDrOculosInstance(journeyForm.instance_name),
+    [journeyForm.entry_source, journeyForm.instance_name],
+  );
+  const {
+    assets: mediaAssets,
+    loading: mediaAssetsLoading,
+    refetch: refetchMediaAssets,
+  } = useAutomationMediaAssets(journeyForm.instance_name || null, open && Boolean(journeyForm.instance_name));
 
   useEffect(() => {
     if (!open) {
@@ -712,6 +1222,7 @@ export function AutomationMessageModal({
     setSelectedRecipeId(nextRecipeId);
     setStepForm(createInitialStepForm(nextRecipeId));
     setStepEditorOpen(false);
+    setPendingMediaFile(null);
     setActiveTab("entry");
   }, [journey, open, preselectedInstanceName, preselectedStageId, stages]);
 
@@ -727,6 +1238,70 @@ export function AutomationMessageModal({
       setSelectedPreviewLeadId(previewLeads[0].id);
     }
   }, [previewLeads, selectedPreviewLeadId]);
+
+  useEffect(() => {
+    if (!journeyForm.id && journeyForm.entry_source === "rb" && !rbEntryAvailable) {
+      setJourneyForm((previous) => ({ ...previous, entry_source: "conditions" }));
+    }
+  }, [journeyForm.entry_source, journeyForm.id, rbEntryAvailable]);
+
+  useEffect(() => {
+    if (journeyForm.entry_source !== "rb") {
+      return;
+    }
+
+    setStepForm((previous) => ({
+      ...previous,
+      content_mode: "text",
+    }));
+  }, [journeyForm.entry_source]);
+
+  useEffect(() => {
+    if (!drOculosRbLocked) {
+      return;
+    }
+
+    setStepForm((previous) => {
+      if (
+        previous.rb_payment_type_ids.length === 1 &&
+        previous.rb_payment_type_ids[0] === DR_OCULOS_RB_PAYMENT_TYPE_ID
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        rb_payment_type_ids: [DR_OCULOS_RB_PAYMENT_TYPE_ID],
+        content_mode: "text",
+      };
+    });
+  }, [drOculosRbLocked]);
+
+  const uploadPendingMediaIfNeeded = async () => {
+    if (stepForm.content_mode !== "media" || !pendingMediaFile) {
+      return stepForm.media_asset_id;
+    }
+
+    if (!journeyForm.instance_name.trim()) {
+      throw new Error("Selecione a instancia da automacao antes de enviar a midia");
+    }
+
+    const uploadedAsset = await uploadAutomationMediaAsset({
+      instanceName: journeyForm.instance_name,
+      file: pendingMediaFile,
+    });
+
+    await refetchMediaAssets();
+    setPendingMediaFile(null);
+    setStepForm((previous) => ({
+      ...previous,
+      media_asset_id: uploadedAsset.id,
+      media_kind: uploadedAsset.media_kind,
+      media_caption: previous.media_caption || uploadedAsset.default_caption || "",
+    }));
+
+    return uploadedAsset.id;
+  };
 
   const handleJourneyFieldChange = <K extends keyof JourneyFormState>(field: K, value: JourneyFormState[K]) => {
     setJourneyForm((previous) => {
@@ -773,6 +1348,11 @@ export function AutomationMessageModal({
       return;
     }
 
+    if (dailyDispatchQuality.error) {
+      toast.error(dailyDispatchQuality.error);
+      return;
+    }
+
     try {
       setSavingJourney(true);
       const dispatchLimitPerHour =
@@ -790,8 +1370,15 @@ export function AutomationMessageModal({
         dispatch_limit_per_hour: dispatchLimitPerHour,
         humanized_dispatch_window_start: normalizeTimeForDb(journeyForm.humanized_dispatch_window_start),
         humanized_dispatch_window_end: normalizeTimeForDb(journeyForm.humanized_dispatch_window_end),
+        daily_dispatch_enabled: journeyForm.entry_source === "rb" && journeyForm.daily_dispatch_enabled,
+        daily_dispatch_time: journeyForm.entry_source === "rb" && journeyForm.daily_dispatch_enabled
+          ? normalizeTimeForDb(journeyForm.daily_dispatch_time)
+          : null,
+        entry_source: journeyForm.entry_source,
         entry_rule: normalizeRuleNode(
-          updateDefaultEntryRuleInstance(journeyForm.entry_rule, journeyForm.instance_name),
+          journeyForm.entry_source === "rb"
+            ? createDefaultEntryRule(journeyForm.trigger_stage_id, journeyForm.instance_name)
+            : updateDefaultEntryRuleInstance(journeyForm.entry_rule, journeyForm.instance_name),
           createDefaultEntryRule(journeyForm.trigger_stage_id, journeyForm.instance_name),
         ),
         exit_rule: normalizeRuleNode(journeyForm.exit_rule, createDefaultExitRule()),
@@ -803,10 +1390,21 @@ export function AutomationMessageModal({
 
       const isCreatingJourney = !journeyForm.id;
       const shouldCreateInitialStep =
-        isCreatingJourney && !stepForm.id && stepForm.message_template.trim().length > 0;
+        isCreatingJourney &&
+        !stepForm.id &&
+        (hasStepContent(stepForm) || (stepForm.content_mode === "media" && pendingMediaFile !== null));
 
       if (isCreatingJourney && journeyForm.is_active && !shouldCreateInitialStep) {
-        toast.error("Escreva a primeira mensagem antes de ativar a automacao");
+        toast.error("Crie a primeira mensagem antes de ativar a automacao");
+        setActiveTab("messages");
+        return;
+      }
+
+      const initialStepError = shouldCreateInitialStep
+        ? getStepContentError(stepForm, journeyForm.instance_name, pendingMediaFile, journeyForm.entry_source)
+        : null;
+      if (initialStepError) {
+        toast.error(initialStepError);
         setActiveTab("messages");
         return;
       }
@@ -817,9 +1415,19 @@ export function AutomationMessageModal({
         return;
       }
 
-      const initialStepPayload = shouldCreateInitialStep
-        ? buildStepPayload(stepForm, journeyForm.anchor_event, currentStepDelayMinutes)
-        : null;
+      let initialStepPayload: AutomationStepPayload | null = null;
+      if (shouldCreateInitialStep) {
+        const resolvedMediaAssetId = await uploadPendingMediaIfNeeded();
+        initialStepPayload = buildStepPayload(
+          {
+            ...stepForm,
+            media_asset_id: resolvedMediaAssetId || stepForm.media_asset_id,
+          },
+          journeyForm.anchor_event,
+          journeyForm.entry_source,
+          currentStepDelayMinutes,
+        );
+      }
 
       const savedJourney = journeyForm.id
         ? await updateJourney(journeyForm.id, payload)
@@ -868,8 +1476,14 @@ export function AutomationMessageModal({
   const handleSaveStep = async () => {
     const currentJourneyId = journeyForm.id || journey?.id || null;
 
-    if (!stepForm.message_template.trim()) {
-      toast.error("Escreva a mensagem automatica");
+    const stepContentError = getStepContentError(
+      stepForm,
+      journeyForm.instance_name,
+      pendingMediaFile,
+      journeyForm.entry_source,
+    );
+    if (stepContentError) {
+      toast.error(stepContentError);
       return;
     }
 
@@ -886,7 +1500,16 @@ export function AutomationMessageModal({
         return;
       }
 
-      const payload = buildStepPayload(stepForm, journeyForm.anchor_event, currentStepDelayMinutes);
+      const resolvedMediaAssetId = await uploadPendingMediaIfNeeded();
+      const payload = buildStepPayload(
+        {
+          ...stepForm,
+          media_asset_id: resolvedMediaAssetId || stepForm.media_asset_id,
+        },
+        journeyForm.anchor_event,
+        journeyForm.entry_source,
+        currentStepDelayMinutes,
+      );
 
       if (stepForm.id) {
         await updateStep(stepForm.id, currentJourneyId, payload);
@@ -895,6 +1518,7 @@ export function AutomationMessageModal({
       }
 
       setStepForm(createInitialStepForm(selectedRecipeId));
+      setPendingMediaFile(null);
       setStepEditorOpen(false);
     } catch (error: unknown) {
       toast.error("Erro ao salvar mensagem", { description: getErrorDescription(error) });
@@ -906,6 +1530,7 @@ export function AutomationMessageModal({
   const openNewStepEditor = () => {
     setActiveTab("messages");
     setStepForm(createInitialStepForm(selectedRecipeId));
+    setPendingMediaFile(null);
     setStepEditorOpen(true);
   };
 
@@ -913,13 +1538,25 @@ export function AutomationMessageModal({
     const delay = minutesToTimeUnit(step.delay_minutes === 0 ? 60 : step.delay_minutes);
 
     setActiveTab("messages");
+    setPendingMediaFile(null);
     setStepForm({
       id: step.id,
       label: step.label,
       timing_mode: step.delay_minutes === 0 ? "now" : "after",
       delay_value: String(delay.value),
       delay_unit: delay.unit,
-      message_template: step.message_template,
+      content_mode: step.content_mode ?? "text",
+      message_template: step.message_template ?? "",
+      media_asset_id: step.media_asset_id ?? "",
+      media_kind: step.media_kind ?? "image",
+      media_caption: step.media_caption ?? "",
+      gupshup_template_id: step.gupshup_template_id ?? "",
+      gupshup_template_name: step.gupshup_template_name ?? "",
+      gupshup_template_language: step.gupshup_template_language ?? "pt_BR",
+      gupshup_template_params_text: formatTemplateParams(step.gupshup_template_params),
+      rb_message_kind: step.rb_message_kind ?? "reminder",
+      rb_days_offset: String(step.rb_days_offset ?? 2),
+      rb_payment_type_ids: step.rb_payment_type_ids ?? [],
       is_active: step.is_active,
       step_rule: step.step_rule ? normalizeRuleNode(step.step_rule) : createRuleGroup("all", []),
       step_rule_enabled: !!step.step_rule,
@@ -929,6 +1566,7 @@ export function AutomationMessageModal({
 
   const handleCancelStepEdit = () => {
     setStepForm(createInitialStepForm(selectedRecipeId));
+    setPendingMediaFile(null);
     setStepEditorOpen(false);
   };
 
@@ -947,6 +1585,7 @@ export function AutomationMessageModal({
       await deleteStep(step.id, currentJourneyId);
       if (stepForm.id === step.id) {
         setStepForm(createInitialStepForm(selectedRecipeId));
+        setPendingMediaFile(null);
         setStepEditorOpen(false);
       }
     } catch (error: unknown) {
@@ -1091,16 +1730,148 @@ export function AutomationMessageModal({
                 </TabsList>
 
                 <TabsContent value="entry" className="space-y-6">
-                  <AutomationConditionComposer
-                    title="Quando essa jornada deve entrar"
-                    value={journeyForm.entry_rule}
-                    onChange={(nextValue) => handleJourneyFieldChange("entry_rule", nextValue)}
-                    stages={stages}
-                    tags={tags}
-                    leadSources={leadSources}
-                    instances={instances}
-                    compact
-                  />
+                  <div className="space-y-4 rounded-[24px] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-5">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-[var(--color-gray-900)]">
+                          Quando essa jornada deve entrar
+                        </h3>
+                        <p className="mt-1 text-sm text-[var(--color-gray-600)]">
+                          Escolha como essa jornada comeca.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { value: "conditions", label: "Condicoes", disabled: false },
+                          { value: "rb", label: "RB", disabled: !rbEntryAvailable },
+                        ].map((option) => {
+                          const selected = journeyForm.entry_source === option.value;
+
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              disabled={option.disabled}
+                              onClick={() =>
+                                handleJourneyFieldChange("entry_source", option.value as AutomationJourneyEntrySource)
+                              }
+                              className={cn(
+                                "rounded-xl border px-4 py-2 text-sm font-medium transition-colors",
+                                selected
+                                  ? "border-[var(--color-primary-500)] bg-[var(--color-primary-50)] text-[var(--color-primary-700)]"
+                                  : "border-[var(--border-default)] bg-[var(--color-surface-1)] text-[var(--color-gray-700)] hover:border-[var(--color-primary-300)]",
+                                option.disabled && "cursor-not-allowed opacity-50",
+                              )}
+                            >
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                     {journeyForm.entry_source === "rb" ? (
+                      <div className="space-y-5">
+                        <div className="grid gap-4 md:grid-cols-[180px_140px_minmax(0,1fr)]">
+                          <div className="space-y-2">
+                            <Label className="text-[var(--color-gray-600)]">Tipo da mensagem RB</Label>
+                            <Select
+                              value={stepForm.rb_message_kind}
+                              onValueChange={(value: AutomationStepRbMessageKind) =>
+                                handleStepFormChange((previous) => ({
+                                  ...previous,
+                                  rb_message_kind: value,
+                                  content_mode: "text",
+                                }))
+                              }
+                            >
+                              <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="reminder">Lembrete</SelectItem>
+                                <SelectItem value="charge">Cobranca</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="rb-days-offset-entry" className="text-[var(--color-gray-600)]">
+                              Dias
+                            </Label>
+                            <Input
+                              id="rb-days-offset-entry"
+                              type="number"
+                              min={0}
+                              value={stepForm.rb_days_offset}
+                              onChange={(event) =>
+                                handleStepFormChange((previous) => ({
+                                  ...previous,
+                                  rb_days_offset: event.target.value,
+                                  content_mode: "text",
+                                }))
+                              }
+                              className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px]">
+                          <div className="space-y-2">
+                            <Label className="text-[var(--color-gray-600)]">Tipo de pagamento</Label>
+                            <Select
+                              value={getSingleRbPaymentTypeId(stepForm.rb_payment_type_ids)}
+                              onValueChange={(value) =>
+                                handleStepFormChange((previous) => ({
+                                  ...previous,
+                                  rb_payment_type_ids: value ? [value] : [],
+                                  content_mode: "text",
+                                }))
+                              }
+                              disabled={drOculosRbLocked}
+                            >
+                              <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                                <SelectValue placeholder="Selecione o tipo" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {RB_PAYMENT_TYPE_OPTIONS.map((option) => (
+                                  <SelectItem key={option.id} value={option.id}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {drOculosRbLocked ? (
+                            <div className="flex items-end">
+                              <p className="text-xs text-[var(--color-gray-500)]">
+                                Dr. Oculos segue fixo com carne.
+                              </p>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <AutomationConditionComposer
+                        title="Quando essa jornada deve entrar"
+                        value={journeyForm.entry_rule}
+                        onChange={(nextValue) => handleJourneyFieldChange("entry_rule", nextValue)}
+                        stages={stages}
+                        tags={tags}
+                        leadSources={leadSources}
+                        instances={instances}
+                        compact
+                      />
+                    )}
+
+                    {!rbEntryAvailable ? (
+                      <p className="text-xs text-[var(--color-gray-500)]">
+                        Selecione uma instancia com RB ativo para usar essa entrada.
+                      </p>
+                    ) : null}
+                  </div>
 
                   <div className="max-w-md divide-y divide-border/70">
                     <div className="flex min-h-14 items-center justify-between gap-4 py-3">
@@ -1204,6 +1975,34 @@ export function AutomationMessageModal({
                         />
                       </div>
                     ) : null}
+
+                    {journeyForm.entry_source === "rb" ? (
+                      <div className="flex min-h-14 items-center justify-between gap-4 py-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">Disparo diario</p>
+                        </div>
+                        <Switch
+                          checked={journeyForm.daily_dispatch_enabled}
+                          onCheckedChange={(checked) => handleJourneyFieldChange("daily_dispatch_enabled", checked)}
+                        />
+                      </div>
+                    ) : null}
+
+                    {journeyForm.entry_source === "rb" && journeyForm.daily_dispatch_enabled ? (
+                      <div className="flex min-h-14 items-center justify-between gap-4 py-3">
+                        <Label htmlFor="daily-dispatch-time" className="text-sm font-medium">
+                          Horario do disparo
+                        </Label>
+                        <Input
+                          id="daily-dispatch-time"
+                          type="time"
+                          step={60}
+                          className="h-9 w-32"
+                          value={journeyForm.daily_dispatch_time}
+                          onChange={(event) => handleJourneyFieldChange("daily_dispatch_time", event.target.value)}
+                        />
+                      </div>
+                    ) : null}
                   </div>
 
                   {journeyForm.humanized_dispatch_enabled && humanizedDispatchQuality.warnings.length > 0 ? (
@@ -1224,9 +2023,13 @@ export function AutomationMessageModal({
                           Fluxo de mensagens
                         </h3>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          {journeyForm.id
-                            ? `${messageFlow.activeLeadsCount} leads ativos nesta jornada.`
-                            : "Monte a primeira mensagem e salve a automacao para distribuir os leads no fluxo."}
+                          {journeyForm.entry_source === "rb"
+                            ? journeyForm.id
+                              ? `${messageFlow.activeLeadsCount} leads ativos nesta jornada de cobranca RB.`
+                              : "Defina a primeira mensagem RB para que o worker saiba quais titulos devem entrar nesta etapa."
+                            : journeyForm.id
+                              ? `${messageFlow.activeLeadsCount} leads ativos nesta jornada.`
+                              : "Monte a primeira mensagem e salve a automacao para distribuir os leads no fluxo."}
                         </p>
                       </div>
 
@@ -1251,12 +2054,11 @@ export function AutomationMessageModal({
                     ) : !journeyForm.id ? (
                       <div className="flex flex-wrap items-center gap-3">
                         <AutomationMessageStepCard
-                          title={stepForm.label.trim() || "Primeira mensagem"}
-                          preview={
-                            stepForm.message_template.trim()
-                              ? getMessagePreview(stepForm.message_template, 120)
-                              : "Clique para escrever a primeira mensagem."
+                          title={
+                            stepForm.label.trim() ||
+                            buildStepLabel(stepForm, journeyForm.anchor_event, journeyForm.entry_source)
                           }
+                          preview={getStepFormPreview(stepForm)}
                           timingLabel={formatTimingSummary(currentStepDelayMinutes, journeyForm.anchor_event)}
                           leadCount={null}
                           isInactive={!stepForm.is_active}
@@ -1283,7 +2085,7 @@ export function AutomationMessageModal({
                             <div key={step.id} className="flex items-center gap-3">
                               <AutomationMessageStepCard
                                 title={step.label.trim() || `Mensagem ${index + 1}`}
-                                preview={getMessagePreview(step.message_template, 120)}
+                                preview={getAutomationStepPreview(step)}
                                 timingLabel={formatDelayLabel(step.delay_minutes, journeyForm.anchor_event)}
                                 leadCount={leadCount}
                                 isInactive={!step.is_active}
@@ -1331,6 +2133,7 @@ export function AutomationMessageModal({
                     stepForm={stepForm}
                     currentStepDelayMinutes={currentStepDelayMinutes}
                     journeyAnchorEvent={journeyForm.anchor_event}
+                    entrySource={journeyForm.entry_source}
                     journeySaved={Boolean(journeyForm.id)}
                     savingStep={savingStep}
                     onStepFormChange={handleStepFormChange}
@@ -1341,6 +2144,11 @@ export function AutomationMessageModal({
                     tags={tags}
                     instances={instances}
                     leadSources={leadSources}
+                    instanceName={journeyForm.instance_name}
+                    mediaAssets={mediaAssets}
+                    mediaAssetsLoading={mediaAssetsLoading}
+                    pendingMediaFile={pendingMediaFile}
+                    onPendingMediaFileChange={setPendingMediaFile}
                   />
                 </TabsContent>
 
@@ -1401,3 +2209,4 @@ export function AutomationMessageModal({
     </Dialog>
   );
 }
+

@@ -28,6 +28,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Lucas Matheus",
     status: "Atendimento",
+    stage_id: "Atendimento",
     observacoes: "Cliente interessado em armação premium",
   },
   {
@@ -42,6 +43,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Maria Santos",
     status: "Orçamento",
+    stage_id: "Orçamento",
     observacoes: "Enviado orçamento para lentes progressivas",
   },
   {
@@ -56,6 +58,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Lucas Matheus",
     status: "Fechado",
+    stage_id: "Fechado",
     observacoes: "Venda concluída - 2 armações",
   },
   {
@@ -70,6 +73,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Maria Santos",
     status: "Novo",
+    stage_id: "Novo",
     observacoes: "Indicação da cliente Ana",
   },
   {
@@ -84,6 +88,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Lucas Matheus",
     status: "Perdido",
+    stage_id: "Perdido",
     observacoes: "Desistiu por preço",
   },
   {
@@ -98,6 +103,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Maria Santos",
     status: "Remarketing",
+    stage_id: "Remarketing",
     observacoes: "Retomar contato após 15 dias",
   },
   {
@@ -112,6 +118,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Lucas Matheus",
     status: "Atendimento",
+    stage_id: "Atendimento",
     observacoes: "Necessita lentes para astigmatismo",
   },
   {
@@ -126,6 +133,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Maria Santos",
     status: "Fechado",
+    stage_id: "Fechado",
     observacoes: "Cliente satisfeito com atendimento",
   },
   {
@@ -140,6 +148,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Lucas Matheus",
     status: "Orçamento",
+    stage_id: "Orçamento",
     observacoes: "Aguardando aprovação do orçamento",
   },
   {
@@ -154,6 +163,7 @@ export const mockLeads: Lead[] = [
     dataCriacao: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
     responsavel: "Maria Santos",
     status: "Novo",
+    stage_id: "Novo",
     observacoes: "Primeiro contato realizado",
   },
 ];

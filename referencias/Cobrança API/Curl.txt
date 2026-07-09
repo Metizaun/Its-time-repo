@@ -1,0 +1,10 @@
+curl --location --request GET 'https://app.registrobase.com.br:32077/apiIA/listardocreceber' \
+  --header 'Authorization: Bearer eyJhbGciOiAiQUVTMjU2IiwgInR5cCI6ICJSRFdUUyJ9.eyJpc3MiOiJtMkZ1S3ViNjhMM2FJbG1pb2NlSnh1OD0iLCAiZXhwIjoiMjAyNi0wNy0wOFQxNDo0MjoxOSIsICJpYXQiOiIyMDI2LTA3LTA3VDE0OjQyOjE5IiwgInNlY3JldHMiOiJleUp6WldOeVpYUnpJam9pWlhsS2FGa3lWbnBZTW14clNXcHZhVTVxUVRSSmFYZHBaRmhPTVZsV09YQmFRMGsyU1dwbmVFbHBkMmxaTW5od1dsWTVjRnBEU1RaSmFsRnBURU5LTUdJeWRHeGlhVWsyU1d0Vk5WRnFUWGhPUkVrMVVrVktSVTFFUlhsU1JGWkNUMVZOTkUxRVdYZFJWVWw1VDFSQmVVNXFhRVJKYmpBOUlpd2dJbTFrTlNJNklqVXpSVEJFUVRFMU1VWXhOekV4TVVZMVJUTTJSVEl3T1RZeVJqRkZOREk1SW4wPSJ9.rF9jjWXRjTP2MEBOqNZ3Q3d/Y8yhBPNB9xJQaEimUd1pBaMKQ+mJemaOls9aFG93r3UBiJdzlkFRCZjQjxwlTy1odlmAHRNNAIVxy0bY3TDRU/zqAa7he04JZtLprdO6vzIuJcC7eCv1W32BVfpdEBu1Vpkm58rEvAeoUb45bNn3FnrMbAQWYlUVCPbrqkwJq0ku2FFFvfv1BUkHzS+r1VVXqPHnuJRTPQUrH0qN1LcHjVO2LFpIPfw7RrBoyG4F6jvx+vlrmUe658wuxzQgDWI11ZQBiFzNhE3i3WHYlSZoh+jpeWRifr89uYvaf4aLHguFAcEHrbKyTY4TbOpjcinpqKgaJs0mSwZM319LNRKXDhl7mtDO7BAFLoE/F/WgwXZq0gXocFh9k02z4mqresb5yT/yWWWLXLtJj2qmkE/owE33HC77TE7n6NWwCIwDjxubisS3BgnksRdX8Fm9fNVChYvIRxqbxEZX/JdX6K59JtmmG/eb+FcUjh48j/cnh+5hUjR1OKdg/EYmzZpZXAPWCmyy/yfHh8CtzFqLs1AwJxUzX66iQBzyOkDT/6JctKinCG0xhuafSP7wrn7HGStQlcxDbb9zthqVvRkiI4IQrdInc0o49Tol3dDdVQCFksF0ykIPUizDcSmEEuOKh2PoOggQ' \
+  --header 'Accept: application/json' \
+  --form 'function=1' \
+  --form 'TokenAPI=E9B31429DBD012D5A9C8060AB290268C' \
+  --form 'qtdeDias=2' \
+  --form 'empresa=1,2' \
+  --form 'pagenumber=1' \
+  --form 'RowspPage=100' \
+  --form 'CLIE_ID='

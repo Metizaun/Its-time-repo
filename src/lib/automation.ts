@@ -7,6 +7,10 @@ export type AutomationReentryMode = "restart_on_match" | "ignore_if_active" | "a
 export type AutomationMessageDirection = "inbound" | "outbound";
 export type AutomationConditionVisibility = "user" | "internal";
 export type AutomationTimeUnit = "minute" | "hour" | "day";
+export type AutomationStepContentMode = "text" | "media";
+export type AutomationStepMediaKind = "image" | "document";
+export type AutomationJourneyEntrySource = "conditions" | "rb";
+export type AutomationStepRbMessageKind = "reminder" | "charge";
 export type AutomationRecipeId =
   | "follow_up_last_message"
   | "message_after_stage_time"
@@ -56,6 +60,9 @@ export interface AutomationJourney {
   dispatch_limit_per_hour: number;
   humanized_dispatch_window_start: string;
   humanized_dispatch_window_end: string;
+  daily_dispatch_enabled: boolean;
+  daily_dispatch_time: string | null;
+  entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -73,7 +80,18 @@ export interface AutomationStep {
   position: number;
   label: string;
   delay_minutes: number;
-  message_template: string;
+  message_template: string | null;
+  content_mode: AutomationStepContentMode;
+  media_asset_id: string | null;
+  media_kind: AutomationStepMediaKind | null;
+  media_caption: string | null;
+  gupshup_template_id: string | null;
+  gupshup_template_name: string | null;
+  gupshup_template_language: string | null;
+  gupshup_template_params: string[];
+  rb_message_kind: AutomationStepRbMessageKind | null;
+  rb_days_offset: number | null;
+  rb_payment_type_ids: string[];
   channel: "whatsapp";
   is_active: boolean;
   step_rule: AutomationRuleNode | null;

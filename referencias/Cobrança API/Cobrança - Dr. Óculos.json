@@ -1,0 +1,6249 @@
+{
+  "name": "Cobrança - Dr. Óculos",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Vencer",
+        "height": 912,
+        "width": 480,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -48,
+        -736
+      ],
+      "typeVersion": 1,
+      "id": "f88acf9c-ca52-4693-93f8-1f77b928e37b",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        960
+      ],
+      "id": "3c18dc50-0687-4edc-88c5-d87175b073a3",
+      "name": "e-1d"
+    },
+    {
+      "parameters": {
+        "content": "## Expired\n",
+        "height": 2544,
+        "width": 576,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        16,
+        832
+      ],
+      "typeVersion": 1,
+      "id": "f17d16b0-38ee-48f7-97a9-860fe7b13d6d",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        -16
+      ],
+      "id": "c1af0776-bad3-4fe6-872e-6f027bbe9fb8",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1216,
+        -144
+      ],
+      "id": "9e5dacb6-d90e-4ff2-899c-196cba1c37fa",
+      "name": "Get a row",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        672,
+        -160
+      ],
+      "id": "46186214-85a8-411a-ac58-964fd320fe50",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1456,
+        -144
+      ],
+      "id": "bb2d539e-1bb2-4000-9ace-f838a607405a",
+      "name": "If"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2016,
+        -144
+      ],
+      "id": "ece5ee58-47d5-44ff-bef9-4a454c7b5156",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/listardocreceber",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "1"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID",
+              "value": "={{ $('Edit Fields').item.json.clie_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2832,
+        -336
+      ],
+      "id": "dda7b19e-35ac-445b-9daf-7ba38b49b8e9",
+      "name": "LANÇA_DOC",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst output = [];\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      output.push({\n        json: {\n          clie_id: row.CLIE_ID,\n          titulo: row.Titulo,\n          valor_titulo: row.FIN_VLLIQUIDO,\n          vencimento: row.DtVencimento\n        }\n      });\n    }\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        -336
+      ],
+      "id": "6d57b567-1335-4e9e-ac3c-8fe765c76a47",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        896,
+        -320
+      ],
+      "id": "f2a3fb4d-3b8c-4714-b07f-54f36393ee9f",
+      "name": "D nothing"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        -672
+      ],
+      "id": "33c5cf58-071a-4910-9502-81ef533f51ac",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        -800
+      ],
+      "id": "14543e48-7d90-46f3-ae99-19a5c0363c9b",
+      "name": "Get a row1",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        656,
+        -816
+      ],
+      "id": "c9ead950-bf88-4ec0-bd6b-f84d68e9312a",
+      "name": "Loop Over Items1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1584,
+        -800
+      ],
+      "id": "83e32afb-cf0f-4e04-8b45-1e9f4cdf40e4",
+      "name": "If1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2112,
+        -800
+      ],
+      "id": "8ace45fa-b9e2-4b15-85da-d360554aa567",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge1').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ $('Merge1').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ \n  (() => {\n    const phone = $('Merge1').item.json.phone.toString().replace(/\\D/g, '');\n    return phone.startsWith('55') ? phone : `55${phone}`;\n  })()\n}}",
+              "type": "string"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge1').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge1').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items1').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ $('Loop Over Items1').item.json.titulos[0].FIN_VLLIQUIDO }}",
+              "type": "number"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items1').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items1').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "e2f4252c-c69d-416f-987f-a6244954fe2d",
+              "name": "Pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items1\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2560,
+        -800
+      ],
+      "id": "4f6f0667-fe61-469f-bb8b-e564272e36b3",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/listardocreceber",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "3"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID",
+              "value": "={{ $('Edit Fields1').item.json.clie_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        3056,
+        -976
+      ],
+      "id": "edb6cfbf-3030-40a4-aedc-9c4eaff3dba5",
+      "name": "LANÇA_DOC1",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst output = [];\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      output.push({\n        json: {\n          clie_id: row.CLIE_ID,\n          titulo: row.Titulo,\n          valor_titulo: row.FIN_VLLIQUIDO,\n          vencimento: row.DtVencimento\n        }\n      });\n    }\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3296,
+        -976
+      ],
+      "id": "8be2e3ea-d328-4c6a-ba93-7a57e88aab0f",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -976
+      ],
+      "id": "579e45d4-513d-43f8-aaec-271bc7719500",
+      "name": "D nothing1"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/GetBoletoPDF",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $item(\"0\").$node[\"get-token-2d\"].json[\"token\"] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "fin_id",
+              "value": "={{ $('Loop Over Items1').item.json.titulos.map(t => t.Titulo).join(',') }}"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2368,
+        -1088
+      ],
+      "id": "78f020b5-4a8e-4ba5-8099-1c892f794b73",
+      "name": "Boleto"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ $('Merge').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ $('Merge').item.json.phone }}",
+              "type": "number"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ $('Loop Over Items').item.json.titulos[0].FIN_VLLIQUIDO }}",
+              "type": "number"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "90d0aa8f-924f-494a-87c3-676e75c0fcf4",
+              "name": "pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2336,
+        -144
+      ],
+      "id": "44f8a8af-ab04-46b8-8b1d-ed8b40264d7e",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/GetBoletoPDF",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "fin_id",
+              "value": "TESTE"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2192,
+        -368
+      ],
+      "id": "268ab22b-ed70-45c2-b3da-a8af68667c4b",
+      "name": "Boleto1",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        944
+      ],
+      "id": "988f28ae-1489-45d5-a4e5-109b7e017de4",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        832
+      ],
+      "id": "efa5cba8-9e0c-4b41-a3b4-b4bdd516d963",
+      "name": "Get a row2",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        704,
+        816
+      ],
+      "id": "ad54f4b6-d312-43cd-8b44-0ac5ef446a52",
+      "name": "Loop Over Items2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1440,
+        832
+      ],
+      "id": "d95565c6-d8bb-4285-8a1c-6013777817ee",
+      "name": "If2"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2112,
+        832
+      ],
+      "id": "1b25f2d3-8f74-4de9-a855-377b97b2ef4c",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields2').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields2').item.json.titulos[0].Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields2').item.json.titulos[0].FIN_VLLIQUIDO }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ $('Edit Fields2').item.json.titulos[0].DtVencimento.split('/').reverse().join('-') }}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=Oi {{ $('Edit Fields2').item.json.name }}, tudo bem? 😊\n\nSabemos que imprevistos acontecem e, por isso, estamos entrando em contato para lembrar que há em aberto a parcela com vencimento em {{ $('Edit Fields2').item.json.titulos[0].DtVencimento }}. \n\nPara sua comodidade, o pagamento ser realizado através da chave pix: {{ $('Edit Fields2').item.json.pix }}, e nos envie aqui o comprovante para a baixa ou em uma de nossas unidades.\n\nCaso já tenha realizado o pagamento, por favor, nos envie o comprovante para a baixa.  \n\nAguardamos seu retorno. \n\nEquipe Óticas Dr. Óculos"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3264,
+        832
+      ],
+      "id": "578bf0ec-76f2-45cd-9385-df7f0659adf9",
+      "name": "Create a row5",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/listardocvencidos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "1"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID",
+              "value": "={{ $('Edit Fields2').item.json.clie_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2880,
+        608
+      ],
+      "id": "4af90960-ea36-473b-983f-4a50b66ca998",
+      "name": "LANÇA_DOC2",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst output = [];\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      output.push({\n        json: {\n          clie_id: row.CLIE_ID,\n          titulo: row.Titulo,\n          valor_titulo: row.FIN_VLLIQUIDO,\n          vencimento: row.DtVencimento\n        }\n      });\n    }\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3088,
+        608
+      ],
+      "id": "c79c9d86-59ee-4da2-a9e8-61fc34d9b6ff",
+      "name": "Code in JavaScript5"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        928,
+        656
+      ],
+      "id": "b1630d95-6904-46b1-8afc-cd9021978628",
+      "name": "D nothing2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge2').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ $('Merge2').item.json.phone }}",
+              "type": "number"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge2').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge2').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items2').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ Number($('Loop Over Items2').item.json.titulos[0].FIN_VLLIQUIDO).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\\u00A0/g, ' ') }}",
+              "type": "string"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items2').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items2').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "63298713-d991-4aca-9e85-6710e6891cde",
+              "name": "pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items2\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2368,
+        832
+      ],
+      "id": "eb6abab2-8f08-43b7-8497-ab7f43d9b81c",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/GetBoletoPDF",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "fin_id",
+              "value": "TESTE"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2368,
+        592
+      ],
+      "id": "74a16a7c-9a8d-424c-a1d5-06a382e24147",
+      "name": "Boleto2",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1632
+      ],
+      "id": "8ca33ad5-5f42-4864-9ac1-ab28c19bfc58",
+      "name": "Code in JavaScript6"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1408,
+        1504
+      ],
+      "id": "aa8ab521-c110-46cc-88eb-2ccc589d9755",
+      "name": "Get a row3",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        912,
+        1488
+      ],
+      "id": "e5ad4caa-715c-4eee-ba7e-ec7d296322ac",
+      "name": "Loop Over Items3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1648,
+        1504
+      ],
+      "id": "7a32ea1d-b844-495a-8baf-e75e4b2071ac",
+      "name": "If3"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2320,
+        1504
+      ],
+      "id": "2bfaeabb-b3c4-4d43-be17-1262fdfaea25",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields3').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields3').item.json.Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields3').item.json.titulos[0].FIN_VLLIQUIDO }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ $('Edit Fields3').item.json.titulos[0].DtVencimento.split('/').reverse().join('-') }}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=Prezado(a) {{ $('Edit Fields3').item.json.name }},\n\nIdentificamos boleto(s) que se encontra em aberto(s). Contamos com sua prontidão em regularizar o quanto antes.\n\nMe informe como posso auxiliar"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3472,
+        1504
+      ],
+      "id": "58e3e353-144d-444d-8fb9-95f36e7f694e",
+      "name": "Create a row7",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/listardocvencidos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "3"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID",
+              "value": "={{ $('Edit Fields3').item.json.clie_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2928,
+        1232
+      ],
+      "id": "137b0ac0-ef6e-4c08-a9a6-56ba66031055",
+      "name": "LANÇA_DOC3",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst output = [];\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      output.push({\n        json: {\n          clie_id: row.CLIE_ID,\n          titulo: row.Titulo,\n          valor_titulo: row.FIN_VLLIQUIDO,\n          vencimento: row.DtVencimento\n        }\n      });\n    }\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3136,
+        1232
+      ],
+      "id": "aebb0443-c4a7-4acf-bbbd-36fda4f1a67f",
+      "name": "Code in JavaScript7"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        1328
+      ],
+      "id": "4597d6c8-3a06-4316-b4ac-977efcb0e11c",
+      "name": "D nothing3"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge3').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ $('Merge3').item.json.phone }}",
+              "type": "number"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge3').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge3').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items3').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ Number($('Loop Over Items3').item.json.titulos[0].FIN_VLLIQUIDO).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\\u00A0/g, ' ') }}",
+              "type": "string"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items3').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items3').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "13469625-5a75-480c-bece-87f9022389ec",
+              "name": "pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items3\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2576,
+        1504
+      ],
+      "id": "9f8c2c7e-6872-4fed-87d0-e00a7b88ead0",
+      "name": "Edit Fields3"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/GetBoletoPDF",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "fin_id",
+              "value": "TESTE"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2352,
+        1264
+      ],
+      "id": "1d56df91-cd90-46cb-982b-42cc48fcbe66",
+      "name": "Boleto3",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        2464
+      ],
+      "id": "8ca902f6-b584-4d22-b9da-2d2657d6b2d8",
+      "name": "Code in JavaScript8"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1424,
+        2352
+      ],
+      "id": "f44c1705-8ba4-4a0b-bde3-9c6778bc6eb3",
+      "name": "Get a row4",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        896,
+        2320
+      ],
+      "id": "22358bf7-2caf-4c9f-96f4-0edb566a072c",
+      "name": "Loop Over Items4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1728,
+        2352
+      ],
+      "id": "6184dfde-b9cb-4d7f-80bc-e746813dc38f",
+      "name": "If4"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2320,
+        2352
+      ],
+      "id": "3a5d8503-daa8-44b9-9a35-cf0d11704aaa",
+      "name": "Merge4"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields4').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields4').item.json.titulos[0].Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields4').item.json.titulos[0].FIN_VLLIQUIDO }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ $('Edit Fields4').item.json.Vencimento.split('/').reverse().join('-') }}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "="
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3456,
+        2336
+      ],
+      "id": "2881e7d4-a9fb-4479-956c-8a18e9b35505",
+      "name": "Create a row9",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst output = [];\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      output.push({\n        json: {\n          clie_id: row.CLIE_ID,\n          titulo: row.Titulo,\n          valor_titulo: row.FIN_VLLIQUIDO,\n          vencimento: row.DtVencimento\n        }\n      });\n    }\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3056,
+        2128
+      ],
+      "id": "7d20c060-f150-4731-8e48-d452e564393b",
+      "name": "Code in JavaScript9"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        2160
+      ],
+      "id": "03d86a59-1667-41d0-87b1-7dae9353314b",
+      "name": "D nothing4"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge4').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ $('Merge4').item.json.phone }}",
+              "type": "number"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge4').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge4').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items4').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ Number($('Loop Over Items4').item.json.titulos[0].FIN_VLLIQUIDO).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\\u00A0/g, ' ') }}",
+              "type": "string"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items4').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items4').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "ca09f477-86df-425e-a1b8-824a23632f26",
+              "name": "pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items4\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2560,
+        2352
+      ],
+      "id": "8025b53d-079a-4c3a-8d04-a70aaaa96962",
+      "name": "Edit Fields4"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/GetBoletoPDF",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "fin_id",
+              "value": "TESTE"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2336,
+        2096
+      ],
+      "id": "d1d2c957-0b8b-4bae-b68f-ff1c39036428",
+      "name": "Boleto4",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/listardocvencidos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "5"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID",
+              "value": "={{ $('Edit Fields4').item.json.clie_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2864,
+        2128
+      ],
+      "id": "68418ed2-c078-438c-b1a9-220ec4e1ccbe",
+      "name": "HTTP Request4",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        3072
+      ],
+      "id": "1d90e90d-b12c-4af5-a74d-446890567c04",
+      "name": "Code in JavaScript10"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1296,
+        2944
+      ],
+      "id": "2f030b15-f627-4dee-bd09-7a72e26801d4",
+      "name": "Get a row5",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        688,
+        2928
+      ],
+      "id": "2a32fcfd-432a-428d-95b7-868fb039cd0d",
+      "name": "Loop Over Items5"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1536,
+        2944
+      ],
+      "id": "eee03e3f-b985-42f2-be00-4ef5a731b88d",
+      "name": "If5"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2128,
+        2944
+      ],
+      "id": "c56424cf-660e-4941-b643-9e8b2bc5310d",
+      "name": "Merge5"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields5').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields5').item.json.titulos[0].Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields5').item.json.titulos[0].FIN_VLLIQUIDO }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ $('Edit Fields5').item.json.titulos[0].DtVencimento.split('/').reverse().join('-') }}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=AVISO URGENTE\nParcelas em aberto: Maria\n\nMesmo após novas tentativas de renegociar o(s) débito(s) não identificamos o(s) pagamento(s) boleto(s) que se encontra em aberto(s) e informamos que a partir de agora seu cadastro será incluído aos órgãos de proteção ao crédito e protesto. \n\nVencimento 07/06/2026 Valor  R$ 270,00\n\nMe informe como posso auxiliar"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3248,
+        2944
+      ],
+      "id": "b7464bbe-13dc-4c77-8299-e25803883004",
+      "name": "Create a row11",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst output = [];\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      output.push({\n        json: {\n          clie_id: row.CLIE_ID,\n          titulo: row.Titulo,\n          valor_titulo: row.FIN_VLLIQUIDO,\n          vencimento: row.DtVencimento\n        }\n      });\n    }\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3088,
+        2688
+      ],
+      "id": "43dd3dd7-f106-4ce1-9580-acac8bc4281b",
+      "name": "Code in JavaScript11"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        912,
+        2768
+      ],
+      "id": "3ca6ced4-2d14-4296-b414-8321311353d7",
+      "name": "D nothing5"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge5').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ $('Merge5').item.json.phone }}",
+              "type": "number"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge5').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge5').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items5').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ Number($('Loop Over Items5').item.json.titulos[0].FIN_VLLIQUIDO).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\\u00A0/g, ' ') }}",
+              "type": "string"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items5').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items5').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "b4d7de55-42a1-4fc5-830a-39d98ae4fbfa",
+              "name": "pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items5\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2352,
+        2944
+      ],
+      "id": "401579f1-ec04-4014-8c1d-9243836776ee",
+      "name": "Edit Fields5"
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/GetBoletoPDF",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "fin_id",
+              "value": "TESTE"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2368,
+        2720
+      ],
+      "id": "d7228a8b-79b5-4936-946f-d55d42055fbe",
+      "name": "Boleto5",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://189.112.220.241:27078/apiIA/listardocvencidos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "9F865847BF612F46A61AE2936225F622"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "10"
+            },
+            {
+              "name": "empresa",
+              "value": "1"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID",
+              "value": "={{ $('Edit Fields5').item.json.clie_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2912,
+        2688
+      ],
+      "id": "4094455c-8c17-4a71-a106-7e8cafe84f79",
+      "name": "HTTP Request7",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RfCwbdwf6RusXgGO",
+          "name": "API_boleto"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        288,
+        -1088
+      ],
+      "id": "19ccf3f2-7796-4606-8901-ae51bb387be2",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items1').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items1').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items1').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items1').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items1').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{\n  {\n    \"66972304000129\": \"33506295000121\",\n    \"66972192000106\": \"50139655000113\"\n  }[$('Loop Over Items1').item.json.CNPJ?.replace(/\\D/g, '')] || \"\"\n}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2128,
+        -1008
+      ],
+      "id": "f19e3b42-1fae-47c3-b31c-6a2836205e2f",
+      "name": "salva_cobrança",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items1').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items1').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1872,
+        -912
+      ],
+      "id": "3a0d49ad-d18f-43ac-95ec-cab6cac12b1c",
+      "name": "salva_lead",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields1').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields1').item.json.Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields1').item.json.Titulo }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ \n$('Edit Fields1').item.json.Vencimento.split('/').reverse().join('-') \n}}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=Olá {{ $('Edit Fields1').item.json.name }}, tudo bem?\n\nPassamos para lembrar que o seu pagamento vence em 2 dias. Para sua comodidade, recomendamos que se programe para efetuá-lo até a data de vencimento: {{ $('Edit Fields1').item.json.Vencimento }}\n\nAgradecemos a sua atenção e permanecemos à disposição!\n\nAté logo 👋"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ $('Edit Fields1').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3472,
+        -816
+      ],
+      "id": "41250e6f-9e63-481c-9fc8-f84119fbb434",
+      "name": "Send_ref",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Send_ref').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "cobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3952,
+        -784
+      ],
+      "id": "67a79aa0-5aef-4422-95dd-4e85df00a401",
+      "name": "save_crm",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields1').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3696,
+        -816
+      ],
+      "id": "ffd62bee-fae2-49fb-8c42-84ad3bde443b",
+      "name": "Get a row7",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{\n  {\n    \"66972304000129\": \"33506295000121\",\n    \"66972192000106\": \"50139655000113\"\n  }[$('Loop Over Items').item.json.CNPJ?.replace(/\\D/g, '')] || \"\"\n}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        -352
+      ],
+      "id": "b95cd60b-9e87-4784-ba6e-5107726e12e7",
+      "name": "salva_cobrança1",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1728,
+        -240
+      ],
+      "id": "0e8e0da0-155b-4a28-a380-28102889bc36",
+      "name": "salva_lead1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields').item.json.titulos[0].Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields').item.json.titulos[0].FIN_VLLIQUIDO }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ $('Edit Fields').item.json.titulos[0].DtVencimento.split('/').reverse().join('-')  }}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=Olá Antonio, tudo bem?\n\nPassamos para lembrar que o seu boleto vence hoje. Para evitar encargos por atraso, pedimos a gentileza de verificar o pagamento dentro do prazo.\n\nPara sua comodidade, o pagamento pode ser realizado através da chave pix 556284703490 e nos envie o comprovante para a baixa ou em uma de nossas unidades.\n\nObrigado! 💙\n\nEquipe Óticas Dr. Óculos"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        -160
+      ],
+      "id": "58411695-1db0-4f67-abfe-7ccd43af11a9",
+      "name": "send_ref1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('send_ref1').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "cobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3952,
+        -128
+      ],
+      "id": "b5368722-b6a4-4864-9829-06e6b771c04c",
+      "name": "save_crm1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3600,
+        -160
+      ],
+      "id": "2a22ab66-efb9-40f5-8b24-1e0be3c0ee0f",
+      "name": "Get a row8",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items2').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items2').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items2').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items2').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items2').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{   {     \"66972304000129\": \"33506295000121\",     \"66972192000106\": \"50139655000113\"   }[$('Loop Over Items2').item.json.CNPJ?.replace(/\\D/g, '')] || \"\" }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2112,
+        608
+      ],
+      "id": "867e85b8-4641-4623-a073-6e7955665773",
+      "name": "salva_cobrança2",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items2').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items2').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1856,
+        704
+      ],
+      "id": "0ef5915e-383e-407a-ac59-91aacd5722c3",
+      "name": "salva_lead2",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Create a row5').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "cobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3840,
+        848
+      ],
+      "id": "d4aa8471-6927-4000-ac56-174d7f76960d",
+      "name": "save_crm2",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields2').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3504,
+        832
+      ],
+      "id": "a5057f1a-bdad-4b31-870a-3dc10909546f",
+      "name": "Get a row9",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Create a row7').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "cobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3904,
+        1520
+      ],
+      "id": "f66b1814-e46e-4663-8d8d-515c79180273",
+      "name": "save_crm3",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields3').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3696,
+        1504
+      ],
+      "id": "db94286e-2140-4300-a79f-e1f9f43c4bac",
+      "name": "Get a row10",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items3').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items3').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items3').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items3').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items3').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{   {     \"66972304000129\": \"33506295000121\",     \"66972192000106\": \"50139655000113\"   }[$('Loop Over Items3').item.json.CNPJ?.replace(/\\D/g, '')] || \"\" }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2320,
+        1296
+      ],
+      "id": "1c263cfd-327b-46c9-88d1-a8b6b53d5a1f",
+      "name": "salva_cobrança3",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items3').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items3').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2048,
+        1376
+      ],
+      "id": "96711ce9-6621-4478-a2db-5b4c0cedb90e",
+      "name": "salva_lead3",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items4').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items4').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items4').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items4').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items4').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{   {     \"66972304000129\": \"33506295000121\",     \"66972192000106\": \"50139655000113\"   }[$('Loop Over Items4').item.json.CNPJ?.replace(/\\D/g, '')] || \"\" }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2320,
+        2096
+      ],
+      "id": "91d9d6e6-088a-4446-998c-771a8b90f455",
+      "name": "salva_cobrança4",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items4').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items4').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2048,
+        2176
+      ],
+      "id": "4a2723a2-c1aa-4d68-93ea-80f5437741c6",
+      "name": "salva_lead4",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Create a row9').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "drcobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3888,
+        2368
+      ],
+      "id": "94dc5cbf-d02a-4e33-8d3d-64b1c4c3504d",
+      "name": "save_crm4",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields4').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3680,
+        2336
+      ],
+      "id": "cf05e37c-790e-451f-8b5c-875b02db1fa7",
+      "name": "Get a row11",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Create a row11').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "cobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3680,
+        2960
+      ],
+      "id": "7ff2e00e-c5da-49ac-9298-30b823133971",
+      "name": "save_crm5",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields5').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3472,
+        2944
+      ],
+      "id": "8664fc1d-6340-4bf3-b2c5-aa83bd32d916",
+      "name": "Get a row12",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items5').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items5').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items5').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items5').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items5').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{   {     \"66972304000129\": \"33506295000121\",     \"66972192000106\": \"50139655000113\"   }[$('Loop Over Items5').item.json.CNPJ?.replace(/\\D/g, '')] || \"\" }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2128,
+        2704
+      ],
+      "id": "86895bec-33ab-4214-b3db-c78c86c19de1",
+      "name": "salva_cobrança5",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items5').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items5').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1856,
+        2784
+      ],
+      "id": "0ca86abe-00e5-435f-b863-6d925cb44a93",
+      "name": "salva_lead5",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocreceber",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "0"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        304,
+        -16
+      ],
+      "id": "4d372ca0-9cf8-4321-9062-f594ca491752",
+      "name": "Busca_titutos-1d"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        48,
+        -16
+      ],
+      "id": "5b792bde-964b-41af-8914-0fa2a90390c8",
+      "name": "V-0d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocreceber",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "2"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        304,
+        -672
+      ],
+      "id": "976f2d2c-be25-468c-9f65-a9b7c2b5ef67",
+      "name": "Busca_titutos-2d"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        32,
+        -672
+      ],
+      "id": "8acde24b-f859-48be-89f6-ecb8ab6ea9dd",
+      "name": "V-2d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        304,
+        -192
+      ],
+      "id": "10d6ce24-d8c4-4e22-8f7f-9f0270374d07",
+      "name": "get-token-0d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        304,
+        -896
+      ],
+      "id": "a270cd97-81cf-4726-b353-f59e5d653e47",
+      "name": "get-token-2d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        320,
+        752
+      ],
+      "id": "2f39db2d-f378-4800-a90e-f637a91567c9",
+      "name": "get-token-vencido-1d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        304,
+        1440
+      ],
+      "id": "1d3cf346-f613-46b5-b571-b727aff2e2d0",
+      "name": "get-token-vencido-4d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocvencidos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "1"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        320,
+        960
+      ],
+      "id": "54b600b2-c6ee-4d7d-937f-78466357619d",
+      "name": "Busca_vencido-1d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocvencidos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "4"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        304,
+        1632
+      ],
+      "id": "747c8033-f4f7-4ecc-9a68-6bccc53d918c",
+      "name": "Busca_vencido-4d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        336,
+        2272
+      ],
+      "id": "f189177d-ae2a-4a92-aa2d-bc92c668157f",
+      "name": "get-token-vencido-10d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocvencidos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "10"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        336,
+        2464
+      ],
+      "id": "9db07ced-7b1c-47a6-ab51-4a37f3e28247",
+      "name": "Busca_vencido-10d"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        3072
+      ],
+      "id": "b284e014-58b2-4d61-9f2f-faf1f599c909",
+      "name": "e-15d"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        48,
+        2464
+      ],
+      "id": "853e84af-a09e-49f8-a866-a26957bdb14f",
+      "name": "e-10d"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        352,
+        2864
+      ],
+      "id": "cdeb4324-d654-46e0-b630-9108f3221558",
+      "name": "get-token-vencido-15d"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"d2687393-bd72-4d1d-a652-d3e41d1830ed\",\"params\":[\"{{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}\",\"{{ $json.Vencimento }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2800,
+        -800
+      ],
+      "id": "a278c938-7b7a-4762-bd80-73b1323dea1a",
+      "name": "Gupshup 2d",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"5bb297eb-c1f4-4e03-8e62-7f7ed5821782\",\"params\":[\"{{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}\",\"{{ $json.pix }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2592,
+        -144
+      ],
+      "id": "aecae4ac-0f9e-4997-977b-2fa35a9bdc7c",
+      "name": "Gupshup 0d",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"2e7440ac-6133-4a7c-9bb0-5be887839435\",\"params\":[\"{{ $json.name }}\",\"{{ $json.titulos[0].DtVencimento }}\",\"{{ $json.Vl_liquido }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2832,
+        2352
+      ],
+      "id": "545cb937-8945-4b0c-b420-d2aa45a0c861",
+      "name": "Gupshup 10d",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"2f37cb6d-ae16-4861-80c6-156b7624e9f5\",\"params\":[\"{{ $json.name }}\",\"{{ $json.Vencimento }}\",\"{{ $json.Vl_liquido }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2624,
+        2944
+      ],
+      "id": "0f28ffaf-135f-4357-bdf2-d0f096e76ec9",
+      "name": "Gupshup 15d",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Notas\ntitulo = FIN_ID\n",
+        "width": 480,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -48,
+        -912
+      ],
+      "typeVersion": 1,
+      "id": "a8fb5614-dbdf-4114-a22d-0268b37ba4b4",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "=554199031152"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"c77f81d7-660b-488c-ba66-8312d1a69784\",\"params\":[\"{{ $json.name }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2832,
+        1504
+      ],
+      "id": "3b9dcebb-c7b2-46cd-ab44-1943ca5e334b",
+      "name": "4d-vencido-gupshup",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        48,
+        1632
+      ],
+      "id": "2480055a-bdf6-4e7f-8cfa-8389024d5713",
+      "name": "e-4d"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"279e2b9e-523c-4e98-a2f0-059f71cc22a4\",\"params\":[\"{{ $json.name }}\",\"{{ $json.Vencimento }}\",\"{{ $json.pix }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2672,
+        832
+      ],
+      "id": "a3bc392c-3b57-4178-8269-4d31738ed577",
+      "name": "Gupshup 1d",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $json.titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $json.valor_titulo }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ \n$json.vencimento.split('/').reverse().join('-') \n}}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=Failed"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ $('Edit Fields1').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3056,
+        -544
+      ],
+      "id": "659e5be0-081c-45bc-84dc-753f099b81a4",
+      "name": "fail_ref",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://www.registrobase.com.br:32077/apiIA/listarvoucherativo",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "tokenapi",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        688,
+        -1360
+      ],
+      "id": "8f155dda-9345-4cf5-afe7-ce1cc19b2c87",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        384,
+        -1360
+      ],
+      "id": "e4153cf4-5c0f-47f1-a826-5df43099f77b",
+      "name": "get-token-2d1"
+    },
+    {
+      "parameters": {
+        "content": "## Teste Voucher\n",
+        "height": 336,
+        "width": 704,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        240,
+        -1472
+      ],
+      "typeVersion": 1,
+      "id": "e76405bc-975c-4bd9-bbc0-84e02dd55a18",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1024,
+        -784
+      ],
+      "id": "f4085f7a-1610-47f7-b19e-a5a76c0b5371",
+      "name": "If7"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        944,
+        -144
+      ],
+      "id": "fca190a3-a123-4e21-8afe-d70c9e960828",
+      "name": "If8"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        944,
+        832
+      ],
+      "id": "bd29f4a9-94c2-463d-bf7d-7ccd15841629",
+      "name": "If9"
+    },
+    {
+      "parameters": {
+        "content": "## Finalizado\n",
+        "height": 768,
+        "width": 1056
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1648,
+        304
+      ],
+      "typeVersion": 1,
+      "id": "609ee751-f5e3-460b-8276-0d3350609135",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1136,
+        1504
+      ],
+      "id": "36d1cc1c-1f7f-40e3-992b-c66a3108a80e",
+      "name": "If10"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1152,
+        2352
+      ],
+      "id": "d10b716d-8613-4030-82fb-8a9e98a2634d",
+      "name": "If11"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        992,
+        2944
+      ],
+      "id": "eaea9191-0675-465e-bb26-2440fec89661",
+      "name": "If12"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocvencidos",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "15"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        352,
+        3072
+      ],
+      "id": "b3463b79-532b-4b31-802f-499713363544",
+      "name": "Busca_vencido-15d"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "delete",
+        "tableId": "leads",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "condition": "eq",
+              "keyValue": "556282457329"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1392,
+        384
+      ],
+      "id": "c70af6df-a2ca-42b3-acd2-498733863cd7",
+      "name": "Delete a row",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        2464
+      ],
+      "id": "197d881c-ad58-4f16-b48c-8fd8f34117e0",
+      "name": "Filter"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        3072
+      ],
+      "id": "8781f7c3-a7b1-45fa-94af-989f28c4db8d",
+      "name": "Filter1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        912,
+        1632
+      ],
+      "id": "872cd3ce-d623-4e80-8817-c08b831ecad9",
+      "name": "Filter2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        944
+      ],
+      "id": "092604eb-3cba-42e5-bf2d-36f04c9ef716",
+      "name": "Filter3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        -16
+      ],
+      "id": "5bb0c539-c0fe-4bf6-a8d9-9c46b496b51c",
+      "name": "Filter4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        848,
+        -672
+      ],
+      "id": "a95c222f-9316-41a8-afc6-cd685aea81c1",
+      "name": "Filter5"
+    }
+  ],
+  "pinData": {
+    "Gupshup 2d": [
+      {
+        "json": {
+          "status": "submitted",
+          "messageId": "9e4b6ec1-43e7-4f6e-88b9-5000c3720fce"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ],
+    "Gupshup 1d": [
+      {
+        "json": {
+          "status": "submitted",
+          "messageId": "5bd6e20b-287e-4823-8c2b-44d01ba6de1f"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ],
+    "Create a row5": [
+      {
+        "json": {
+          "clie_id": 5588,
+          "tit_ref": 55526,
+          "valor": 442.55,
+          "vencimento": "2026-06-21",
+          "send_at": "2026-06-22T18:51:28.498747+00:00",
+          "text": "Oi Ana, tudo bem? 😊\n\nSabemos que imprevistos acontecem e, por isso, estamos entrando em contato para lembrar que há em aberto a parcela com vencimento em 21/06/2026. \n\nPara sua comodidade, o pagamento ser realizado através da chave pix: 556282189207, e nos envie aqui o comprovante para a baixa ou em uma de nossas unidades.\n\nCaso já tenha realizado o pagamento, por favor, nos envie o comprovante para a baixa.  \n\nAguardamos seu retorno. \n\nEquipe Óticas Dr. Óculos",
+          "phone": null
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "e-1d": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Filter4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "D nothing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "salva_lead1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LANÇA_DOC": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "send_ref1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Filter5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row1": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [
+          {
+            "node": "D nothing1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "salva_lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Gupshup 2d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LANÇA_DOC1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Send_ref",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boleto": {
+      "main": [
+        []
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Gupshup 0d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boleto1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "Filter3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row2": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items2": {
+      "main": [
+        [
+          {
+            "node": "D nothing2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "salva_lead2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row5": {
+      "main": [
+        [
+          {
+            "node": "Get a row9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LANÇA_DOC2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript5": {
+      "main": [
+        [
+          {
+            "node": "Create a row5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "Gupshup 1d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boleto2": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript6": {
+      "main": [
+        [
+          {
+            "node": "Filter2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row3": {
+      "main": [
+        [
+          {
+            "node": "If3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items3": {
+      "main": [
+        [
+          {
+            "node": "D nothing3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If3": {
+      "main": [
+        [
+          {
+            "node": "salva_lead3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row7": {
+      "main": [
+        [
+          {
+            "node": "Get a row10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LANÇA_DOC3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript7": {
+      "main": [
+        [
+          {
+            "node": "Create a row7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields3": {
+      "main": [
+        [
+          {
+            "node": "4d-vencido-gupshup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boleto3": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript8": {
+      "main": [
+        [
+          {
+            "node": "Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row4": {
+      "main": [
+        [
+          {
+            "node": "If4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items4": {
+      "main": [
+        [
+          {
+            "node": "D nothing4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If4": {
+      "main": [
+        [
+          {
+            "node": "salva_lead4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge4": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row9": {
+      "main": [
+        [
+          {
+            "node": "Get a row11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript9": {
+      "main": [
+        [
+          {
+            "node": "Create a row9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields4": {
+      "main": [
+        [
+          {
+            "node": "Gupshup 10d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boleto4": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request4": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript10": {
+      "main": [
+        [
+          {
+            "node": "Filter1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row5": {
+      "main": [
+        [
+          {
+            "node": "If5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items5": {
+      "main": [
+        [
+          {
+            "node": "D nothing5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If5": {
+      "main": [
+        [
+          {
+            "node": "salva_lead5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge5",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge5": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row11": {
+      "main": [
+        [
+          {
+            "node": "Get a row12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript11": {
+      "main": [
+        [
+          {
+            "node": "Create a row11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields5": {
+      "main": [
+        [
+          {
+            "node": "Gupshup 15d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boleto5": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request7": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript11",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        []
+      ]
+    },
+    "salva_cobrança": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send_ref": {
+      "main": [
+        [
+          {
+            "node": "Get a row7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row7": {
+      "main": [
+        [
+          {
+            "node": "save_crm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead1": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_cobrança1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send_ref1": {
+      "main": [
+        [
+          {
+            "node": "Get a row8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row8": {
+      "main": [
+        [
+          {
+            "node": "save_crm1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead2": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_cobrança2": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row9": {
+      "main": [
+        [
+          {
+            "node": "save_crm2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row10": {
+      "main": [
+        [
+          {
+            "node": "save_crm3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm3": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead3": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_cobrança3": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead4": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_cobrança4": {
+      "main": [
+        [
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row11": {
+      "main": [
+        [
+          {
+            "node": "save_crm4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm4": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row12": {
+      "main": [
+        [
+          {
+            "node": "save_crm5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm5": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead5": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_cobrança5": {
+      "main": [
+        [
+          {
+            "node": "Merge5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca_titutos-1d": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V-0d": {
+      "main": [
+        []
+      ]
+    },
+    "Busca_titutos-2d": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "V-2d": {
+      "main": [
+        []
+      ]
+    },
+    "get-token-0d": {
+      "main": [
+        [
+          {
+            "node": "Busca_titutos-1d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-token-2d": {
+      "main": [
+        [
+          {
+            "node": "Busca_titutos-2d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-token-vencido-1d": {
+      "main": [
+        [
+          {
+            "node": "Busca_vencido-1d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-token-vencido-4d": {
+      "main": [
+        [
+          {
+            "node": "Busca_vencido-4d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca_vencido-1d": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca_vencido-4d": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca_vencido-10d": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "e-15d": {
+      "main": [
+        []
+      ]
+    },
+    "e-10d": {
+      "main": [
+        []
+      ]
+    },
+    "get-token-vencido-15d": {
+      "main": [
+        [
+          {
+            "node": "Busca_vencido-15d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-token-vencido-10d": {
+      "main": [
+        [
+          {
+            "node": "Busca_vencido-10d",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gupshup 2d": {
+      "main": [
+        [
+          {
+            "node": "Send_ref",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gupshup 0d": {
+      "main": [
+        [
+          {
+            "node": "send_ref1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gupshup 10d": {
+      "main": [
+        [
+          {
+            "node": "Create a row9",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4d-vencido-gupshup": {
+      "main": [
+        [
+          {
+            "node": "Create a row7",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "e-4d": {
+      "main": [
+        []
+      ]
+    },
+    "Gupshup 1d": {
+      "main": [
+        [
+          {
+            "node": "Create a row5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gupshup 15d": {
+      "main": [
+        [
+          {
+            "node": "Create a row11",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-token-2d1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If7": {
+      "main": [
+        [
+          {
+            "node": "Get a row1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If8": {
+      "main": [
+        [
+          {
+            "node": "Get a row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If9": {
+      "main": [
+        [
+          {
+            "node": "Get a row2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If10": {
+      "main": [
+        [
+          {
+            "node": "Get a row3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If11": {
+      "main": [
+        [
+          {
+            "node": "Get a row4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If12": {
+      "main": [
+        [
+          {
+            "node": "Get a row5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca_vencido-15d": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter3": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter4": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter5": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "983078a3-80e7-4ef2-981c-2b952f1e3731",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a1be3c97ead0306c6fd8239491d9bedae5e504e303a6b25d95576edd5becf8eb"
+  },
+  "id": "N7StACb6kfFDmPVl",
+  "tags": [
+    {
+      "updatedAt": "2025-09-28T18:37:19.805Z",
+      "createdAt": "2025-09-28T18:37:19.805Z",
+      "id": "komh9J8yPHNAr2sp",
+      "name": "Principal"
+    },
+    {
+      "updatedAt": "2025-09-29T12:14:44.878Z",
+      "createdAt": "2025-09-29T12:14:38.143Z",
+      "id": "RUsLkAZ1UtcEFnxM",
+      "name": "Worker"
+    }
+  ]
+}

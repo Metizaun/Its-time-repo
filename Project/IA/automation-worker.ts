@@ -3,7 +3,12 @@ import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
 
 import { registerOutboundEcho } from "./outbound-echo-registry.js";
-import { type SendResult, type WhatsAppProvider, WhatsAppProviderError } from "./whatsapp-provider.js";
+import {
+  type SendResult,
+  type WhatsAppProvider,
+  type WhatsAppProviderName,
+  WhatsAppProviderError,
+} from "./whatsapp-provider.js";
 import { createWhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 
 type ClaimedExecution = {
@@ -21,6 +26,23 @@ type ClaimedExecution = {
   funnel_name: string | null;
   scheduled_at: string;
   attempt_count: number;
+  content_mode?: "text" | "media" | null;
+  media_asset_id?: string | null;
+  media_kind?: "image" | "document" | null;
+  media_caption?: string | null;
+  media_source_url?: string | null;
+  media_mime_type?: string | null;
+  media_file_name?: string | null;
+  gupshup_template_id?: string | null;
+  gupshup_template_name?: string | null;
+  gupshup_template_language?: string | null;
+  gupshup_template_params?: string[] | null;
+  rb_pix_key?: string | null;
+  rb_total_amount?: number | null;
+  rb_next_due_date?: string | null;
+  rb_titles_count?: number | null;
+  rb_store_emp_id?: string | null;
+  rb_store_emp_cpf_cnpj?: string | null;
 };
 
 type ClaimedCalendarFollowup = {
@@ -241,6 +263,51 @@ function assertNoUnresolvedPlaceholders(message: string) {
   }
 }
 
+function buildExecutionTemplateVariables(execution: ClaimedExecution) {
+  const rbTotalAmount =
+    execution.rb_total_amount === null || execution.rb_total_amount === undefined
+      ? null
+      : Number(execution.rb_total_amount);
+
+  const firstName = (execution.lead_name ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)[0] ?? "";
+  const titleFirstName = firstName
+    ? firstName.slice(0, 1).toUpperCase() + firstName.slice(1).toLowerCase()
+    : "";
+  const dueDate = execution.rb_next_due_date
+    ? new Date(`${execution.rb_next_due_date}T00:00:00`).toLocaleDateString("pt-BR")
+    : "";
+  const totalAmount =
+    typeof rbTotalAmount === "number" && Number.isFinite(rbTotalAmount)
+      ? rbTotalAmount.toLocaleString("pt-BR", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : "";
+
+  return {
+    empresa: normalizeBusinessName(execution.lead_name),
+    nome: execution.lead_name ?? "",
+    primeiro_nome: titleFirstName,
+    name: titleFirstName,
+    telefone: execution.phone ?? "",
+    cidade: execution.city ?? "",
+    status: execution.lead_status ?? "",
+    rb_pix_key: execution.rb_pix_key ?? "",
+    rb_total_amount: totalAmount,
+    rb_next_due_date: dueDate,
+    rb_titles_count:
+      typeof execution.rb_titles_count === "number" ? String(execution.rb_titles_count) : "",
+    rb_store_emp_id: execution.rb_store_emp_id ?? "",
+    rb_store_emp_cpf_cnpj: execution.rb_store_emp_cpf_cnpj ?? "",
+    pix: execution.rb_pix_key ?? "",
+    vencimento: dueDate,
+    vl_liquido: totalAmount,
+  };
+}
+
 function renderExecutionMessage(execution: ClaimedExecution) {
   if (!execution.template) {
     throw new AutomationDispatchError("Template do disparo nao encontrado", {
@@ -248,16 +315,44 @@ function renderExecutionMessage(execution: ClaimedExecution) {
     });
   }
 
-  const renderedMessage = renderTemplate(execution.template, {
-    empresa: normalizeBusinessName(execution.lead_name),
-    nome: execution.lead_name ?? "",
-    telefone: execution.phone ?? "",
-    cidade: execution.city ?? "",
-    status: execution.lead_status ?? "",
-  });
+  const renderedMessage = renderTemplate(execution.template, buildExecutionTemplateVariables(execution));
 
   assertNoUnresolvedPlaceholders(renderedMessage);
   return renderedMessage;
+}
+
+function renderExecutionCaption(execution: ClaimedExecution) {
+  const caption = (execution.media_caption ?? "").trim();
+  if (!caption) {
+    return "";
+  }
+
+  const renderedCaption = renderTemplate(caption, buildExecutionTemplateVariables(execution));
+
+  assertNoUnresolvedPlaceholders(renderedCaption);
+  return renderedCaption;
+}
+
+function renderExecutionTemplateParameters(execution: ClaimedExecution) {
+  if (!Array.isArray(execution.gupshup_template_params)) {
+    return [];
+  }
+
+  const vars = buildExecutionTemplateVariables(execution);
+  return execution.gupshup_template_params.map((param) => {
+    const renderedParam = renderTemplate(String(param ?? ""), vars);
+    assertNoUnresolvedPlaceholders(renderedParam);
+    return renderedParam;
+  });
+}
+
+function buildMediaHistoryContent(execution: ClaimedExecution, caption: string) {
+  if (caption.trim()) {
+    return caption.trim();
+  }
+
+  const fileName = execution.media_file_name?.trim() || "arquivo";
+  return `[Midia enviada: ${fileName}]`;
 }
 
 function formatCalendarDate(value: string) {
@@ -548,6 +643,60 @@ function buildFailureDispatchMeta(
 
 async function sendWhatsAppMessage(
   provider: WhatsAppProvider,
+  providerName: WhatsAppProviderName,
+  execution: ClaimedExecution,
+  message: string
+): Promise<WhatsAppSendResult> {
+  if (!execution.instance_name || !execution.phone) {
+    throw new AutomationDispatchError("Instancia ou telefone ausente para envio de texto", {
+      kind: "permanent",
+    });
+  }
+
+  try {
+    const response =
+      providerName === "gupshup" &&
+      (execution.gupshup_template_id || execution.gupshup_template_name)
+        ? await provider.sendTemplate({
+            instanceName: execution.instance_name,
+            to: execution.phone,
+            templateName: execution.gupshup_template_id || execution.gupshup_template_name || "",
+            languageCode: execution.gupshup_template_language || "pt_BR",
+            parameters: renderExecutionTemplateParameters(execution),
+            sourceType: "automation",
+          })
+        : await provider.sendText({
+            instanceName: execution.instance_name,
+            to: execution.phone,
+            text: message,
+            sourceType: "automation",
+          });
+
+    return {
+      providerMessageId: response.providerMessageId,
+      providerPayloadSummary: summarizeProviderPayload(response.raw),
+    };
+  } catch (error) {
+    const statusCode = error instanceof WhatsAppProviderError ? error.statusCode : null;
+    const errorCode = error instanceof WhatsAppProviderError ? error.errorCode : null;
+    const providerName = error instanceof WhatsAppProviderError ? error.provider : "evolution";
+    const payload = error instanceof WhatsAppProviderError ? error.payloadSummary : error;
+    const payloadMessage = extractExternalErrorMessage(payload);
+    const messagePrefix = `Falha ao enviar mensagem no provider ${providerName}`;
+
+    throw new AutomationDispatchError(
+      payloadMessage ? `${messagePrefix}: ${payloadMessage}` : messagePrefix,
+      {
+        kind: classifyTransportFailure(statusCode, errorCode, payloadMessage ?? messagePrefix),
+        statusCode,
+        errorCode,
+      }
+    );
+  }
+}
+
+async function sendRawWhatsAppText(
+  provider: WhatsAppProvider,
   instanceName: string,
   phone: string,
   message: string
@@ -567,9 +716,85 @@ async function sendWhatsAppMessage(
   } catch (error) {
     const statusCode = error instanceof WhatsAppProviderError ? error.statusCode : null;
     const errorCode = error instanceof WhatsAppProviderError ? error.errorCode : null;
+    const providerName = error instanceof WhatsAppProviderError ? error.provider : "evolution";
     const payload = error instanceof WhatsAppProviderError ? error.payloadSummary : error;
     const payloadMessage = extractExternalErrorMessage(payload);
-    const messagePrefix = "Falha ao enviar mensagem na Evolution";
+    const messagePrefix = `Falha ao enviar mensagem no provider ${providerName}`;
+
+    throw new AutomationDispatchError(
+      payloadMessage ? `${messagePrefix}: ${payloadMessage}` : messagePrefix,
+      {
+        kind: classifyTransportFailure(statusCode, errorCode, payloadMessage ?? messagePrefix),
+        statusCode,
+        errorCode,
+      }
+    );
+  }
+}
+
+async function sendWhatsAppMedia(
+  provider: WhatsAppProvider,
+  providerName: WhatsAppProviderName,
+  execution: ClaimedExecution,
+  caption: string
+): Promise<WhatsAppSendResult> {
+  if (!provider.sendMedia) {
+    throw new AutomationDispatchError(`Provider ${providerName} sem suporte a midia`, {
+      kind: "permanent",
+    });
+  }
+
+  if (!execution.instance_name || !execution.phone) {
+    throw new AutomationDispatchError("Instancia ou telefone ausente para envio de midia", {
+      kind: "permanent",
+    });
+  }
+
+  if (!execution.media_source_url || !execution.media_kind) {
+    throw new AutomationDispatchError("Midia da automacao incompleta", {
+      kind: "permanent",
+    });
+  }
+
+  if (providerName === "gupshup" && !execution.gupshup_template_id && !execution.gupshup_template_name) {
+    throw new AutomationDispatchError("Template Gupshup nao definido para disparo de midia", {
+      kind: "permanent",
+    });
+  }
+
+  try {
+    const response = await provider.sendMedia({
+      instanceName: execution.instance_name,
+      to: execution.phone,
+      mediaUrl: execution.media_source_url,
+      mimeType:
+        execution.media_mime_type ??
+        (execution.media_kind === "image" ? "image/jpeg" : "application/pdf"),
+      fileName:
+        execution.media_file_name ??
+        (execution.media_kind === "image" ? "imagem.jpg" : "documento.pdf"),
+      kind: execution.media_kind,
+      caption: caption || null,
+      templateName:
+        providerName === "gupshup"
+          ? execution.gupshup_template_id || execution.gupshup_template_name || null
+          : null,
+      languageCode: providerName === "gupshup" ? execution.gupshup_template_language || "pt_BR" : null,
+      templateParameters:
+        providerName === "gupshup" ? renderExecutionTemplateParameters(execution) : [],
+      sourceType: "automation",
+    });
+
+    return {
+      providerMessageId: response.providerMessageId,
+      providerPayloadSummary: summarizeProviderPayload(response.raw),
+    };
+  } catch (error) {
+    const statusCode = error instanceof WhatsAppProviderError ? error.statusCode : null;
+    const errorCode = error instanceof WhatsAppProviderError ? error.errorCode : null;
+    const payload = error instanceof WhatsAppProviderError ? error.payloadSummary : error;
+    const payloadMessage = extractExternalErrorMessage(payload);
+    const messagePrefix = `Falha ao enviar midia no provider ${providerName}`;
 
     throw new AutomationDispatchError(
       payloadMessage ? `${messagePrefix}: ${payloadMessage}` : messagePrefix,
@@ -767,16 +992,26 @@ export function startAutomationWorker() {
     ]);
   }
 
-  async function saveOutboundMessage(execution: ClaimedExecution, content: string, sentAt: string) {
+  async function saveOutboundMessage(
+    execution: ClaimedExecution,
+    content: string,
+    sentAt: string,
+    sendResult?: WhatsAppSendResult | null,
+    providerName?: WhatsAppProviderName | null
+  ) {
     const { error } = await supabase.from("message_history").insert({
       lead_id: execution.lead_id,
       aces_id: execution.aces_id,
       content,
       direction: "outbound",
-      source_type: "ai",
+      source_type: "automation",
       conversation_id: `automation:${execution.execution_id}`,
       instance: execution.instance_name,
       sent_at: sentAt,
+      provider: providerName ?? null,
+      provider_message_id: sendResult?.providerMessageId ?? null,
+      provider_status: sendResult ? "sent" : null,
+      provider_payload_summary: sendResult?.providerPayloadSummary ?? null,
     });
 
     if (error) {
@@ -823,7 +1058,8 @@ export function startAutomationWorker() {
     followup: ClaimedCalendarFollowup,
     content: string,
     sentAt: string,
-    sendResult: WhatsAppSendResult
+    sendResult: WhatsAppSendResult,
+    providerName: WhatsAppProviderName
   ) {
     const { error } = await supabase.from("message_history").insert({
       lead_id: followup.lead_id,
@@ -834,7 +1070,7 @@ export function startAutomationWorker() {
       conversation_id: buildCalendarFollowupConversationId(followup.event_id),
       instance: followup.instance_name,
       sent_at: sentAt,
-      provider: "evolution",
+      provider: providerName,
       provider_message_id: sendResult.providerMessageId,
       provider_status: "sent",
       provider_payload_summary: sendResult.providerPayloadSummary,
@@ -1382,7 +1618,11 @@ export function startAutomationWorker() {
               });
             }
 
-            renderedMessage = renderExecutionMessage(execution);
+            const contentMode = execution.content_mode === "media" ? "media" : "text";
+            renderedMessage =
+              contentMode === "media"
+                ? buildMediaHistoryContent(execution, renderExecutionCaption(execution))
+                : renderExecutionMessage(execution);
             const dispatchPlan = await planHumanizedDispatch(
               execution.execution_id,
               renderedMessage.length
@@ -1398,14 +1638,20 @@ export function startAutomationWorker() {
             }
 
             const sentAt = new Date().toISOString();
+            const providerName = await whatsAppProviders.resolveInstanceProvider(execution.instance_name);
+            const provider = whatsAppProviders.getProvider(providerName);
+            const sendResult =
+              contentMode === "media"
+                ? await sendWhatsAppMedia(provider, providerName, execution, renderExecutionCaption(execution))
+                : await sendWhatsAppMessage(
+                    provider,
+                    providerName,
+                    execution,
+                    renderedMessage
+                  );
+
             await registerAutomationOutboundEcho(execution, renderedMessage, sentAt);
-            await sendWhatsAppMessage(
-              whatsAppProviders.getProvider("evolution"),
-              execution.instance_name,
-              execution.phone,
-              renderedMessage
-            );
-            await saveOutboundMessage(execution, renderedMessage, sentAt);
+            await saveOutboundMessage(execution, renderedMessage, sentAt, sendResult, providerName);
             try {
               await repairAutomationAiFreezes(
                 execution.lead_id,
@@ -1567,13 +1813,14 @@ export function startAutomationWorker() {
 
             const sentAt = new Date().toISOString();
             await registerCalendarFollowupOutboundEcho(followup, renderedMessage, sentAt);
-            const sendResult = await sendWhatsAppMessage(
-              whatsAppProviders.getProvider("evolution"),
+            const providerName = await whatsAppProviders.resolveInstanceProvider(followup.instance_name);
+            const sendResult = await sendRawWhatsAppText(
+              whatsAppProviders.getProvider(providerName),
               followup.instance_name,
               followup.contact_phone,
               renderedMessage
             );
-            await saveCalendarFollowupMessage(followup, renderedMessage, sentAt, sendResult);
+            await saveCalendarFollowupMessage(followup, renderedMessage, sentAt, sendResult, providerName);
 
             try {
               await repairAutomationAiFreezes(

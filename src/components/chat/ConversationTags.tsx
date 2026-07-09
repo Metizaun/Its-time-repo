@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useLeadTags, type LeadTag } from "@/hooks/useLeadTags";
+import type { TagsCatalogItem } from "@/hooks/useTagsCatalog";
 import { cn } from "@/lib/utils";
 
 interface ConversationTagsProps {
@@ -45,7 +46,7 @@ function TagPill({
   onRemove,
   disabled,
 }: {
-  tag: LeadTag;
+  tag: TagsCatalogItem | LeadTag;
   removable?: boolean;
   onRemove?: (tagId: string) => void;
   disabled?: boolean;
@@ -76,7 +77,7 @@ function TagActionMenu({
   disabled,
   onDelete,
 }: {
-  tag: LeadTag;
+  tag: TagsCatalogItem | LeadTag;
   disabled?: boolean;
   onDelete: (tagId: string) => void;
 }) {
@@ -115,7 +116,7 @@ function TagRow({
   onToggle,
   onDelete,
 }: {
-  tag: LeadTag;
+  tag: TagsCatalogItem | LeadTag;
   checked: boolean;
   pendingToggle: boolean;
   pendingDelete: boolean;

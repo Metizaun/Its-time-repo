@@ -101,6 +101,8 @@ export function MessageList({ messages, loading }: MessageListProps) {
                 sentAt={message.sent_at}
                 isOutbound={message.direction_code === 2}
                 senderName={message.sender_name}
+                sourceType={message.source_type}
+                systemKind={message.system_kind}
                 attachments={message.attachments}
               />
             </Fragment>

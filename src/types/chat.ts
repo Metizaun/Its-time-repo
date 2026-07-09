@@ -1,4 +1,5 @@
 export type ChatAttachmentKind = "image" | "audio" | "document";
+export type ChatSystemKind = "handoff_transition" | "handoff_note" | "handoff_complete";
 
 export interface ChatAttachment {
   id: string;
@@ -20,6 +21,8 @@ export interface ChatMessage {
   sent_at: string;
   lead_name: string;
   sender_name: string | null;
+  source_type: string;
+  system_kind: ChatSystemKind | null;
   provider_status?: string | null;
   attachments: ChatAttachment[];
 }

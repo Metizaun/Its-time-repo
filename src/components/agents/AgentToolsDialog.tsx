@@ -14,6 +14,7 @@ const TOOL_LABELS: Record<AgentTool["key"], string> = {
   ai_audio: "Audio IA",
   forwarding: "Encaminhamento",
   send_media: "Enviar midia",
+  rb_billing: "Cobranca RB",
   prescription_analyst: "Analista de receituario",
   visagism: "Visagismo",
 };
@@ -31,13 +32,15 @@ export function AgentToolsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <AgentToolsPanel agentId={agentId} toolFilterKey={toolKey} />
+        <div className="min-w-0 overflow-y-auto pr-1">
+          <AgentToolsPanel agentId={agentId} toolFilterKey={toolKey} />
+        </div>
       </DialogContent>
     </Dialog>
   );

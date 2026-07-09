@@ -35,6 +35,9 @@ export interface Lead {
   instance_color?: string | null;
   last_tag_name: string | null;
   last_tag_urgencia: number | null;
+  interaction_mode: "ai" | "human";
+  manual_pending_state: "waiting_first_reply" | "waiting_reply" | "clear" | null;
+  manual_pending_since: string | null;
 }
 
 interface UseLeadsOptions {

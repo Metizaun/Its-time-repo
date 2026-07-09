@@ -43,7 +43,7 @@ interface AutomationRuleBuilderProps {
   instances: Instance[];
 }
 
-interface RuleEditorProps extends Omit<AutomationRuleBuilderProps, "title" | "description"> {
+interface RuleEditorProps extends Omit<AutomationRuleBuilderProps, "title" | "description" | "value"> {
   node: AutomationRuleNode;
   depth?: number;
   isRoot?: boolean;

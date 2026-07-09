@@ -46,18 +46,20 @@ export function useChat(leadId: string | null) {
 
     const shouldUseOptimisticText = !attachment;
     const tempMessage: ChatMessage | null = shouldUseOptimisticText
-      ? {
-          id: `temp-${Date.now()}`,
-          lead_id: leadId,
-          content,
-          direction: "outbound",
-          direction_code: 2,
-          sent_at: new Date().toISOString(),
-          lead_name: "",
-          sender_name: "Voce",
-          provider_status: null,
-          attachments: [],
-        }
+        ? {
+            id: `temp-${Date.now()}`,
+            lead_id: leadId,
+            content,
+            direction: "outbound",
+            direction_code: 2,
+            sent_at: new Date().toISOString(),
+            lead_name: "",
+            sender_name: "Voce",
+            source_type: "human",
+            system_kind: null,
+            provider_status: null,
+            attachments: [],
+          }
       : null;
 
     if (tempMessage) {

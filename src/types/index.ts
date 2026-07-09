@@ -52,12 +52,30 @@ export interface User {
 
 export interface PipelineStage {
   id: string;
+  pipeline_id: string;
   name: string;
   color: string;
   position: number;
   category: LeadStatus;
   aces_id: number;
   is_funnel_stage: boolean;
+  classifier_description: string;
+  classifier_positive_signals: string[];
+  classifier_negative_signals: string[];
+  classifier_examples: string[];
+}
+
+export interface Pipeline {
+  id: string;
+  aces_id: number;
+  name: string;
+  description: string;
+  classifier_key: string;
+  is_default: boolean;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface KanbanColumn {

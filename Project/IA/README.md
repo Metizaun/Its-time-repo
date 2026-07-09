@@ -87,10 +87,19 @@ Execute o script SQL no Supabase SQL Editor:
 # Copie o conteúdo de schema.sql e execute no Supabase
 ```
 
-### 5. Inicie o servidor
+### 5. Inicie o ambiente padronizado
+
+Na raiz do repositório, rode:
 
 ```bash
 npm run dev
+```
+
+Esse comando sobe o backend via Docker Compose e o frontend via Vite. Se voce
+quiser rodar apenas o backend em modo isolado para inspeção de logs, use:
+
+```bash
+npm run dev:backend
 ```
 
 ## 🚀 Uso

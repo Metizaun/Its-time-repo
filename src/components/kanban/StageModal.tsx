@@ -11,6 +11,7 @@ interface StageModalProps {
   isOpen: boolean;
   onClose: () => void;
   stage?: PipelineStage;
+  pipelineId?: string | null;
 }
 
 const colorPalette = [
@@ -25,13 +26,28 @@ const colorPalette = [
   { name: "Cinza", value: "#64748b" },
 ];
 
-export function StageModal({ isOpen, onClose, stage }: StageModalProps) {
-  const { createStage, updateStage } = usePipelineStages();
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinLines(value: string[]) {
+  return value.join("\n");
+}
+
+export function StageModal({ isOpen, onClose, stage, pipelineId }: StageModalProps) {
+  const { createStage, updateStage } = usePipelineStages(pipelineId);
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     color: colorPalette[0].value,
     category: "Aberto" as LeadStatus,
+    classifier_description: "",
+    classifier_positive_signals: "",
+    classifier_negative_signals: "",
+    classifier_examples: "",
   });
 
   const isEditing = !!stage;
@@ -43,12 +59,20 @@ export function StageModal({ isOpen, onClose, stage }: StageModalProps) {
           name: stage.name,
           color: stage.color,
           category: stage.category,
+          classifier_description: stage.classifier_description,
+          classifier_positive_signals: joinLines(stage.classifier_positive_signals),
+          classifier_negative_signals: joinLines(stage.classifier_negative_signals),
+          classifier_examples: joinLines(stage.classifier_examples),
         });
       } else {
         setFormData({
           name: "",
           color: colorPalette[0].value,
           category: "Aberto" as LeadStatus,
+          classifier_description: "",
+          classifier_positive_signals: "",
+          classifier_negative_signals: "",
+          classifier_examples: "",
         });
       }
     }
@@ -65,12 +89,21 @@ export function StageModal({ isOpen, onClose, stage }: StageModalProps) {
           name: formData.name,
           color: formData.color,
           category: formData.category,
+          classifier_description: formData.classifier_description,
+          classifier_positive_signals: splitLines(formData.classifier_positive_signals),
+          classifier_negative_signals: splitLines(formData.classifier_negative_signals),
+          classifier_examples: splitLines(formData.classifier_examples),
         });
       } else {
         await createStage({
           name: formData.name,
           color: formData.color,
           category: formData.category,
+          pipeline_id: pipelineId,
+          classifier_description: formData.classifier_description,
+          classifier_positive_signals: splitLines(formData.classifier_positive_signals),
+          classifier_negative_signals: splitLines(formData.classifier_negative_signals),
+          classifier_examples: splitLines(formData.classifier_examples),
         });
       }
       onClose();
@@ -81,11 +114,11 @@ export function StageModal({ isOpen, onClose, stage }: StageModalProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="max-h-[calc(100vh-3rem)] overflow-y-auto sm:max-w-[640px]">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Editar Etapa" : "Nova Etapa"}</DialogTitle>
           <DialogDescription>
-            Defina apenas nome, status e cor da etapa.
+            Defina a coluna e como a IA classificadora do CRM deve reconhece-la.
           </DialogDescription>
         </DialogHeader>
 
@@ -141,6 +174,48 @@ export function StageModal({ isOpen, onClose, stage }: StageModalProps) {
                 value={formData.color}
                 onChange={(e) => setFormData({ ...formData, color: e.target.value })}
                 className="w-12 h-10 p-1 cursor-pointer border rounded-md"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Descricao para a IA do CRM</Label>
+            <textarea
+              value={formData.classifier_description}
+              onChange={(e) => setFormData({ ...formData, classifier_description: e.target.value })}
+              placeholder="Ex: Leads que ja responderam e precisam de atendimento ativo."
+              className="min-h-[96px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-inset placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Sinais positivos</Label>
+              <textarea
+                value={formData.classifier_positive_signals}
+                onChange={(e) => setFormData({ ...formData, classifier_positive_signals: e.target.value })}
+                placeholder={"Um por linha"}
+                className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-inset placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Sinais negativos</Label>
+              <textarea
+                value={formData.classifier_negative_signals}
+                onChange={(e) => setFormData({ ...formData, classifier_negative_signals: e.target.value })}
+                placeholder={"Um por linha"}
+                className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-inset placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Exemplos</Label>
+              <textarea
+                value={formData.classifier_examples}
+                onChange={(e) => setFormData({ ...formData, classifier_examples: e.target.value })}
+                placeholder={"Um por linha"}
+                className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-inset placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
           </div>

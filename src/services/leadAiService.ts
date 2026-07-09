@@ -5,6 +5,7 @@ export type LeadAiReason =
   | "active"
   | "manual_off"
   | "auto_pause"
+  | "human_handoff"
   | "global_inactive"
   | "no_agent";
 

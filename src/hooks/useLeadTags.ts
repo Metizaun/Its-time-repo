@@ -53,6 +53,7 @@ export function useLeadTags(leadId: string | null, enabled = true) {
         id: row.tag_id,
         name: catalogTag?.name ?? row.tag_name ?? "Tag",
         urgencia: catalogTag?.urgencia ?? null,
+        usage_description: catalogTag?.usage_description ?? null,
         created_at: row.created_at,
       };
     });

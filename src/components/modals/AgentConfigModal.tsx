@@ -1,15 +1,12 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { X, GripVertical, Maximize2, Minimize2, ChevronRight, Loader2 } from "lucide-react";
+import { X, GripVertical, Maximize2, Minimize2, ChevronRight } from "lucide-react";
 
-import { useAuth } from "@/contexts/AuthContext";
 import { useAgents } from "@/hooks/useAgents";
 import { useInstances } from "@/hooks/useInstances";
 import { PROMPT_GUIDANCE_SECTIONS } from "@/lib/aiPrompt";
 import { cn } from "@/lib/utils";
-import { testAgentHandoff } from "@/services/agentService";
 import { AIAgent } from "@/types";
 import { Switch } from "@/components/ui/switch";
-import { AGENT_TOOLS_UI_ENABLED } from "@/lib/featureFlags";
 
 import { toast } from "sonner";
 
@@ -74,7 +71,6 @@ export function AgentConfigModal({
   templateName = null,
   onClose,
 }: AgentConfigModalProps) {
-  const { session } = useAuth();
   const { agents, upsertAgent, saving } = useAgents();
   const { instances } = useInstances();
 
@@ -85,9 +81,8 @@ export function AgentConfigModal({
   const [model] = useState(DEFAULT_MODEL);
   const [handoffEnabled, setHandoffEnabled] = useState(false);
   const [handoffPrompt, setHandoffPrompt] = useState("");
-  const [handoffTargetPhone, setHandoffTargetPhone] = useState("");
   const [handoffConfigOpen, setHandoffConfigOpen] = useState(false);
-  const [testingHandoff, setTestingHandoff] = useState(false);
+  const [rbTokenApi, setRbTokenApi] = useState("");
 
   const [studioExpanded, setStudioExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -117,8 +112,8 @@ export function AgentConfigModal({
       setSystemPrompt(stripPersonalityInstructions(agent.system_prompt));
       setHandoffEnabled(Boolean(agent.handoff_enabled));
       setHandoffPrompt(agent.handoff_prompt ?? "");
-      setHandoffTargetPhone(agent.handoff_target_phone ?? "");
       setHandoffConfigOpen(false);
+      setRbTokenApi("");
 
       const idx = PERSONALITY_LEVELS.reduce((best, level, index) => {
         return Math.abs(level.temperature - agent.temperature) <
@@ -134,8 +129,8 @@ export function AgentConfigModal({
       setPersonalityLevel(2);
       setHandoffEnabled(false);
       setHandoffPrompt("");
-      setHandoffTargetPhone("");
       setHandoffConfigOpen(false);
+      setRbTokenApi("");
     }
 
     setStudioExpanded(false);
@@ -197,15 +192,14 @@ export function AgentConfigModal({
       return;
     }
 
-    if (handoffEnabled && !handoffPrompt.trim()) {
-      setHandoffConfigOpen(true);
-      toast.error("Defina quando a IA deve fazer o handoff.");
+    if (!agent && templateKey === "cobranca_rb" && !rbTokenApi.trim()) {
+      toast.error("Informe o Token API do Registro Base para criar o agente de cobranca.");
       return;
     }
 
-    if (handoffEnabled && !handoffTargetPhone.trim()) {
+    if (handoffEnabled && !handoffPrompt.trim()) {
       setHandoffConfigOpen(true);
-      toast.error("Informe o numero que vai receber o handoff.");
+      toast.error("Defina quando a IA deve fazer o handoff.");
       return;
     }
 
@@ -225,8 +219,8 @@ export function AgentConfigModal({
         human_pause_minutes: 60,
         handoff_enabled: handoffEnabled,
         handoff_prompt: handoffPrompt.trim() || null,
-        handoff_target_phone: handoffTargetPhone.trim() || null,
         templateKey: agent ? null : templateKey,
+        rb_token_api: agent ? null : rbTokenApi.trim() || null,
       },
       agent?.id
     );
@@ -234,51 +228,12 @@ export function AgentConfigModal({
     onClose();
   }
 
-  async function handleTestHandoff() {
-    if (!instanceName) {
-      toast.error("Selecione a instancia antes de testar.");
-      return;
-    }
-
-    if (!handoffTargetPhone.trim()) {
-      toast.error("Informe o numero de destino do handoff.");
-      return;
-    }
-
-    if (!session?.access_token) {
-      toast.error("Sessao expirada. Entre novamente para testar.");
-      return;
-    }
-
-    try {
-      setTestingHandoff(true);
-      const result = await testAgentHandoff({
-        accessToken: session.access_token,
-        instanceName,
-        targetPhone: handoffTargetPhone.trim(),
-        agentName: name.trim() || agent?.name || "Agente IA",
-        handoffPrompt: handoffPrompt.trim() || undefined,
-      });
-
-      toast.success("Teste de handoff enviado.", {
-        description: `Destino validado: ${result.normalizedNumber}`,
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Nao foi possivel validar o envio.";
-      toast.error("Falha ao testar handoff.", {
-        description: message,
-      });
-    } finally {
-      setTestingHandoff(false);
-    }
-  }
-
   if (!open) {
     return null;
   }
 
   const currentPersonality = PERSONALITY_LEVELS[personalityLevel];
-  const handoffReady = Boolean(handoffPrompt.trim() && handoffTargetPhone.trim());
+  const handoffReady = Boolean(handoffPrompt.trim());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -376,6 +331,24 @@ export function AgentConfigModal({
                 ) : null}
               </div>
 
+              {!agent && templateKey === "cobranca_rb" ? (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                    Token API RB
+                  </label>
+                  <input
+                    type="text"
+                    value={rbTokenApi}
+                    onChange={(event) => setRbTokenApi(event.target.value)}
+                    placeholder="Cole o token do Registro Base"
+                    className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
+                  />
+                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                    Esse token habilita a integracao inicial. Empresas e Pix por loja continuam na Tool Cobranca RB.
+                  </p>
+                </div>
+              ) : null}
+
               <div className={cn("flex flex-col gap-3", studioExpanded && "xl:col-span-2")}>
                 <div>
                   <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
@@ -434,13 +407,13 @@ export function AgentConfigModal({
                       Handoff Humano
                     </label>
                     <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">
-                      Configure um alerta interno no WhatsApp para transferencia humana.
+                      Transfere o lead da IA para o Chat Manual dentro do CRM.
                     </p>
                     <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
                       {handoffEnabled
                         ? handoffReady
-                          ? `Ativo para enviar ao numero ${handoffTargetPhone}`
-                          : "Handoff ligado, mas ainda falta definir o prompt ou o numero."
+                          ? "Ativo para transferir ao Chat Manual."
+                          : "Handoff ligado, mas ainda falta definir a regra de transferencia."
                         : handoffReady
                           ? "Configurado, mas desligado no toggle."
                           : "Desativado."}
@@ -596,7 +569,7 @@ export function AgentConfigModal({
                   Configuracao rapida de handoff
                 </h3>
                 <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                  Defina quando a IA deve transferir e qual numero recebe o alerta.
+                  Defina quando a IA deve sair do fluxo automatico e transferir para o Chat Manual.
                 </p>
               </div>
 
@@ -640,39 +613,12 @@ export function AgentConfigModal({
                 </p>
               </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                  Numero para Receber o Handoff
-                </label>
-                <input
-                  type="text"
-                  value={handoffTargetPhone}
-                  onChange={(event) => setHandoffTargetPhone(event.target.value)}
-                  placeholder="Ex: 5511999999999"
-                  className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
-                />
-                <p className="text-[10px] text-[var(--color-text-muted)]">
-                  Esse numero recebe o alerta interno disparado pela Evolution.
+              <div className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-base)] px-4 py-3">
+                <p className="text-xs font-semibold text-foreground">Encaminhamento externo</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+                  Chamadas e notificacoes por telefone/WhatsApp agora pertencem exclusivamente a Tool Encaminhamento.
+                  Configure esses destinos no fluxo proprio de Tools do agente.
                 </p>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)]/60 px-4 py-3">
-                <div>
-                  <p className="text-xs font-semibold text-foreground">Teste de envio</p>
-                  <p className="text-[11px] text-[var(--color-text-secondary)]">
-                    Valida a instancia, o numero informado e o disparo real do handoff.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleTestHandoff}
-                  disabled={testingHandoff || !instanceName || !handoffTargetPhone.trim()}
-                  className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl border border-[var(--color-border-medium)] px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-[var(--color-border-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {testingHandoff ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  {testingHandoff ? "Testando..." : "Testar envio"}
-                </button>
               </div>
             </div>
 

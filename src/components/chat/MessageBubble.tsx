@@ -2,7 +2,7 @@ import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { MessageAttachment } from "./MessageAttachment";
-import type { ChatAttachment } from "@/types/chat";
+import type { ChatAttachment, ChatSystemKind } from "@/types/chat";
 
 interface MessageBubbleProps {
   content: string;
@@ -10,6 +10,8 @@ interface MessageBubbleProps {
   isOutbound: boolean;
   senderName?: string | null;
   attachments?: ChatAttachment[];
+  sourceType?: string;
+  systemKind?: ChatSystemKind | null;
 }
 
 const ATTACHMENT_PLACEHOLDERS = new Set([
@@ -20,12 +22,54 @@ const ATTACHMENT_PLACEHOLDERS = new Set([
   "[audio recebido]",
 ]);
 
-export function MessageBubble({ content, sentAt, isOutbound, senderName, attachments = [] }: MessageBubbleProps) {
+function formatInternalNote(content: string) {
+  const withoutPrefix = content.replace("[Nota Interna - Handoff IA]", "").trim();
+  return withoutPrefix || "Motivo e resumo indisponiveis.";
+}
+
+export function MessageBubble({
+  content,
+  sentAt,
+  isOutbound,
+  senderName,
+  attachments = [],
+  sourceType = "human",
+  systemKind = null,
+}: MessageBubbleProps) {
   const time = format(new Date(sentAt), "HH:mm", { locale: ptBR });
   const normalizedContent = content.trim();
   const visibleContent =
     attachments.length > 0 && ATTACHMENT_PLACEHOLDERS.has(normalizedContent.toLowerCase()) ? "" : normalizedContent;
   const hasAttachments = attachments.length > 0;
+
+  if (sourceType === "system") {
+    if (systemKind === "handoff_note") {
+      return (
+        <div className="flex w-full justify-center">
+          <div className="max-w-[min(88%,42rem)] rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-base)] px-4 py-3 text-left shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-gray-600)]">
+              Nota Interna (IA)
+            </p>
+            <div className="mt-2 border-l border-[var(--color-gray-200)] pl-3">
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-gray-700)]">
+                {formatInternalNote(normalizedContent)}
+              </p>
+            </div>
+            <p className="mt-2 text-right text-[10px] text-[var(--color-gray-500)]">{time}</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex w-full justify-center">
+        <div className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-subtle)] px-3 py-1.5 text-center shadow-sm">
+          <p className="text-xs font-medium text-[var(--color-gray-600)]">{normalizedContent}</p>
+          <p className="mt-1 text-[10px] text-[var(--color-gray-500)]">{time}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn(

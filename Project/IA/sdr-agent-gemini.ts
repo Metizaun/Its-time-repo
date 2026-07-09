@@ -68,9 +68,155 @@ const DOCUMENT_MIME_TYPES = new Set([
   "application/rtf",
 ]);
 
+const AUTOMATION_MEDIA_BUCKET = "automation-media";
+const AUTOMATION_MEDIA_MAX_FILE_SIZE = 104857600;
+const AUTOMATION_ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "application/pdf",
+]);
+
+const RB_PILOT_ACES_ID = 5;
+const RB_PILOT_DEFAULTS = {
+  rb_mode: "live",
+  rb_base_url: "https://app.registrobase.com.br:32077",
+  rb_token_api: "E9B31429DBD012D5A9C8060AB290268C",
+  rb_empresa_ids: ["1", "2"],
+  trigger_time: "10:00",
+  timezone: "America/Sao_Paulo",
+  dispatch_mode: "humanized",
+  pix_mapping_by_store: {
+    "1": "66972304000129",
+    "2": "66972192000106",
+    "66972304000129": "66972304000129",
+    "66972192000106": "66972192000106",
+  },
+  gupshup_defaults: {
+    app_name: "droculos",
+    origin_phone: "556282591715",
+    approved_template_ids: [
+      "d2687393-bd72-4d1d-a652-d3e41d1830ed",
+      "5bb297eb-c1f4-4e03-8e62-7f7ed5821782",
+      "279e2b9e-523c-4e98-a2f0-059f71cc22a4",
+      "c77f81d7-660b-488c-ba66-8312d1a69784",
+      "2e7440ac-6133-4a7c-9bb0-5be887839435",
+      "2f37cb6d-ae16-4861-80c6-156b7624e9f5",
+    ],
+  },
+};
+
+const RB_PILOT_GUPSHUP_CHANNEL = {
+  apiKey: "sk_0829f79557964e85b7498de02fbca212",
+  appName: "droculos",
+  phoneNumber: "556282591715",
+};
+
+const RB_PILOT_TEMPLATES: Record<string, { id: string; params: string[] }> = {
+  due_in_2_days: {
+    id: "d2687393-bd72-4d1d-a652-d3e41d1830ed",
+    params: ["{primeiro_nome}", "{vencimento}"],
+  },
+  due_today: {
+    id: "5bb297eb-c1f4-4e03-8e62-7f7ed5821782",
+    params: ["{primeiro_nome}", "{pix}"],
+  },
+  overdue_1_day: {
+    id: "279e2b9e-523c-4e98-a2f0-059f71cc22a4",
+    params: ["{name}", "{vencimento}", "{pix}"],
+  },
+  overdue_4_days: {
+    id: "c77f81d7-660b-488c-ba66-8312d1a69784",
+    params: ["{name}"],
+  },
+  overdue_15_days: {
+    id: "2f37cb6d-ae16-4861-80c6-156b7624e9f5",
+    params: ["{name}", "{vencimento}", "{vl_liquido}"],
+  },
+};
+
+const RB_DEFAULT_STAGES = [
+  {
+    key: "due_in_2_days",
+    name: "A vencer (2 dias)",
+    color: "#1d4ed8",
+    category: "Aberto",
+    classifierDescription: "Lead com titulo proximo do vencimento. Esta em tom preventivo e amigavel.",
+    positiveSignals: ["vence em 2 dias", "lembrete preventivo", "sem atraso"],
+    negativeSignals: ["pagou", "quitado", "sem debito"],
+    examples: ["Parcela com vencimento proximo, antes do atraso."],
+  },
+  {
+    key: "due_today",
+    name: "Vence hoje",
+    color: "#2563eb",
+    category: "Aberto",
+    classifierDescription: "Lead com titulo vencendo hoje. Requer lembrete objetivo com Pix correto da loja.",
+    positiveSignals: ["vence hoje", "ultimo dia", "lembrar pagamento"],
+    negativeSignals: ["pagou", "comprovante enviado"],
+    examples: ["Titulo vence hoje e ainda nao houve confirmacao de pagamento."],
+  },
+  {
+    key: "overdue_1_day",
+    name: "Atrasado (1 dia)",
+    color: "#f59e0b",
+    category: "Aberto",
+    classifierDescription: "Lead em atraso inicial. A cobranca ainda e suave, mas ja reconhece o atraso.",
+    positiveSignals: ["atraso inicial", "vencido ontem", "gentileza de regularizar"],
+    negativeSignals: ["pagamento confirmado", "em atendimento humano"],
+    examples: ["Cliente com 1 dia de atraso."],
+  },
+  {
+    key: "overdue_4_days",
+    name: "Cobranca suave (4 dias)",
+    color: "#f97316",
+    category: "Aberto",
+    classifierDescription: "Lead com atraso recorrente, porem ainda em comunicacao cordial.",
+    positiveSignals: ["4 dias de atraso", "segunda cobranca", "regularizacao pendente"],
+    negativeSignals: ["pagou", "negociado", "concluido"],
+    examples: ["Cliente com alguns dias de atraso e sem retorno."],
+  },
+  {
+    key: "overdue_15_days",
+    name: "Cobranca critica (15 dias)",
+    color: "#dc2626",
+    category: "Aberto",
+    classifierDescription: "Lead em atraso critico. Requer comunicacao firme e acompanhamento humano quando houver resposta.",
+    positiveSignals: ["15 dias ou mais", "cobranca critica", "prioridade alta"],
+    negativeSignals: ["pagou", "renegociado", "finalizado"],
+    examples: ["Cliente com atraso prolongado e acao urgente."],
+  },
+  {
+    key: "in_attendance",
+    name: "Atendimento",
+    color: "#0f766e",
+    category: "Aberto",
+    classifierDescription: "Lead em conversa activa com a equipe sobre pagamento, comprovante ou negociacao.",
+    positiveSignals: ["respondeu", "enviou comprovante", "tirou duvida", "negociacao"],
+    negativeSignals: ["sem resposta", "pagamento concluido"],
+    examples: ["Cliente respondeu e precisa de atendimento humano ou acompanhamento."],
+  },
+  {
+    key: "completed",
+    name: "Finalizado",
+    color: "#16a34a",
+    category: "Ganho",
+    classifierDescription: "Fluxo de cobranca erro de digitacao corrigido com sucesso, sem debitos pendentes ou pagamento confirmado.",
+    positiveSignals: ["pagou", "sem debito", "concluido", "encerrado"],
+    negativeSignals: ["novo atraso", "cobranca ativa"],
+    examples: ["Cliente saiu da cobranca por quitacao ou ausencia de titulos."],
+  },
+];
+
 const AI_SUMMARY_START = "<!-- AI_ATTENDANCE_SUMMARY_START -->";
 const AI_SUMMARY_END = "<!-- AI_ATTENDANCE_SUMMARY_END -->";
 const AI_SUMMARY_MAX_LENGTH = 1200;
+const INTERNAL_HANDOFF_TRANSITION_MESSAGE = "Transferido para atendimento humano";
+const INTERNAL_HANDOFF_COMPLETE_MESSAGE = "Atendimento humano finalizado, IA reativada";
+const INTERNAL_HANDOFF_NOTE_PREFIX = "[Nota Interna - Handoff IA]";
 const AGENT_FOLLOWUP_TIMEZONE = "America/Sao_Paulo";
 const AGENT_FOLLOWUP_MIN_CONFIDENCE = 0.75;
 const AGENT_FOLLOWUP_MAX_DAYS = 30;
@@ -295,6 +441,7 @@ type LeadRow = {
   status: string | null;
   stage_id: string | null;
   instancia: string | null;
+  interaction_mode: "ai" | "human";
   last_city: string | null;
   notes: string | null;
   check: string | null;
@@ -357,6 +504,8 @@ type ChatMessageAttachmentResponse = {
   storageDeletedAt: string | null;
 };
 
+type ChatSystemKind = "handoff_transition" | "handoff_note" | "handoff_complete";
+
 type ChatMessageResponse = {
   id: string;
   leadId: string;
@@ -366,6 +515,8 @@ type ChatMessageResponse = {
   sentAt: string;
   leadName: string;
   senderName: string | null;
+  sourceType: string;
+  systemKind: ChatSystemKind | null;
   providerStatus?: string | null;
   attachments: ChatMessageAttachmentResponse[];
 };
@@ -410,7 +561,13 @@ type AiRunRow = {
   input_snapshot: JsonRecord;
 };
 
-type LeadAiReason = "active" | "manual_off" | "auto_pause" | "global_inactive" | "no_agent";
+type LeadAiReason =
+  | "active"
+  | "manual_off"
+  | "auto_pause"
+  | "human_handoff"
+  | "global_inactive"
+  | "no_agent";
 
 type LeadAiStateRow = {
   agent_id: string;
@@ -492,6 +649,7 @@ type CreateAgentInput = {
   handoffTargetPhone?: string;
   unansweredFollowupEnabled?: boolean;
   templateKey?: string | null;
+  rbTokenApi?: string;
 };
 
 type UpdateAgentInput = Partial<CreateAgentInput>;
@@ -516,6 +674,11 @@ type SendManualMessageInput = {
   content?: string;
   instanceName?: string | null;
   attachment?: ChatAttachmentSendInput | null;
+};
+
+type FinalizeHumanHandoffInput = {
+  leadId: string;
+  stageId: string;
 };
 
 type TestHandoffInput = {
@@ -618,7 +781,7 @@ type GeminiExecutionResult<TParsed> = {
 
 type HandoffExecutionResult = {
   triggered: boolean;
-  mode: "external_notification" | "agent" | null;
+  mode: "internal" | "external_notification" | "agent" | null;
   targetPhone: string | null;
   targetAgentId: string | null;
   reason: string;
@@ -704,6 +867,78 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function asConfigString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return "";
+}
+
+function asConfigStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => asConfigString(item)).filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function isRbBillingToolConfigReady(value: JsonRecord): boolean {
+  const mode = value.rb_mode === "mock" ? "mock" : "live";
+  const hasRuntimeConfig = Boolean(
+    asConfigString(value.rb_base_url) &&
+      asConfigString(value.trigger_time) &&
+      asConfigString(value.timezone)
+  );
+
+  if (!hasRuntimeConfig) {
+    return false;
+  }
+
+  if (mode === "mock") {
+    return true;
+  }
+
+  return Boolean(asConfigString(value.rb_token_api) && asConfigStringArray(value.rb_empresa_ids).length > 0);
+}
+
+function buildInternalHandoffNote(reason: string, summary: string) {
+  const noteReason = reason.trim() || "Condicao de handoff atendida pela IA.";
+  const noteSummary = summary.trim() || "Resumo indisponivel.";
+  return `${INTERNAL_HANDOFF_NOTE_PREFIX}\nMotivo: ${noteReason}\nResumo: ${noteSummary}`;
+}
+
+function deriveChatSystemKind(message: Pick<MessageRow, "source_type" | "content">): ChatSystemKind | null {
+  if (message.source_type !== "system") {
+    return null;
+  }
+
+  if (message.content === INTERNAL_HANDOFF_TRANSITION_MESSAGE) {
+    return "handoff_transition";
+  }
+
+  if (message.content === INTERNAL_HANDOFF_COMPLETE_MESSAGE) {
+    return "handoff_complete";
+  }
+
+  if (message.content.startsWith(INTERNAL_HANDOFF_NOTE_PREFIX)) {
+    return "handoff_note";
+  }
+
+  return null;
 }
 
 function pickFirstString(...values: unknown[]) {
@@ -1361,6 +1596,28 @@ function resolveAttachmentKind(mimeType: string): ChatAttachmentKind | null {
   return null;
 }
 
+function resolveAutomationMediaKind(mimeType: string): "document" | "image" | null {
+  const normalized = normalizeMimeType(mimeType);
+  if (!AUTOMATION_ALLOWED_MIME_TYPES.has(normalized)) {
+    return null;
+  }
+  return normalized === "application/pdf" ? "document" : "image";
+}
+
+function buildAutomationMediaStoragePath(params: {
+  acesId: number;
+  instanceName: string;
+  assetId: string;
+  fileName: string;
+}) {
+  return [
+    String(params.acesId),
+    "automation-media",
+    sanitizeStorageFileName(params.instanceName),
+    `${params.assetId}-${sanitizeStorageFileName(params.fileName)}`,
+  ].join("/");
+}
+
 function sanitizeStorageFileName(value: string) {
   const sanitized = value
     .trim()
@@ -1832,6 +2089,7 @@ export class AgentManager {
   private readonly authClient: SupabaseClient<any, any, any>;
   private readonly serviceClient: SupabaseClient<any, any, any>;
   private readonly agentsClient: SupabaseClient<any, any, any>;
+  private readonly rbClient: SupabaseClient<any, any, any>;
   private readonly redis: Redis | null;
   private readonly memoryBuffers = new Map<string, ParsedWebhookMessage[]>();
   private readonly memoryTimers = new Map<string, NodeJS.Timeout>();
@@ -1863,6 +2121,8 @@ export class AgentManager {
   private readonly instancePhoneAllowlists: Record<string, string[]>;
 
   constructor(private readonly config: ServiceConfig) {
+    void this.transferLeadToAgent;
+
     this.authClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       db: { schema: "crm" },
@@ -1876,6 +2136,11 @@ export class AgentManager {
     this.agentsClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       db: { schema: "agents" },
+    });
+
+    this.rbClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      db: { schema: "rb" },
     });
 
     this.redis = config.redisUrl ? new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 }) : null;
@@ -3010,6 +3275,39 @@ export class AgentManager {
     }
   }
 
+  private async refreshRbBillingToolReadiness(acesId: number, bindingId: string) {
+    const { data: binding, error } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, config, is_enabled")
+      .eq("id", bindingId)
+      .eq("aces_id", acesId)
+      .eq("tool_key", "rb_billing")
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar a Tool RB", error);
+    }
+
+    if (!binding) {
+      return;
+    }
+
+    const ready = isRbBillingToolConfigReady(asRecord(binding.config));
+    const { error: updateError } = await this.agentsClient
+      .from("agent_tools")
+      .update({
+        readiness: ready ? "ready" : "needs_config",
+        is_enabled: ready ? Boolean(binding.is_enabled) : false,
+        last_validated_at: new Date().toISOString(),
+      })
+      .eq("id", binding.id)
+      .eq("aces_id", acesId);
+
+    if (updateError) {
+      throw new HttpError(500, "Nao foi possivel atualizar a prontidao da Tool RB", updateError);
+    }
+  }
+
   private async syncLegacyHandoffTool(agent: AgentRow) {
     const instruction = asString(agent.handoff_prompt);
     const targetPhone = asString(agent.handoff_target_phone);
@@ -3079,6 +3377,56 @@ export class AgentManager {
     }
   }
 
+  buildInitialRbBillingConfig(acesId: number, rbTokenApi: string): JsonRecord {
+    const usePilotDefaults = acesId === RB_PILOT_ACES_ID;
+    return {
+      rb_mode: "live",
+      rb_base_url: "https://app.registrobase.com.br:32077",
+      rb_token_api: rbTokenApi.trim(),
+      rb_empresa_ids: usePilotDefaults ? RB_PILOT_DEFAULTS.rb_empresa_ids : [],
+      pix_mapping_by_store: usePilotDefaults ? RB_PILOT_DEFAULTS.pix_mapping_by_store : {},
+      gupshup_defaults: usePilotDefaults ? RB_PILOT_DEFAULTS.gupshup_defaults : {},
+      trigger_time: usePilotDefaults ? RB_PILOT_DEFAULTS.trigger_time : "10:00",
+      timezone: "America/Sao_Paulo",
+      is_dr_oculos_bootstrap: false,
+      last_run_on_local_date: null,
+    };
+  }
+
+  async seedRbBillingToolConfig(acesId: number, agentId: string, rbTokenApi: string) {
+    const { data: currentTool, error: currentToolError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, config")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("tool_key", "rb_billing")
+      .maybeSingle();
+
+    if (currentToolError) {
+      throw new HttpError(500, "Nao foi possivel carregar a Tool rb_billing do agente", currentToolError);
+    }
+    if (!currentTool) {
+      throw new HttpError(400, "O template selecionado nao possui a Tool rb_billing");
+    }
+
+    const { error: updateError } = await this.agentsClient
+      .from("agent_tools")
+      .update({
+        config: {
+          ...asRecord(currentTool.config),
+          ...this.buildInitialRbBillingConfig(acesId, rbTokenApi),
+        },
+      })
+      .eq("id", currentTool.id)
+      .eq("aces_id", acesId);
+
+    if (updateError) {
+      throw new HttpError(500, "Nao foi possivel salvar a configuracao inicial da Tool rb_billing", updateError);
+    }
+
+    await this.refreshRbBillingToolReadiness(acesId, currentTool.id);
+  }
+
   private async refreshDerivedAgentState(agent: AgentRow) {
     const results = await Promise.allSettled([
       this.syncMissingStageRules(agent),
@@ -3108,6 +3456,11 @@ export class AgentManager {
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
 
     if (input.templateKey?.trim()) {
+      const templateKey = input.templateKey.trim();
+      if (templateKey === "cobranca_rb" && !input.rbTokenApi?.trim()) {
+        throw new HttpError(400, "Token API do Registro Base e obrigatorio para o template de cobranca");
+      }
+
       const { data, error } = await this.agentsClient
         .rpc("create_agent_from_template", {
           p_aces_id: context.acesId,
@@ -3117,7 +3470,7 @@ export class AgentManager {
           p_system_prompt: input.systemPrompt?.trim() || DEFAULT_SYSTEM_MESSAGE,
           p_model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
           p_temperature: input.temperature ?? 0.4,
-          p_template_key: input.templateKey.trim(),
+          p_template_key: templateKey,
           p_is_active: input.isActive ?? true,
         })
         .single();
@@ -3127,6 +3480,10 @@ export class AgentManager {
       }
 
       let agent = data as AgentRow;
+      if (templateKey === "cobranca_rb" && input.rbTokenApi?.trim()) {
+        await this.seedRbBillingToolConfig(context.acesId, agent.id, input.rbTokenApi.trim());
+      }
+
       if (input.unansweredFollowupEnabled !== undefined) {
         const { data: updatedAgent, error: updateError } = await this.agentsClient
           .from("ai_agents")
@@ -3276,13 +3633,27 @@ export class AgentManager {
       throw new HttpError(404, "Tool nao instalada neste agente");
     }
 
-    if (input.isEnabled === true && current.readiness !== "ready") {
+    const nextConfig =
+      input.config !== undefined
+        ? { ...asRecord(current.config), ...input.config }
+        : asRecord(current.config);
+    const isRbBillingTool = toolKey === "rb_billing";
+    const rbBillingReady = isRbBillingTool ? isRbBillingToolConfigReady(nextConfig) : false;
+
+    if (input.isEnabled === true && (isRbBillingTool ? !rbBillingReady : current.readiness !== "ready")) {
       throw new HttpError(409, "Conclua a configuracao da Tool antes de ativa-la");
     }
 
     const payload: JsonRecord = {};
-    if (input.isEnabled !== undefined) payload.is_enabled = input.isEnabled;
-    if (input.config !== undefined) payload.config = { ...asRecord(current.config), ...input.config };
+    if (input.config !== undefined) payload.config = nextConfig;
+    if (isRbBillingTool) {
+      payload.readiness = rbBillingReady ? "ready" : "needs_config";
+      payload.last_validated_at = new Date().toISOString();
+      payload.is_enabled =
+        input.isEnabled !== undefined ? Boolean(input.isEnabled && rbBillingReady) : Boolean(current.is_enabled && rbBillingReady);
+    } else if (input.isEnabled !== undefined) {
+      payload.is_enabled = input.isEnabled;
+    }
 
     const { error } = await this.agentsClient
       .from("agent_tools")
@@ -3296,6 +3667,9 @@ export class AgentManager {
 
     await this.syncPlatformToolReadiness(agentId, context.acesId);
     await this.syncDataToolReadiness(agentId, context.acesId);
+    if (isRbBillingTool) {
+      await this.refreshRbBillingToolReadiness(context.acesId, current.id);
+    }
     const tools = await this.listAgentTools(context, agentId);
     return tools.find((tool) => tool.key === toolKey) ?? null;
   }
@@ -3371,6 +3745,464 @@ export class AgentManager {
     if (error) throw new HttpError(500, "Nao foi possivel desativar a regra de lentes", error);
     await this.refreshPrescriptionToolReadiness(context.acesId, binding.id);
     return { success: true };
+  }
+
+  createAutomationGroup(operator: "all" | "any", children: any[]): any {
+    return {
+      id: randomUUID(),
+      type: "group",
+      operator,
+      children,
+    };
+  }
+
+  createAutomationPredicate(predicate: string, value?: any, values?: any[]): any {
+    const payload: JsonRecord = {
+      id: randomUUID(),
+      type: "predicate",
+      predicate,
+    };
+    if (Array.isArray(values)) {
+      payload.values = values;
+    } else {
+      payload.value = value;
+    }
+    return payload;
+  }
+
+  buildDefaultAutomationEntryRule(stageId: string, instanceName: string) {
+    return this.createAutomationGroup("all", [
+      this.createAutomationPredicate("stage_is", stageId),
+      this.createAutomationPredicate("instance_is", instanceName),
+      this.createAutomationPredicate("lead_visible_is_true", true),
+    ]);
+  }
+
+  buildDefaultAutomationExitRule() {
+    return this.createAutomationGroup("any", [this.createAutomationPredicate("lead_replied", true)]);
+  }
+
+  buildRbStageMapping(stages: any[]) {
+    const byName = new Map(stages.map((stage) => [stage.name, stage.id]));
+    const overdue1 = byName.get("Atrasado (1 dia)") ?? byName.get("Atrasado") ?? "";
+    const overdue4 = byName.get("Cobranca suave (4 dias)") ?? byName.get("Atrasado") ?? "";
+    const overdue15 = byName.get("Cobranca critica (15 dias)") ?? byName.get("Atrasado") ?? "";
+    return {
+      due_in_2_days: byName.get("A vencer (2 dias)") ?? byName.get("A vencer") ?? "",
+      due_today: byName.get("Vence hoje") ?? "",
+      overdue_1_day: overdue1,
+      overdue_4_days: overdue4,
+      overdue_15_days: overdue15,
+      in_attendance: byName.get("Atendimento") ?? "",
+      completed: byName.get("Finalizado") ?? "",
+    };
+  }
+
+  async ensureRbPipeline(acesId: number, name: string, description: string) {
+    const { data: existing, error: existingError } = await this.serviceClient
+      .from("pipelines")
+      .select("id, name, description")
+      .eq("aces_id", acesId)
+      .eq("name", name)
+      .maybeSingle();
+
+    if (existingError) {
+      throw new HttpError(500, "Nao foi possivel localizar o pipeline RB", existingError);
+    }
+    if (existing) {
+      return existing;
+    }
+
+    const { data, error } = await this.serviceClient
+      .from("pipelines")
+      .insert({
+        aces_id: acesId,
+        name,
+        description,
+        classifier_key: "crm_pipeline_classifier",
+        is_default: false,
+        is_active: true,
+      })
+      .select("id, name, description")
+      .single();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel criar o pipeline RB", error);
+    }
+    return data;
+  }
+
+  async ensureRbStages(acesId: number, pipelineId: string, seeds: any[]) {
+    const { data, error } = await this.serviceClient
+      .from("pipeline_stages")
+      .select("*")
+      .eq("aces_id", acesId)
+      .eq("pipeline_id", pipelineId)
+      .order("position", { ascending: true });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar as etapas RB", error);
+    }
+
+    const existingStages = (data ?? []) as any[];
+    const byName = new Map(existingStages.map((stage) => [stage.name, stage]));
+    const resultStages = [...existingStages];
+
+    for (const [index, seed] of seeds.entries()) {
+      if (byName.has(seed.name)) {
+        const existing = byName.get(seed.name);
+        const { data: updated, error: updateError } = await this.serviceClient
+          .from("pipeline_stages")
+          .update({
+            color: seed.color,
+            position: existing.position ?? index,
+            category: seed.category,
+            classifier_description: seed.classifierDescription,
+            classifier_positive_signals: seed.positiveSignals,
+            classifier_negative_signals: seed.negativeSignals,
+            classifier_examples: seed.examples,
+          })
+          .eq("id", existing.id)
+          .eq("aces_id", acesId)
+          .select("*")
+          .single();
+
+        if (updateError) {
+          throw new HttpError(500, `Nao foi possivel atualizar a etapa ${seed.name}`, updateError);
+        }
+        const nextStage = updated;
+        const targetIndex = resultStages.findIndex((item) => item.id === existing.id);
+        if (targetIndex >= 0) {
+          resultStages[targetIndex] = nextStage;
+        }
+        byName.set(seed.name, nextStage);
+        continue;
+      }
+
+      const { data: inserted, error: insertError } = await this.serviceClient
+        .from("pipeline_stages")
+        .insert({
+          aces_id: acesId,
+          pipeline_id: pipelineId,
+          name: seed.name,
+          color: seed.color,
+          position: index,
+          category: seed.category,
+          is_funnel_stage: false,
+          classifier_description: seed.classifierDescription,
+          classifier_positive_signals: seed.positiveSignals,
+          classifier_negative_signals: seed.negativeSignals,
+          classifier_examples: seed.examples,
+        })
+        .select("*")
+        .single();
+
+      if (insertError) {
+        throw new HttpError(500, `Nao foi possivel criar a etapa ${seed.name}`, insertError);
+      }
+      const stage = inserted;
+      resultStages.push(stage);
+      byName.set(seed.name, stage);
+    }
+    return Array.from(byName.values()).sort((left, right) => left.position - right.position);
+  }
+
+  async ensureRbAutomationJourney(params: {
+    acesId: number;
+    name: string;
+    stageId: string;
+    attendanceStageId: string;
+    instanceName: string;
+    humanized: boolean;
+    rbMessageKind: "reminder" | "charge";
+    rbDaysOffset: number;
+    rbPaymentTypeIds: string[];
+    stepLabel: string;
+    message: string;
+    gupshupTemplateId?: string;
+    gupshupTemplateParams?: string[];
+  }) {
+    const payload = {
+      aces_id: params.acesId,
+      name: params.name,
+      trigger_stage_id: params.stageId,
+      instance_name: params.instanceName,
+      is_active: true,
+      humanized_dispatch_enabled: params.humanized,
+      dispatch_limit_per_hour: 40,
+      humanized_dispatch_window_start: "08:00:00",
+      humanized_dispatch_window_end: "19:00:00",
+      entry_source: "rb",
+      entry_rule: this.buildDefaultAutomationEntryRule(params.stageId, params.instanceName),
+      exit_rule: this.buildDefaultAutomationExitRule(),
+      anchor_event: "stage_entered_at",
+      reentry_mode: "restart_on_match",
+      reply_target_stage_id: params.attendanceStageId,
+      builder_version: 2,
+    };
+    const { data: funnel, error: funnelError } = await this.serviceClient
+      .from("automation_funnels")
+      .upsert(payload, { onConflict: "aces_id,name" })
+      .select("*")
+      .single();
+    if (funnelError || !funnel) {
+      throw new HttpError(500, `Nao foi possivel salvar a jornada ${params.name}`, funnelError);
+    }
+    const { data: existingStep, error: existingStepError } = await this.serviceClient
+      .from("automation_steps")
+      .select("id")
+      .eq("funnel_id", funnel.id)
+      .eq("position", 0)
+      .maybeSingle();
+    if (existingStepError) {
+      throw new HttpError(500, `Nao foi possivel consultar a mensagem da jornada ${params.name}`, existingStepError);
+    }
+    const stepPayload = {
+      funnel_id: funnel.id,
+      position: 0,
+      label: params.stepLabel,
+      delay_minutes: 0,
+      message_template: params.message,
+      content_mode: "text",
+      media_asset_id: null,
+      media_kind: null,
+      media_caption: null,
+      gupshup_template_id: params.gupshupTemplateId ?? null,
+      gupshup_template_name: null,
+      gupshup_template_language: "pt_BR",
+      gupshup_template_params: params.gupshupTemplateParams ?? [],
+      rb_message_kind: params.rbMessageKind,
+      rb_days_offset: params.rbDaysOffset,
+      rb_payment_type_ids: params.rbPaymentTypeIds,
+      is_active: true,
+      step_rule: null,
+    };
+    const stepQuery = existingStep
+      ? this.serviceClient
+          .from("automation_steps")
+          .update(stepPayload)
+          .eq("id", existingStep.id)
+      : this.serviceClient.from("automation_steps").insert(stepPayload);
+    const { error: stepError } = await stepQuery.select("id").single();
+    if (stepError) {
+      throw new HttpError(500, `Nao foi possivel salvar a mensagem da jornada ${params.name}`, stepError);
+    }
+  }
+
+  async ensureRbAutomationJourneys(
+    acesId: number,
+    instanceName: string,
+    stageMapping: Record<string, string>,
+    accountName: string
+  ) {
+    const attendanceStageId = stageMapping.in_attendance;
+    if (!attendanceStageId) {
+      throw new HttpError(400, "Etapa Atendimento obrigatoria para o bootstrap RB");
+    }
+    const isPilot = acesId === RB_PILOT_ACES_ID;
+    const companyName = accountName;
+    const namePrefix = "Cobranca";
+
+    const journeys = [
+      {
+        key: "due_in_2_days",
+        name: `${namePrefix} - A vencer (2 dias)`,
+        stepLabel: "A vencer (2 dias)",
+        rbMessageKind: "reminder" as const,
+        rbDaysOffset: 2,
+        rbPaymentTypeIds: ["6"],
+        message: `Oi {nome}, tudo bem? Passando para lembrar que existe uma parcela prevista para {rb_next_due_date}. Se preferir, o pagamento pode ser feito via Pix {rb_pix_key}. Equipe ${companyName}`,
+      },
+      {
+        key: "due_today",
+        name: `${namePrefix} - Vence hoje`,
+        stepLabel: "Vence hoje",
+        rbMessageKind: "reminder" as const,
+        rbDaysOffset: 0,
+        rbPaymentTypeIds: ["6"],
+        message: `Oi {nome}, tudo bem? Passamos para lembrar que o seu titulo vence hoje. Para facilitar, o pagamento pode ser realizado via Pix {rb_pix_key}. Caso ja tenha pago, nos envie o comprovante. Equipe ${companyName}`,
+      },
+      {
+        key: "overdue_1_day",
+        name: `${namePrefix} - Atrasado 1 dia`,
+        stepLabel: "Atrasado (1 dia)",
+        rbMessageKind: "charge" as const,
+        rbDaysOffset: 1,
+        rbPaymentTypeIds: ["6"],
+        message: `Oi {nome}, tudo bem? Identificamos um valor em aberto de {rb_total_amount} com vencimento em {rb_next_due_date}. Para regularizar, voce pode pagar pelo Pix {rb_pix_key}. Caso ja tenha pago, nos envie o comprovante. Equipe ${companyName}`,
+      },
+      {
+        key: "overdue_4_days",
+        name: `${namePrefix} - Cobranca suave 4 dias`,
+        stepLabel: "Atrasado (4 dias)",
+        rbMessageKind: "charge" as const,
+        rbDaysOffset: 4,
+        rbPaymentTypeIds: ["6"],
+        message: `Oi {nome}, seguimos com um saldo pendente de {rb_total_amount} referente a {rb_titles_count} titulo(s). Para facilitar a baixa, use o Pix {rb_pix_key} e nos envie o comprovante. Equipe ${companyName}`,
+      },
+      {
+        key: "overdue_15_days",
+        name: `${namePrefix} - Cobranca critica 15 dias`,
+        stepLabel: "Atrasado (15 dias)",
+        rbMessageKind: "charge" as const,
+        rbDaysOffset: 15,
+        rbPaymentTypeIds: ["6"],
+        message: `Oi {nome}, precisamos da sua ajuda para regularizar o saldo de {rb_total_amount}, vencido desde {rb_next_due_date}. O pagamento pode ser feito via Pix {rb_pix_key}. Se precisar negociar, nos responda por aqui. Equipe ${companyName}`,
+      },
+    ];
+    for (const journey of journeys) {
+      const stageId = stageMapping[journey.key];
+      if (!stageId) {
+        continue;
+      }
+      const pilotTemplate = isPilot ? RB_PILOT_TEMPLATES[journey.key] : undefined;
+      const gupshupTemplateId = pilotTemplate?.id;
+      const gupshupTemplateParams = pilotTemplate?.params ?? [];
+
+      await this.ensureRbAutomationJourney({
+        acesId,
+        name: journey.name,
+        stageId,
+        attendanceStageId,
+        instanceName,
+        humanized: true,
+        rbMessageKind: journey.rbMessageKind,
+        rbDaysOffset: journey.rbDaysOffset,
+        rbPaymentTypeIds: [...journey.rbPaymentTypeIds],
+        stepLabel: journey.stepLabel,
+        message: journey.message,
+        gupshupTemplateId,
+        gupshupTemplateParams: [...gupshupTemplateParams],
+      });
+    }
+  }
+
+  async ensurePilotGupshupChannel(acesId: number, instanceName: string) {
+    const now = new Date().toISOString();
+    const gupshupClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
+      db: { schema: "gupshup" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const metaClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
+      db: { schema: "meta" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { error: channelError } = await gupshupClient
+      .from("channel")
+      .upsert({
+        aces_id: acesId,
+        instance_name: instanceName,
+        app_id: null,
+        app_name: RB_PILOT_GUPSHUP_CHANNEL.appName,
+        api_key: RB_PILOT_GUPSHUP_CHANNEL.apiKey,
+        phone_number: RB_PILOT_GUPSHUP_CHANNEL.phoneNumber,
+        status: "active",
+        updated_at: now,
+      }, { onConflict: "aces_id,instance_name" });
+    if (channelError) {
+      throw new HttpError(500, "Nao foi possivel vincular o canal Gupshup da conta piloto", channelError);
+    }
+    const { error: metaError } = await metaClient.from("instance").upsert({
+      aces_id: acesId,
+      instance_name: instanceName,
+      provider: "gupshup",
+      updated_at: now,
+    }, { onConflict: "aces_id,instance_name" });
+    if (metaError) {
+      throw new HttpError(500, "Nao foi possivel marcar a instancia como Gupshup", metaError);
+    }
+    const { error: instanceError } = await this.serviceClient
+      .from("instance")
+      .update({
+        status: "connected",
+        setup_status: "connected",
+        connection_mode: "external_webhook",
+        remote_webhook_connected_at: now,
+        setup_expires_at: null,
+        last_error: null,
+      })
+      .eq("aces_id", acesId)
+      .eq("instancia", instanceName);
+    if (instanceError) {
+      throw new HttpError(500, "Nao foi possivel atualizar o status da instancia Gupshup", instanceError);
+    }
+  }
+
+  async bootstrapRbBilling(context: AuthContext, agentId: string, _mode?: string) {
+    this.ensureAdmin(context);
+    const agent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "rb_billing");
+    
+    const { data: account } = await this.serviceClient
+      .from("accounts")
+      .select("name")
+      .eq("id", context.acesId)
+      .maybeSingle();
+    const accountName = account?.name || agent.name;
+
+    const isPilotAccount = context.acesId === RB_PILOT_ACES_ID;
+    const stageSeeds = RB_DEFAULT_STAGES;
+    const pipelineName = `Cobranca - ${accountName}`;
+    const pipelineDescription = `Pipeline base de cobranca para ${accountName}.`;
+    const pipeline = await this.ensureRbPipeline(context.acesId, pipelineName, pipelineDescription);
+    const stages = await this.ensureRbStages(context.acesId, pipeline.id, stageSeeds);
+    const stageMapping = this.buildRbStageMapping(stages);
+    
+    if (isPilotAccount) {
+      await this.ensurePilotGupshupChannel(context.acesId, agent.instance_name);
+    }
+    
+    await this.ensureRbAutomationJourneys(context.acesId, agent.instance_name, stageMapping, accountName);
+
+    const nextConfig: JsonRecord = {
+      ...(isPilotAccount ? RB_PILOT_DEFAULTS : {}),
+      dispatch_mode: "humanized",
+      timezone: "America/Sao_Paulo",
+      trigger_time: isPilotAccount ? RB_PILOT_DEFAULTS.trigger_time : "10:00",
+      stage_mapping: stageMapping,
+      pipeline_id: pipeline.id,
+      is_dr_oculos_bootstrap: isPilotAccount,
+    };
+    if (!isPilotAccount) {
+      nextConfig.rb_mode = "mock";
+      nextConfig.rb_base_url = "https://app.registrobase.com.br:32077";
+      nextConfig.rb_token_api = "";
+      nextConfig.rb_empresa_ids = [];
+      nextConfig.pix_mapping_by_store = {};
+      nextConfig.gupshup_defaults = {};
+    }
+    const { data: currentTool, error: currentToolError } = await this.agentsClient
+      .from("agent_tools")
+      .select("config")
+      .eq("id", binding.id)
+      .eq("aces_id", context.acesId)
+      .maybeSingle();
+    if (currentToolError || !currentTool) {
+      throw new HttpError(500, "Nao foi possivel carregar a configuracao atual da Tool RB", currentToolError);
+    }
+    const { error: updateError } = await this.agentsClient
+      .from("agent_tools")
+      .update({
+        config: {
+          ...asRecord(currentTool.config),
+          ...nextConfig,
+        },
+      })
+      .eq("id", binding.id)
+      .eq("aces_id", context.acesId);
+    if (updateError) {
+      throw new HttpError(500, "Nao foi possivel salvar o bootstrap da Tool RB", updateError);
+    }
+    await this.refreshRbBillingToolReadiness(context.acesId, binding.id);
+    await this.syncDataToolReadiness(agentId, context.acesId);
+    const tools = await this.listAgentTools(context, agentId);
+    const tool = tools.find((item) => item.key === "rb_billing") ?? null;
+    return {
+      tool,
+      pipeline,
+      stages,
+      stageMapping,
+    };
   }
 
   private async getAgentToolBinding(acesId: number, agentId: string, toolKey: string) {
@@ -3522,6 +4354,199 @@ export class AgentManager {
       excludedItemId: input.excludedItemId ?? null,
       faceAnalysis: null,
     });
+  }
+
+  async listAutomationMediaAssets(context: AuthContext, instanceName: string | null | undefined) {
+    this.ensureAdmin(context);
+    const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId, context.role);
+    const trimmedInstanceName = instanceName?.trim() || null;
+    if (trimmedInstanceName && !accessibleInstances.has(trimmedInstanceName)) {
+      return [];
+    }
+
+    let query = this.serviceClient
+      .from("automation_media_assets")
+      .select("id, instance_name, display_name, source_url, media_kind, mime_type, file_name, file_size, default_caption")
+      .eq("aces_id", context.acesId)
+      .eq("is_active", true)
+      .eq("upload_status", "ready");
+
+    if (trimmedInstanceName) {
+      query = query.eq("instance_name", trimmedInstanceName);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel listar midias para automacao", error);
+    }
+
+    return (data ?? [])
+      .filter((asset) => accessibleInstances.has(String(asset.instance_name ?? "")))
+      .map((asset) => ({
+        id: String(asset.id),
+        instance_name: String(asset.instance_name ?? ""),
+        display_name: String(asset.display_name ?? ""),
+        source_url: String(asset.source_url ?? ""),
+        media_kind: asset.media_kind === "document" ? ("document" as const) : ("image" as const),
+        mime_type: typeof asset.mime_type === "string" ? asset.mime_type : null,
+        file_name: typeof asset.file_name === "string" ? asset.file_name : null,
+        file_size: typeof asset.file_size === "number" ? asset.file_size : Number(asset.file_size ?? 0) || null,
+        default_caption: typeof asset.default_caption === "string" ? asset.default_caption : null,
+      }));
+  }
+
+  async createAutomationMediaUploadUrl(
+    context: AuthContext,
+    input: {
+      instanceName: string;
+      fileName: string;
+      mimeType: string;
+      fileSize: number;
+      kind: "document" | "image";
+    }
+  ) {
+    this.ensureAdmin(context);
+    const instanceName = String(input.instanceName ?? "").trim();
+    if (!instanceName) {
+      throw new HttpError(400, "instanceName e obrigatorio");
+    }
+    await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
+    const fileName = String(input.fileName ?? "").trim();
+    if (!fileName) {
+      throw new HttpError(400, "fileName e obrigatorio");
+    }
+    const mimeType = normalizeMimeType(String(input.mimeType ?? ""));
+    const resolvedKind = resolveAutomationMediaKind(mimeType);
+    if (!resolvedKind) {
+      throw new HttpError(400, "MIME type nao permitido para midia da automacao");
+    }
+    if (input.kind !== resolvedKind) {
+      throw new HttpError(400, "kind nao corresponde ao MIME type informado");
+    }
+    const fileSize = Number(input.fileSize);
+    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > AUTOMATION_MEDIA_MAX_FILE_SIZE) {
+      throw new HttpError(400, "Tamanho do arquivo invalido para midia da automacao");
+    }
+    const assetId = randomUUID();
+    const storagePath = buildAutomationMediaStoragePath({
+      acesId: context.acesId,
+      instanceName,
+      assetId,
+      fileName,
+    });
+    const { error: insertError } = await this.serviceClient
+      .from("automation_media_assets")
+      .insert({
+        id: assetId,
+        aces_id: context.acesId,
+        instance_name: instanceName,
+        display_name: fileName,
+        source_url: "",
+        storage_bucket: AUTOMATION_MEDIA_BUCKET,
+        storage_path: storagePath,
+        media_kind: resolvedKind,
+        mime_type: mimeType,
+        file_name: sanitizeStorageFileName(fileName),
+        file_size: Math.floor(fileSize),
+        upload_status: "pending",
+        is_active: false,
+      });
+    if (insertError) {
+      throw new HttpError(500, "Nao foi possivel registrar o upload da midia da automacao", insertError);
+    }
+    const { data, error } = await this.serviceClient.storage
+      .from(AUTOMATION_MEDIA_BUCKET)
+      .createSignedUploadUrl(storagePath);
+    if (error || !data?.signedUrl) {
+      await this.serviceClient
+        .from("automation_media_assets")
+        .update({ upload_status: "failed", updated_at: new Date().toISOString() })
+        .eq("id", assetId);
+      throw new HttpError(500, "Nao foi possivel gerar URL assinada de upload", error);
+    }
+    return {
+      success: true,
+      assetId,
+      bucket: AUTOMATION_MEDIA_BUCKET,
+      storagePath,
+      uploadUrl: data.signedUrl,
+      uploadToken: data.token,
+      maxFileSize: AUTOMATION_MEDIA_MAX_FILE_SIZE,
+      mimeType,
+      kind: resolvedKind,
+    };
+  }
+
+  async completeAutomationMediaUpload(context: AuthContext, assetIdInput: string) {
+    this.ensureAdmin(context);
+    const assetId = String(assetIdInput ?? "").trim();
+    if (!isUuid(assetId)) {
+      throw new HttpError(400, "assetId invalido");
+    }
+    const { data, error } = await this.serviceClient
+      .from("automation_media_assets")
+      .select("id, aces_id, instance_name, display_name, source_url, storage_bucket, storage_path, media_kind, mime_type, file_name, file_size, default_caption, upload_status, is_active, created_at, updated_at")
+      .eq("id", assetId)
+      .eq("aces_id", context.acesId)
+      .maybeSingle();
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar a midia da automacao", error);
+    }
+    if (!data) {
+      throw new HttpError(404, "Midia da automacao nao encontrada");
+    }
+    const asset = data as JsonRecord;
+    await this.ensureInstanceOwnership(context.acesId, String(asset.instance_name), context.crmUserId, context.role);
+    if (!asset.storage_bucket || !asset.storage_path) {
+      throw new HttpError(400, "Midia da automacao sem caminho de storage");
+    }
+    if (asset.upload_status === "ready" && asset.is_active && asset.source_url) {
+      return {
+        success: true,
+        asset: {
+          id: String(asset.id),
+          instance_name: String(asset.instance_name),
+          display_name: String(asset.display_name),
+          source_url: String(asset.source_url),
+          media_kind: asset.media_kind as "document" | "image",
+          mime_type: asset.mime_type as string | null,
+          file_name: asset.file_name as string | null,
+          file_size: asset.file_size as number | null,
+          default_caption: asset.default_caption as string | null,
+        },
+      };
+    }
+    await this.assertStorageObjectExistsInBucket(String(asset.storage_bucket), String(asset.storage_path));
+    const sourceUrl = this.createPublicStorageUrl(String(asset.storage_bucket), String(asset.storage_path));
+    const { data: updatedAsset, error: updateError } = await this.serviceClient
+      .from("automation_media_assets")
+      .update({
+        source_url: sourceUrl,
+        upload_status: "ready",
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", asset.id)
+      .eq("aces_id", context.acesId)
+      .select("id, instance_name, display_name, source_url, media_kind, mime_type, file_name, file_size, default_caption")
+      .single();
+    if (updateError) {
+      throw new HttpError(500, "Nao foi possivel concluir a midia da automacao", updateError);
+    }
+    return {
+      success: true,
+      asset: {
+        id: String(updatedAsset.id),
+        instance_name: String(updatedAsset.instance_name ?? ""),
+        display_name: String(updatedAsset.display_name ?? ""),
+        source_url: String(updatedAsset.source_url ?? ""),
+        media_kind: updatedAsset.media_kind === "document" ? ("document" as const) : ("image" as const),
+        mime_type: typeof updatedAsset.mime_type === "string" ? updatedAsset.mime_type : null,
+        file_name: typeof updatedAsset.file_name === "string" ? updatedAsset.file_name : null,
+        file_size: typeof updatedAsset.file_size === "number" ? updatedAsset.file_size : Number(updatedAsset.file_size ?? 0) || null,
+        default_caption: typeof updatedAsset.default_caption === "string" ? updatedAsset.default_caption : null,
+      },
+    };
   }
 
   async listToolMediaAssets(context: AuthContext, agentId: string) {
@@ -3953,11 +4978,15 @@ export class AgentManager {
         ? await this.getAnyAgentByInstance(lead.instancia, context.acesId, context.crmUserId, context.role)
         : null;
 
-    return this.resolveLeadAiState(lead.id, agent, lead.instancia);
+    return this.resolveLeadAiState(lead.id, agent, lead.instancia, lead.interaction_mode);
   }
 
   async updateLeadAiState(context: AuthContext, leadId: string, enabled: boolean) {
     const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    if (enabled && lead.interaction_mode === "human") {
+      throw new HttpError(409, "Finalize o atendimento humano antes de reativar a IA.");
+    }
+
     const instanceName = lead.instancia?.trim() ?? "";
     if (!instanceName) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
@@ -3974,14 +5003,7 @@ export class AgentManager {
     }
 
     await this.upsertLeadState(agent.id, lead.id, enabled
-      ? {
-          manual_ai_enabled: agent.is_active ? null : true,
-          freeze_until: null,
-          status: "active",
-          pause_origin: null,
-          pause_reference: null,
-          paused_at: null,
-        }
+      ? this.buildEnabledLeadAiPayload(agent)
       : {
           manual_ai_enabled: false,
           freeze_until: null,
@@ -3991,7 +5013,60 @@ export class AgentManager {
           paused_at: new Date().toISOString(),
         });
 
-    return this.resolveLeadAiState(lead.id, agent, instanceName);
+    return this.resolveLeadAiState(lead.id, agent, instanceName, lead.interaction_mode);
+  }
+
+  async finalizeHumanHandoff(context: AuthContext, input: FinalizeHumanHandoffInput) {
+    const lead = await this.loadLeadById(input.leadId, context.acesId, context.crmUserId, context.role);
+    if (lead.interaction_mode !== "human") {
+      throw new HttpError(409, "Este lead nao esta em atendimento humano.");
+    }
+
+    if (!isUuid(input.stageId)) {
+      throw new HttpError(400, "stageId invalido");
+    }
+
+    const instanceName = lead.instancia?.trim() ?? "";
+    if (!instanceName) {
+      throw new HttpError(409, "Sem agente configurado para esta instancia");
+    }
+
+    const agent = await this.getAnyAgentByInstance(
+      instanceName,
+      context.acesId,
+      context.crmUserId,
+      context.role
+    );
+    if (!agent) {
+      throw new HttpError(409, "Sem agente configurado para esta instancia");
+    }
+
+    const { error: moveStageError } = await this.serviceClient.rpc("rpc_move_lead_to_stage", {
+      p_lead_id: lead.id,
+      p_stage_id: input.stageId,
+    });
+    if (moveStageError) {
+      throw new HttpError(500, "Nao foi possivel mover o lead para a etapa selecionada", moveStageError);
+    }
+
+    await this.updateLeadInteractionMode(context.acesId, lead.id, "ai");
+    await this.upsertLeadState(agent.id, lead.id, this.buildEnabledLeadAiPayload(agent));
+    await this.saveMessage({
+      leadId: lead.id,
+      acesId: context.acesId,
+      content: INTERNAL_HANDOFF_COMPLETE_MESSAGE,
+      direction: "outbound",
+      sourceType: "system",
+      instanceName,
+      conversationId: null,
+    });
+
+    return {
+      success: true as const,
+      leadId: lead.id,
+      interactionMode: "ai" as const,
+      stageId: input.stageId,
+    };
   }
 
   async listInstances(context: AuthContext) {
@@ -4891,7 +5966,7 @@ export class AgentManager {
   }
 
   private chatMessagesCacheKey(acesId: number, leadId: string) {
-    return `crm-chat:messages:${acesId}:${leadId}`;
+    return `crm-chat:messages:v2:${acesId}:${leadId}`;
   }
 
   private async invalidateChatMessagesCache(acesId: number, leadId: string) {
@@ -4933,6 +6008,37 @@ export class AgentManager {
 
     const { data, error } = await this.serviceClient.storage
       .from(CHAT_ATTACHMENTS_BUCKET)
+      .list(directory, { limit: 100, search: fileName });
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar o objeto no Storage", error);
+    }
+
+    const found = (data ?? []).some((item) => item.name === fileName);
+    if (!found) {
+      throw new HttpError(400, "Upload assinado ainda nao foi concluido");
+    }
+  }
+
+  private createPublicStorageUrl(bucket: string, storagePath: string) {
+    const { data } = this.serviceClient.storage.from(bucket).getPublicUrl(storagePath);
+    if (!data?.publicUrl) {
+      throw new HttpError(500, "Nao foi possivel gerar URL publica da midia");
+    }
+    return data.publicUrl;
+  }
+
+  private async assertStorageObjectExistsInBucket(bucket: string, storagePath: string) {
+    const pathParts = storagePath.split("/").filter(Boolean);
+    const fileName = pathParts.pop();
+    const directory = pathParts.join("/");
+
+    if (!fileName || !directory) {
+      throw new HttpError(400, "Caminho de storage invalido");
+    }
+
+    const { data, error } = await this.serviceClient.storage
+      .from(bucket)
       .list(directory, { limit: 100, search: fileName });
 
     if (error) {
@@ -5125,7 +6231,7 @@ export class AgentManager {
   ) {
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
       .eq("id", leadId)
       .eq("aces_id", acesId)
       .maybeSingle();
@@ -5149,7 +6255,7 @@ export class AgentManager {
     const variants = phoneVariants(phone);
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, last_message_at, updated_at")
       .eq("aces_id", acesId)
       .in("contact_phone", variants)
       .order("updated_at", { ascending: false })
@@ -5187,7 +6293,7 @@ export class AgentManager {
   private async loadLeadForAgent(agent: AgentRow, leadId: string) {
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
       .eq("id", leadId)
       .eq("aces_id", agent.aces_id)
       .maybeSingle();
@@ -5256,7 +6362,7 @@ export class AgentManager {
           })
           .eq("id", found.id)
           .eq("aces_id", acesId)
-          .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
+          .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, last_message_at, updated_at")
           .single();
 
         if (error) {
@@ -5289,7 +6395,7 @@ export class AgentManager {
       owner_id: resolvedOwnerId,
       view: true,
     })
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, last_city, notes, check, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, last_message_at, updated_at")
       .single();
 
     if (error) {
@@ -5397,7 +6503,8 @@ export class AgentManager {
   private async resolveLeadAiState(
     leadId: string,
     agent: AgentRow | null,
-    instanceName?: string | null
+    instanceName?: string | null,
+    interactionMode?: "ai" | "human" | null
   ): Promise<LeadAiControlState> {
     if (!agent) {
       return {
@@ -5432,6 +6539,15 @@ export class AgentManager {
       manualAiEnabled,
       pausedUntil,
     };
+
+    if (interactionMode === "human") {
+      return {
+        ...baseState,
+        enabled: false,
+        bypassingGlobalInactive: false,
+        reason: "human_handoff",
+      };
+    }
 
     if (manualAiEnabled === false) {
       return {
@@ -5499,6 +6615,36 @@ export class AgentManager {
         error,
         "Nao foi possivel atualizar o estado da IA para o lead"
       );
+    }
+  }
+
+  private buildEnabledLeadAiPayload(agent: AgentRow): JsonRecord {
+    return {
+      manual_ai_enabled: agent.is_active ? null : true,
+      freeze_until: null,
+      status: "active",
+      pause_origin: null,
+      pause_reference: null,
+      paused_at: null,
+    };
+  }
+
+  private async updateLeadInteractionMode(
+    acesId: number,
+    leadId: string,
+    interactionMode: "ai" | "human"
+  ) {
+    const { error } = await this.serviceClient
+      .from("leads")
+      .update({
+        interaction_mode: interactionMode,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", leadId)
+      .eq("aces_id", acesId);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel atualizar o modo de interacao do lead", error);
     }
   }
 
@@ -6830,87 +7976,13 @@ export class AgentManager {
   }
 
   private async getHandoffConfig(agent: AgentRow) {
-    const { data: binding, error: bindingError } = await this.agentsClient
-      .from("agent_tools")
-      .select("id, is_enabled, readiness")
-      .eq("agent_id", agent.id)
-      .eq("aces_id", agent.aces_id)
-      .eq("tool_key", "forwarding")
-      .maybeSingle();
-
-    if (bindingError) {
-      throw new HttpError(500, "Nao foi possivel carregar a Tool de encaminhamento", bindingError);
-    }
-
-    if (binding?.is_enabled && binding.readiness === "ready") {
-      const { data: destination, error: destinationError } = await this.agentsClient
-        .from("forwarding_destinations")
-        .select("mode, target_phone, target_agent_id, context_instruction")
-        .eq("agent_tool_id", binding.id)
-        .eq("aces_id", agent.aces_id)
-        .eq("is_active", true)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (destinationError) {
-        throw new HttpError(500, "Nao foi possivel carregar o destino do encaminhamento", destinationError);
-      }
-
-      if (destination) {
-        return {
-          enabled: true,
-          instruction: asString(destination.context_instruction),
-          targetPhone: asString(destination.target_phone),
-          targetAgentId: asString(destination.target_agent_id),
-          mode: destination.mode === "agent" ? ("agent" as const) : ("external_notification" as const),
-          source: "tool" as const,
-        };
-      }
-    }
-
     const instruction = asString(agent.handoff_prompt);
-    const targetPhone = asString(agent.handoff_target_phone);
 
     return {
-      enabled: Boolean(agent.handoff_enabled && instruction && targetPhone),
+      enabled: Boolean(agent.handoff_enabled && instruction),
       instruction,
-      targetPhone,
-      targetAgentId: null,
-      mode: "external_notification" as const,
-      source: "legacy" as const,
+      mode: "internal" as const,
     };
-  }
-
-  private buildHandoffNotification(
-    agent: AgentRow,
-    lead: LeadRow,
-    response: StructuredModelResponse,
-    messages: MessageRow[]
-  ) {
-    const latestLeadMessage = [...messages]
-      .reverse()
-      .find((message) => message.source_type === "lead")?.content;
-
-    const reason =
-      response.handoff_reason.trim() ||
-      response.reason.trim() ||
-      "Condicao de handoff atendida pela IA.";
-
-    return [
-      "[Handoff IA]",
-      `Agente: ${agent.name}`,
-      `Instancia: ${agent.instance_name}`,
-      `Lead: ${lead.name?.trim() || "Sem nome"}`,
-      `Telefone: ${lead.contact_phone || "Nao informado"}`,
-      lead.last_city ? `Cidade: ${lead.last_city}` : null,
-      `Motivo: ${reason}`,
-      latestLeadMessage
-        ? `Ultima mensagem do lead: ${truncateText(latestLeadMessage, 500)}`
-        : null,
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n");
   }
 
   private async transferLeadToAgent(params: {
@@ -7132,62 +8204,42 @@ export class AgentManager {
         notification: null,
       };
     }
-
-    const notification = this.buildHandoffNotification(agent, lead, response, messages);
-    const sourceMessageId = [...messages]
+    const latestLeadMessage = [...messages]
       .reverse()
-      .find((message) => message.source_type === "lead")?.id ?? null;
+      .find((message) => message.source_type === "lead")?.content;
+    const summary =
+      response.reason.trim() ||
+      latestLeadMessage?.trim() ||
+      "Resumo indisponivel.";
 
-    if (config.mode === "agent" && config.targetAgentId) {
-      return this.transferLeadToAgent({
-        sourceAgent: agent,
-        targetAgentId: config.targetAgentId,
-        lead,
-        reason,
-        notification,
-        sourceMessageId,
-      });
-    }
-
-    if (!config.targetPhone) {
-      return {
-        triggered: false,
-        mode: config.mode,
-        targetPhone: null,
-        targetAgentId: config.targetAgentId,
-        reason: "Destino de encaminhamento incompleto.",
-        notification: null,
-      };
-    }
-
-    await this.sendWhatsAppMessage(agent.instance_name, config.targetPhone, notification, {
-      acesId: agent.aces_id,
+    await this.updateLeadInteractionMode(agent.aces_id, lead.id, "human");
+    await this.freezeLead(agent, lead.id, "ai_policy", reason);
+    await this.saveMessage({
       leadId: lead.id,
-      agentId: agent.id,
-      sourceType: "handoff",
-    });
-
-    await this.enqueueBiEvent({
       acesId: agent.aces_id,
-      aggregateType: "lead",
-      aggregateId: lead.id,
-      eventType: "tool.forwarding.external_notification.succeeded",
-      payload: {
-        lead_id: lead.id,
-        agent_id: agent.id,
-        tool_key: "forwarding",
-        status: "succeeded",
-        source_message_id: sourceMessageId,
-      },
+      content: INTERNAL_HANDOFF_TRANSITION_MESSAGE,
+      direction: "outbound",
+      sourceType: "system",
+      instanceName: agent.instance_name,
+      conversationId: null,
+    });
+    await this.saveMessage({
+      leadId: lead.id,
+      acesId: agent.aces_id,
+      content: buildInternalHandoffNote(reason, summary),
+      direction: "outbound",
+      sourceType: "system",
+      instanceName: agent.instance_name,
+      conversationId: null,
     });
 
     return {
       triggered: true,
-      mode: "external_notification",
-      targetPhone: config.targetPhone,
+      mode: "internal",
+      targetPhone: null,
       targetAgentId: null,
       reason,
-      notification,
+      notification: null,
     };
   }
 
@@ -7200,6 +8252,7 @@ export class AgentManager {
   ): Promise<GeminiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = await this.getHandoffConfig(agent);
     const temporalContext = buildNativeTemporalContext();
+    const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
       .join("\n");
@@ -7225,6 +8278,7 @@ export class AgentManager {
 
     const prompt = [
       "Voce e um worker interno de analise operacional do CRM.",
+      billingContext,
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
@@ -7277,8 +8331,6 @@ export class AgentManager {
         enabled: handoffConfig.enabled,
         mode: handoffConfig.mode,
         instruction: handoffConfig.instruction ?? null,
-        target_phone_configured: Boolean(handoffConfig.targetPhone),
-        target_agent_configured: Boolean(handoffConfig.targetAgentId),
       })}`,
       "",
       `Historico recente:\n${conversation}`,
@@ -7303,6 +8355,64 @@ export class AgentManager {
     };
   }
 
+  private async getLeadBillingContextString(leadId: string, agentId: string, acesId: number): Promise<string> {
+    try {
+      const { data: toolBinding } = await this.agentsClient
+        .from("agent_tools")
+        .select("id, is_enabled")
+        .eq("agent_id", agentId)
+        .eq("aces_id", acesId)
+        .eq("tool_key", "rb_billing")
+        .maybeSingle();
+
+      if (!toolBinding || !toolBinding.is_enabled) {
+        return "";
+      }
+
+      const { data: billingInfo, error } = await this.rbClient
+        .rpc("get_billing_info", { p_lead_id: leadId })
+        .maybeSingle();
+
+      if (error || !billingInfo) {
+        return "";
+      }
+
+      const info = billingInfo as any;
+      if (info.total_amount === null || info.total_amount === undefined) {
+        return "";
+      }
+
+      const totalAmount = Number(info.total_amount);
+      const titlesCount = Number(info.titles_count || 0);
+      const pixKey = String(info.pix_key || "");
+      const dueDateStr = info.next_due_date ? String(info.next_due_date) : "";
+
+      let dateText = "";
+      if (dueDateStr) {
+        const dueDate = new Date(`${dueDateStr}T00:00:00`);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        dueDate.setHours(0, 0, 0, 0);
+
+        const formattedDate = dueDate.toLocaleDateString("pt-BR");
+        if (dueDate < today) {
+          dateText = `${formattedDate} (Atrasado)`;
+        } else {
+          dateText = `${formattedDate} (A vencer)`;
+        }
+      }
+
+      return `\nDados de Cobrança (Registro Base):\n` +
+        `- Saldo Devedor Total: R$ ${totalAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+        `- Quantidade de Títulos: ${titlesCount}\n` +
+        `- Situação do Vencimento: ${dateText}\n` +
+        `- Chave PIX da Empresa Devedora: ${pixKey}\n`;
+    } catch (e) {
+      console.error("[crm-ai] Erro ao obter contexto de cobranca do lead:", e);
+      return "";
+    }
+  }
+
   private async generateAgentReply(
     agent: AgentRow,
     lead: LeadRow,
@@ -7319,9 +8429,11 @@ export class AgentManager {
     const conversation = messages
       .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
       .join("\n");
+    const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
 
     const prompt = [
       agent.system_prompt,
+      billingContext,
       "",
       "Voce e o agente de atendimento que responde ao lead pelo WhatsApp.",
       "A analise operacional do CRM ja foi feita por um worker interno. Nao altere etapa, tags, resumo, check ou follow-up.",
@@ -8189,7 +9301,12 @@ export class AgentManager {
     const bufferedEntries = await this.consumeBufferedEntries(agentId, leadId);
 
     const lead = await this.loadLeadForAgent(agent, leadId);
-    const aiState = await this.resolveLeadAiState(lead.id, agent, agent.instance_name);
+    const aiState = await this.resolveLeadAiState(
+      lead.id,
+      agent,
+      agent.instance_name,
+      lead.interaction_mode
+    );
     if (!aiState.enabled) {
       return;
     }
@@ -8663,9 +9780,14 @@ export class AgentManager {
         message,
       });
 
-      const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
+      const aiState = await this.resolveLeadAiState(
+        lead.id,
+        agent,
+        message.instanceName,
+        lead.interaction_mode
+      );
       let freezeUntil: string | null = null;
-      if (agent && aiState.reason !== "manual_off") {
+      if (agent && aiState.reason !== "manual_off" && aiState.reason !== "human_handoff") {
         freezeUntil = await this.freezeLead(
           agent,
           lead.id,
@@ -8733,7 +9855,12 @@ export class AgentManager {
       message,
     });
 
-    const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
+    const aiState = await this.resolveLeadAiState(
+      lead.id,
+      agent,
+      message.instanceName,
+      lead.interaction_mode
+    );
 
     if (!agent || !aiState.enabled) {
       return {
@@ -8745,6 +9872,8 @@ export class AgentManager {
         reason:
           aiState.reason === "manual_off"
             ? "Mensagem registrada com IA desligada para este lead"
+            : aiState.reason === "human_handoff"
+              ? "Mensagem registrada com handoff humano ativo"
             : aiState.reason === "auto_pause"
               ? "Mensagem registrada com IA pausada por atendimento humano"
               : aiState.reason === "global_inactive"
@@ -8849,7 +9978,12 @@ export class AgentManager {
       message,
     });
 
-    const aiState = await this.resolveLeadAiState(lead.id, agent, message.instanceName);
+    const aiState = await this.resolveLeadAiState(
+      lead.id,
+      agent,
+      message.instanceName,
+      lead.interaction_mode
+    );
     if (!agent || !aiState.enabled) {
       return {
         success: true,
@@ -8860,6 +9994,8 @@ export class AgentManager {
         reason:
           aiState.reason === "manual_off"
             ? "Mensagem registrada com IA desligada para este lead"
+            : aiState.reason === "human_handoff"
+              ? "Mensagem registrada com handoff humano ativo"
             : aiState.reason === "auto_pause"
               ? "Mensagem registrada com IA pausada por atendimento humano"
               : aiState.reason === "global_inactive"
@@ -9100,6 +10236,8 @@ export class AgentManager {
       sentAt: message.sent_at,
       leadName: lead.name ?? "",
       senderName: message.created_by ? userNames.get(message.created_by) ?? null : null,
+      sourceType: message.source_type,
+      systemKind: deriveChatSystemKind(message),
       providerStatus: message.provider_status ?? null,
       attachments: attachmentsByMessageId.get(message.id) ?? [],
     }));
@@ -9438,8 +10576,38 @@ export class AgentManager {
     configuredAgent: AgentRow | null;
     lead: LeadRow;
     aiState: { reason: LeadAiReason } | null;
+    summary: string;
   }) {
-    if (!params.configuredAgent || params.aiState?.reason === "manual_off") {
+    if (params.lead.interaction_mode !== "human") {
+      await this.updateLeadInteractionMode(params.context.acesId, params.lead.id, "human");
+      await this.saveMessage({
+        leadId: params.lead.id,
+        acesId: params.context.acesId,
+        content: INTERNAL_HANDOFF_TRANSITION_MESSAGE,
+        direction: "outbound",
+        sourceType: "system",
+        instanceName: params.lead.instancia,
+        conversationId: null,
+      });
+      await this.saveMessage({
+        leadId: params.lead.id,
+        acesId: params.context.acesId,
+        content: buildInternalHandoffNote(
+          "Mensagem manual enviada pelo operador.",
+          params.summary.trim() || "Resumo indisponivel."
+        ),
+        direction: "outbound",
+        sourceType: "system",
+        instanceName: params.lead.instancia,
+        conversationId: null,
+      });
+    }
+
+    if (
+      !params.configuredAgent ||
+      params.aiState?.reason === "manual_off" ||
+      params.aiState?.reason === "human_handoff"
+    ) {
       return;
     }
 
@@ -9595,6 +10763,7 @@ export class AgentManager {
       configuredAgent: params.configuredAgent,
       lead: params.lead,
       aiState: params.aiState,
+      summary: caption || intent.file_name || "Anexo enviado pelo operador.",
     });
 
     return { success: true, messageId: intent.message_id, attachmentId: intent.attachment_id };
@@ -9622,7 +10791,12 @@ export class AgentManager {
       context.role
     );
     const aiState = configuredAgent
-      ? await this.resolveLeadAiState(lead.id, configuredAgent, instanceName)
+      ? await this.resolveLeadAiState(
+          lead.id,
+          configuredAgent,
+          instanceName,
+          lead.interaction_mode
+        )
       : null;
 
     if (input.attachment) {
@@ -9645,7 +10819,7 @@ export class AgentManager {
       createdBy: context.crmUserId,
     });
 
-    await this.pauseAgentAfterManualSend({ context, configuredAgent, lead, aiState });
+    await this.pauseAgentAfterManualSend({ context, configuredAgent, lead, aiState, summary: content });
 
     return { success: true };
   }

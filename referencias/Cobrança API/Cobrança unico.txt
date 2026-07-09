@@ -1,0 +1,1411 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\n\nconst clientes = {};\n\nfor (const item of input) {\n  const result = item.json.RESULT || [];\n\n  for (const page of result) {\n    const data = page.data || [];\n\n    for (const row of data) {\n      const clieId = row.CLIE_ID;\n\n      if (!clieId) continue;\n\n      const valor = Number(row.FIN_VLLIQUIDO || 0);\n\n      if (!clientes[clieId]) {\n        clientes[clieId] = {\n          ACES_ID: row.ACES_ID,\n          CLIE_ID: row.CLIE_ID,\n          CLIE_NOMEPRINC: row.CLIE_NOMEPRINC,\n          CLIE_NOMESEC: row.CLIE_NOMESEC,\n          CLIE_CPFCNPJ: row.CLIE_CPFCNPJ,\n          CLIE_FONE: row.CLIE_FONE,\n          CNPJ: row.EMP_CPFCNPJ,\n          forma_id: row.forma_id,\n          total_FIN_VLLIQUIDO: 0,\n          quantidade_titulos: 0,\n          titulos: []\n        };\n      }\n\n      clientes[clieId].total_FIN_VLLIQUIDO += valor;\n      clientes[clieId].quantidade_titulos += 1;\n\n      clientes[clieId].titulos.push({\n        Titulo: row.Titulo,\n        FIN_VLLIQUIDO: valor,\n        DtVencimento: row.DtVencimento,\n        DiasVenc: row.DiasVenc\n      });\n    }\n  }\n}\n\nreturn Object.values(clientes).map(cliente => ({\n  json: {\n    ...cliente,\n    total_FIN_VLLIQUIDO: Number(cliente.total_FIN_VLLIQUIDO.toFixed(2))\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -3568
+      ],
+      "id": "bd6d29bf-671b-4ce1-b2b3-971bc29d88d3",
+      "name": "Code in JavaScript12"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "operation": "get",
+        "tableId": "clientes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clie_id",
+              "keyValue": "={{ $json.CLIE_ID }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1840,
+        -3696
+      ],
+      "id": "0927427f-428a-4fc0-b1b5-13e233d49e0e",
+      "name": "Get a row6",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1152,
+        -3712
+      ],
+      "id": "120ec5d1-54fc-446d-a7e9-9088526d1580",
+      "name": "Loop Over Items6"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cdb080ef-a11f-4fc3-b550-cffb2d627633",
+              "leftValue": "={{ $json.isEmpty() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2080,
+        -3696
+      ],
+      "id": "073f3fe0-9061-4b5c-bdd3-0d4977f2d83a",
+      "name": "If6"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2608,
+        -3696
+      ],
+      "id": "43ebf761-7b31-4ab8-a2ad-b907978735ca",
+      "name": "Merge6"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1b75583-1445-49b0-9257-ae1819c1b5c5",
+              "name": "clie_id",
+              "value": "={{ $('Merge6').item.json.clie_id }}",
+              "type": "number"
+            },
+            {
+              "id": "34795276-c1ff-46bb-be52-db4943bd1434",
+              "name": "name",
+              "value": "={{ $('Merge6').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "4a19aeac-f997-4ac4-b343-d3b269e665e7",
+              "name": "phone",
+              "value": "={{ \n  (() => {\n    const phone = $('Merge6').item.json.phone.toString().replace(/\\D/g, '');\n    return phone.startsWith('55') ? phone : `55${phone}`;\n  })()\n}}",
+              "type": "string"
+            },
+            {
+              "id": "3fb658ee-b865-4f56-8ae7-848d0474354a",
+              "name": "cnpj",
+              "value": "={{ $('Merge6').item.json.cnpj }}",
+              "type": "number"
+            },
+            {
+              "id": "06f4ea37-6a58-4fae-b151-87aa21a77ea8",
+              "name": "aces_id",
+              "value": "={{ $('Merge6').item.json.aces_id }}",
+              "type": "string"
+            },
+            {
+              "id": "a8916eb2-7668-4c6b-b29a-f99146b2426c",
+              "name": "Titulo",
+              "value": "={{ $('Loop Over Items6').item.json.titulos[0].Titulo }}",
+              "type": "number"
+            },
+            {
+              "id": "c461b022-b0c4-469b-a537-a71b691bef6b",
+              "name": "Vl_liquido",
+              "value": "={{ $('Loop Over Items6').item.json.titulos[0].FIN_VLLIQUIDO }}",
+              "type": "number"
+            },
+            {
+              "id": "b9e53820-3008-494a-8907-d57c7653a4b2",
+              "name": "Vencimento",
+              "value": "={{ $('Loop Over Items6').item.json.titulos[0].DtVencimento }}",
+              "type": "string"
+            },
+            {
+              "id": "a819df28-c754-49db-a93e-fd6e3c5de748",
+              "name": "titulos",
+              "value": "={{ $('Loop Over Items6').item.json.titulos }}",
+              "type": "array"
+            },
+            {
+              "id": "d48f9264-16b6-4191-a8de-81711e9e03a6",
+              "name": "boleto",
+              "value": "={{ $json.RESULT[0].PDF }}",
+              "type": "string"
+            },
+            {
+              "id": "e2f4252c-c69d-416f-987f-a6244954fe2d",
+              "name": "Pix",
+              "value": "={{ $item(\"0\").$node[\"Loop Over Items6\"].json[\"CNPJ\"] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3056,
+        -3696
+      ],
+      "id": "4e7b634a-d21c-4179-986c-9b29dadb3878",
+      "name": "Edit Fields6"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1376,
+        -3872
+      ],
+      "id": "58ca756e-f97d-4e10-8ab5-0b3766898ec7",
+      "name": "D nothing6"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "clientes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Loop Over Items6').item.json.CLIE_ID }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items6').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items6').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "cnpj",
+              "fieldValue": "={{ $('Loop Over Items6').item.json.CLIE_CPFCNPJ }}"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "={{ $('Loop Over Items6').item.json.ACES_ID }}"
+            },
+            {
+              "fieldId": "Pix",
+              "fieldValue": "={{\n  {\n    \"66972304000129\": \"33506295000121\",\n    \"66972192000106\": \"50139655000113\"\n  }[$('Loop Over Items6').item.json.CNPJ?.replace(/\\D/g, '')] || \"\"\n}}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2624,
+        -3904
+      ],
+      "id": "e8e13372-fbd8-4070-a6d4-10bd99087e77",
+      "name": "salva_cobrança6",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Loop Over Items6').item.json.CLIE_NOMEPRINC }}"
+            },
+            {
+              "fieldId": "contact_phone",
+              "fieldValue": "={{ \n  (() => {\n    let phone = String($('Loop Over Items6').item.json.CLIE_FONE).replace(/\\D/g, '');\n\n    // Garante o 55 no início\n    if (!phone.startsWith('55')) {\n      phone = '55' + phone;\n    }\n\n    // Remove o 9 extra depois do DDD quando vier no padrão:\n    // 55 + DDD + 9 + número com 8 dígitos\n    // Exemplo: 5541995968065 → 554195968065\n    if (phone.length === 13 && phone.slice(4, 5) === '9') {\n      phone = phone.slice(0, 4) + phone.slice(5);\n    }\n\n    return phone;\n  })()\n}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "Atendimento"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            },
+            {
+              "fieldId": "instancia",
+              "fieldValue": "cobranca"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2368,
+        -3808
+      ],
+      "id": "1e551148-fafa-46bf-9488-88c310fb4942",
+      "name": "salva_lead6",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "cobranca",
+        "tableId": "send_ref",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clie_id",
+              "fieldValue": "={{ $('Edit Fields6').item.json.clie_id }}"
+            },
+            {
+              "fieldId": "tit_ref",
+              "fieldValue": "={{ $('Edit Fields6').item.json.Titulo }}"
+            },
+            {
+              "fieldId": "valor",
+              "fieldValue": "={{ $('Edit Fields6').item.json.Titulo }}"
+            },
+            {
+              "fieldId": "vencimento",
+              "fieldValue": "={{ \n$('Edit Fields6').item.json.Vencimento.split('/').reverse().join('-') \n}}"
+            },
+            {
+              "fieldId": "text",
+              "fieldValue": "=Olá {{ $('Edit Fields6').item.json.name }}, tudo bem?\n\nPassamos para lembrar que o seu pagamento vence em 2 dias. Para sua comodidade, recomendamos que se programe para efetuá-lo até a data de vencimento: {{ $('Edit Fields6').item.json.Vencimento }}\n\nAgradecemos a sua atenção e permanecemos à disposição!\n\nAté logo 👋"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{ $('Edit Fields6').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3968,
+        -3712
+      ],
+      "id": "978c6f7b-5c1c-45f2-b818-50533abdde56",
+      "name": "Send_ref1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "tableId": "message_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Send_ref1').item.json.text }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "instance",
+              "fieldValue": "cobranca"
+            },
+            {
+              "fieldId": "aces_id",
+              "fieldValue": "608"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4448,
+        -3680
+      ],
+      "id": "21daf1ec-7a0b-4079-9f86-5944e7ea3c00",
+      "name": "save_crm6",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "schema": "crm",
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "contact_phone",
+              "keyValue": "={{ $('Edit Fields6').item.json.phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4192,
+        -3712
+      ],
+      "id": "62a46cbe-aa7a-48f1-9bde-efbe0486195e",
+      "name": "Get a row13",
+      "credentials": {
+        "supabaseApi": {
+          "id": "d1vgwu8qdpXSxQ3t",
+          "name": "Supa_site"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/apiIA/listardocreceber",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "function",
+              "value": "1"
+            },
+            {
+              "name": "TokenAPI",
+              "value": "E9B31429DBD012D5A9C8060AB290268C"
+            },
+            {
+              "name": "qtdeDias",
+              "value": "2"
+            },
+            {
+              "name": "empresa",
+              "value": "1,2"
+            },
+            {
+              "name": "pagenumber",
+              "value": "1"
+            },
+            {
+              "name": "RowspPage",
+              "value": "100"
+            },
+            {
+              "name": "CLIE_ID"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        800,
+        -3568
+      ],
+      "id": "2a05b0db-8574-4fb7-b144-a3ed9d10b4cf",
+      "name": "Busca_titutos-2d1"
+    },
+    {
+      "parameters": {
+        "url": "https://app.registrobase.com.br:32077/auth?tokenapi=E9B31429DBD012D5A9C8060AB290268C",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        800,
+        -3792
+      ],
+      "id": "0df884a1-52e1-4643-94fa-ca0faaf2227b",
+      "name": "get-token-2d2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gupshup.io/wa/api/v1/template/msg",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Cache-Control",
+              "value": "no-cache, no-cache"
+            },
+            {
+              "name": "apikey",
+              "value": "sk_0829f79557964e85b7498de02fbca212"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "whatsapp"
+            },
+            {
+              "name": "source",
+              "value": "556282591715"
+            },
+            {
+              "name": "destination",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "src.name",
+              "value": "droculos"
+            },
+            {
+              "name": "template",
+              "value": "={\"id\":\"d2687393-bd72-4d1d-a652-d3e41d1830ed\",\"params\":[\"{{ ($json.name || '').trim().split(/\\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}\",\"{{ $json.Vencimento }}\"]}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3296,
+        -3696
+      ],
+      "id": "ed6350ef-c752-41d4-80e5-3ee7e100c898",
+      "name": "Gupshup 2d1",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "df660474-71ee-426b-80c4-547bbd6190e4",
+              "leftValue": "={{ $json.CLIE_FONE }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1520,
+        -3680
+      ],
+      "id": "9cdb18ca-823c-490d-b427-2ebbee93295c",
+      "name": "If13"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b3551c1b-6135-4d5a-a503-2281e695d950",
+              "leftValue": "={{ $json.forma_id }}",
+              "rightValue": 6,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        1344,
+        -3568
+      ],
+      "id": "09d0a931-8dac-4f4b-9e72-6fb0979a0c66",
+      "name": "Filter6"
+    }
+  ],
+  "connections": {
+    "Code in JavaScript12": {
+      "main": [
+        [
+          {
+            "node": "Filter6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row6": {
+      "main": [
+        [
+          {
+            "node": "If6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items6": {
+      "main": [
+        [
+          {
+            "node": "D nothing6",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If13",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If6": {
+      "main": [
+        [
+          {
+            "node": "salva_lead6",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge6": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields6": {
+      "main": [
+        [
+          {
+            "node": "Gupshup 2d1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_cobrança6": {
+      "main": [
+        [
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salva_lead6": {
+      "main": [
+        [
+          {
+            "node": "salva_cobrança6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send_ref1": {
+      "main": [
+        [
+          {
+            "node": "Get a row13",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_crm6": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a row13": {
+      "main": [
+        [
+          {
+            "node": "save_crm6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca_titutos-2d1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript12",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get-token-2d2": {
+      "main": [
+        [
+          {
+            "node": "Busca_titutos-2d1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gupshup 2d1": {
+      "main": [
+        [
+          {
+            "node": "Send_ref1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If13": {
+      "main": [
+        [
+          {
+            "node": "Get a row6",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter6": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Busca_titutos-2d1": [
+      {
+        "PARAMS": [
+          null
+        ],
+        "RESULT": [
+          {
+            "pageNumber": 1,
+            "totalPages": 0,
+            "totalRec": 0,
+            "rowspPage": 100,
+            "data": [
+              {
+                "Titulo": 35595,
+                "CLIE_ID": 2822,
+                "CLIE_NOMEPRINC": "LUCIMAR CANDIDA DE PAULA",
+                "CLIE_NOMESEC": "LUCIMAR CANDIDA DE PAULA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "59818921100",
+                "FIN_VLLIQUIDO": 126.67,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "MOVIMENTO BANCARIO",
+                "forma_id": 4,
+                "CLIE_FONE": "62994735211"
+              },
+              {
+                "Titulo": 44600,
+                "CLIE_ID": 3262,
+                "CLIE_NOMEPRINC": "DJENANE DA SILVA SILVEIRA DE MORAIS",
+                "CLIE_NOMESEC": "DJENANE DA SILVA SILVEIRA DE MORAIS",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "59033100282",
+                "FIN_VLLIQUIDO": 190,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "MOVIMENTO BANCARIO",
+                "forma_id": 4,
+                "CLIE_FONE": "62998682362"
+              },
+              {
+                "Titulo": 54270,
+                "CLIE_ID": 10125,
+                "CLIE_NOMEPRINC": "LUCAS MATHEUS TURCO",
+                "CLIE_NOMESEC": "LUCAS MATHEUS TURCO",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "35299912870",
+                "FIN_VLLIQUIDO": 90,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARNE",
+                "forma_id": 6,
+                "CLIE_FONE": "62981114071"
+              },
+              {
+                "Titulo": 54281,
+                "CLIE_ID": 10237,
+                "CLIE_NOMEPRINC": "KEILA FERREIRA GALVAO",
+                "CLIE_NOMESEC": "KEILA FERREIRA GALVAO",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "87807866187",
+                "FIN_VLLIQUIDO": 116.65,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARNE",
+                "forma_id": 6,
+                "CLIE_FONE": "62992783107"
+              },
+              {
+                "Titulo": 54287,
+                "CLIE_ID": 5228,
+                "CLIE_NOMEPRINC": "ANIZETE DA SILV MOTA",
+                "CLIE_NOMESEC": "ANIZETE DA SILV MOTA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "78506263115",
+                "FIN_VLLIQUIDO": 182.75,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARNE",
+                "forma_id": 6,
+                "CLIE_FONE": "62986423431"
+              },
+              {
+                "Titulo": 54322,
+                "CLIE_ID": 147,
+                "CLIE_NOMEPRINC": "TEREZINHA BASTISTA DOS SANTOS",
+                "CLIE_NOMESEC": "TEREZINHA BASTISTA DOS SANTOS",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "48059366149",
+                "FIN_VLLIQUIDO": 158.37,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "MOVIMENTO BANCARIO",
+                "forma_id": 4,
+                "CLIE_FONE": "62995228377"
+              },
+              {
+                "Titulo": 55967,
+                "CLIE_ID": 10395,
+                "CLIE_NOMEPRINC": "CASSIO GERTULIO  FRANCIOZI  DO CARMO ",
+                "CLIE_NOMESEC": "CASSIO GERTULIO  FRANCIOZI  DO CARMO ",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "98972952249",
+                "FIN_VLLIQUIDO": 91.06,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "91991356952"
+              },
+              {
+                "Titulo": 56041,
+                "CLIE_ID": 10146,
+                "CLIE_NOMEPRINC": "GABRIEL RODRIGUES CAMPOS ",
+                "CLIE_NOMESEC": "GABRIEL RODRIGUES CAMPOS ",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "75062160197",
+                "FIN_VLLIQUIDO": 232.2,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62993255367"
+              },
+              {
+                "Titulo": 56051,
+                "CLIE_ID": 10146,
+                "CLIE_NOMEPRINC": "GABRIEL RODRIGUES CAMPOS ",
+                "CLIE_NOMESEC": "GABRIEL RODRIGUES CAMPOS ",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "75062160197",
+                "FIN_VLLIQUIDO": 18.21,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62993255367"
+              },
+              {
+                "Titulo": 56107,
+                "CLIE_ID": 9505,
+                "CLIE_NOMEPRINC": "WILLIAN BORGES",
+                "CLIE_NOMESEC": "WILLIAN BORGES",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "01598330195",
+                "FIN_VLLIQUIDO": 145.7,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62992992720"
+              },
+              {
+                "Titulo": 56192,
+                "CLIE_ID": 10409,
+                "CLIE_NOMEPRINC": "NAYLENE  ANGELICA  PEREIRA   CAMPO ",
+                "CLIE_NOMESEC": "NAYLENE  ANGELICA  PEREIRA   CAMPO ",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "856.129.791-34",
+                "FIN_VLLIQUIDO": 62.02,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62998468886"
+              },
+              {
+                "Titulo": 56198,
+                "CLIE_ID": 4325,
+                "CLIE_NOMEPRINC": "WANDERLEY GOMES NASCIMENTO",
+                "CLIE_NOMESEC": "WANDERLEY GOMES NASCIMENTO",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "47821507172",
+                "FIN_VLLIQUIDO": 27.32,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62982457329"
+              },
+              {
+                "Titulo": 56211,
+                "CLIE_ID": 10413,
+                "CLIE_NOMEPRINC": "ROSE MARY RODRIGUES DE SOUZA VIEIRA ",
+                "CLIE_NOMESEC": "ROSE MARY RODRIGUES DE SOUZA VIEIRA ",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "00141492147",
+                "FIN_VLLIQUIDO": 145.7,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62986197505"
+              },
+              {
+                "Titulo": 56241,
+                "CLIE_ID": 4627,
+                "CLIE_NOMEPRINC": "AURILANIA SILVERIO RODRIGUES",
+                "CLIE_NOMESEC": "AURILANIA SILVERIO RODRIGUES",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "99434997100",
+                "FIN_VLLIQUIDO": 91.06,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62982105259"
+              },
+              {
+                "Titulo": 56307,
+                "CLIE_ID": 10411,
+                "CLIE_NOMEPRINC": "CASSIO FERREIRA",
+                "CLIE_NOMESEC": "CASSIO FERREIRA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "709.060.121-80",
+                "FIN_VLLIQUIDO": 159.36,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62992646269"
+              },
+              {
+                "Titulo": 56317,
+                "CLIE_ID": 10425,
+                "CLIE_NOMEPRINC": "ERIKA DE CASTRO SALES",
+                "CLIE_NOMESEC": "ERIKA DE CASTRO SALES",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "02041865105",
+                "FIN_VLLIQUIDO": 81.86,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62999747910"
+              },
+              {
+                "Titulo": 56327,
+                "CLIE_ID": 10426,
+                "CLIE_NOMEPRINC": "AMANDA LYSSA LOPES AMORIM",
+                "CLIE_NOMESEC": "AMANDA LYSSA LOPES AMORIM",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "70529834197",
+                "FIN_VLLIQUIDO": 164.32,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62991740883"
+              },
+              {
+                "Titulo": 56370,
+                "CLIE_ID": 10431,
+                "CLIE_NOMEPRINC": "CECILIA MARIA SANTANA",
+                "CLIE_NOMESEC": "CECILIA MARIA SANTANA",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "86964062149",
+                "FIN_VLLIQUIDO": 227.07,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62998682297"
+              },
+              {
+                "Titulo": 56376,
+                "CLIE_ID": 10432,
+                "CLIE_NOMEPRINC": "CERAFIM MARTINS DA COSTA",
+                "CLIE_NOMESEC": "CERAFIM MARTINS DA COSTA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "00714201502",
+                "FIN_VLLIQUIDO": 44.63,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62999310753"
+              },
+              {
+                "Titulo": 56391,
+                "CLIE_ID": 10435,
+                "CLIE_NOMEPRINC": "ARLAN DOS SANTOS NOGUEIRA",
+                "CLIE_NOMESEC": "ARLAN DOS SANTOS NOGUEIRA",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "04757098375",
+                "FIN_VLLIQUIDO": 43.25,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62994270608"
+              },
+              {
+                "Titulo": 56433,
+                "CLIE_ID": 10437,
+                "CLIE_NOMEPRINC": "ANA CLAUDIA LOURENCO DE ANDRADE",
+                "CLIE_NOMESEC": "ANA CLAUDIA LOURENCO DE ANDRADE",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "95031227168",
+                "FIN_VLLIQUIDO": 54.64,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62984921462"
+              },
+              {
+                "Titulo": 56592,
+                "CLIE_ID": 10441,
+                "CLIE_NOMEPRINC": "PATRICIA FERNANDES RODARTE LEAO",
+                "CLIE_NOMESEC": "PATRICIA FERNANDES RODARTE LEAO",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "00130633160",
+                "FIN_VLLIQUIDO": 264.07,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62999215040"
+              },
+              {
+                "Titulo": 56612,
+                "CLIE_ID": 10442,
+                "CLIE_NOMEPRINC": "JANNY THAIS DE LIMA SANTOS",
+                "CLIE_NOMESEC": "JANNY THAIS DE LIMA SANTOS",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "01667976427",
+                "FIN_VLLIQUIDO": 127.48,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62994839091"
+              },
+              {
+                "Titulo": 56625,
+                "CLIE_ID": 10350,
+                "CLIE_NOMEPRINC": "DAIANY DAVILLA CARDOSO PEREIRA OLIVEIRA",
+                "CLIE_NOMESEC": "DAIANY DAVILLA CARDOSO PEREIRA OLIVEIRA",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "05884787332",
+                "FIN_VLLIQUIDO": 161.18,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62992282745"
+              },
+              {
+                "Titulo": 56635,
+                "CLIE_ID": 10350,
+                "CLIE_NOMEPRINC": "DAIANY DAVILLA CARDOSO PEREIRA OLIVEIRA",
+                "CLIE_NOMESEC": "DAIANY DAVILLA CARDOSO PEREIRA OLIVEIRA",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "05884787332",
+                "FIN_VLLIQUIDO": 136.59,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62992282745"
+              },
+              {
+                "Titulo": 56653,
+                "CLIE_ID": 10445,
+                "CLIE_NOMEPRINC": "EVELY IURY LIMA PINHEIRO ",
+                "CLIE_NOMESEC": "EVELY IURY LIMA PINHEIRO ",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "01055021116",
+                "FIN_VLLIQUIDO": 94.42,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62994600806"
+              },
+              {
+                "Titulo": 56670,
+                "CLIE_ID": 10446,
+                "CLIE_NOMEPRINC": "ANGELICA  DE PAULA  SILVA ",
+                "CLIE_NOMESEC": "ANGELICA  DE PAULA  SILVA ",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "70276672151",
+                "FIN_VLLIQUIDO": 92.41,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62999441788"
+              },
+              {
+                "Titulo": 56676,
+                "CLIE_ID": 10447,
+                "CLIE_NOMEPRINC": "LUZELENA ARAUJO DA SILVA LESSA",
+                "CLIE_NOMESEC": "LUZELENA ARAUJO DA SILVA LESSA",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "87735482515",
+                "FIN_VLLIQUIDO": 104.72,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62998175249"
+              },
+              {
+                "Titulo": 56688,
+                "CLIE_ID": 10450,
+                "CLIE_NOMEPRINC": "MARIA JOELMA PEREIRA DA SILVA",
+                "CLIE_NOMESEC": "MARIA JOELMA PEREIRA DA SILVA",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "88471187191",
+                "FIN_VLLIQUIDO": 130.44,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62993204167"
+              },
+              {
+                "Titulo": 56698,
+                "CLIE_ID": 10451,
+                "CLIE_NOMEPRINC": "BEATRIZ DA COSTA RIBEIRO",
+                "CLIE_NOMESEC": "BEATRIZ DA COSTA RIBEIRO",
+                "EMP_ID": 2,
+                "EMP_CPFCNPJ": "66972192000106",
+                "CLIE_CPFCNPJ": "70420218190",
+                "FIN_VLLIQUIDO": 75.69,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62994016243"
+              },
+              {
+                "Titulo": 56705,
+                "CLIE_ID": 6409,
+                "CLIE_NOMEPRINC": "THAYNARA APARECIDA TEIXEIRA",
+                "CLIE_NOMESEC": "THAYNARA APARECIDA TEIXEIRA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "70493195114",
+                "FIN_VLLIQUIDO": 952.61,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": null
+              },
+              {
+                "Titulo": 56706,
+                "CLIE_ID": 10454,
+                "CLIE_NOMEPRINC": "VITORIA DE ALENCAR VITOR SILVA ",
+                "CLIE_NOMESEC": "VITORIA DE ALENCAR VITOR SILVA ",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "70409386189",
+                "FIN_VLLIQUIDO": 645,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62994705274"
+              },
+              {
+                "Titulo": 56707,
+                "CLIE_ID": 1721,
+                "CLIE_NOMEPRINC": "ANDERSON BARBOSA DE MORA",
+                "CLIE_NOMESEC": "ANDERSON BARBOSA DE MORA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "34914781115",
+                "FIN_VLLIQUIDO": 116.95,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62996893476"
+              },
+              {
+                "Titulo": 56717,
+                "CLIE_ID": 10448,
+                "CLIE_NOMEPRINC": "THAYNA FERREIRA DE MELO DO SANTOS",
+                "CLIE_NOMESEC": "THAYNA FERREIRA DE MELO DO SANTOS",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "74726994115",
+                "FIN_VLLIQUIDO": 85.36,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62984571420"
+              },
+              {
+                "Titulo": 56726,
+                "CLIE_ID": 9302,
+                "CLIE_NOMEPRINC": "MARISSOL SOUZA",
+                "CLIE_NOMESEC": "MARISSOL SOUZA",
+                "EMP_ID": 1,
+                "EMP_CPFCNPJ": "66972304000129",
+                "CLIE_CPFCNPJ": "70664252192",
+                "FIN_VLLIQUIDO": 241.4,
+                "ACES_ID": 608,
+                "DtVencimento": "05/07/2026",
+                "DiasVenc": 2,
+                "forma_pgto": "CARTAO",
+                "forma_id": 2,
+                "CLIE_FONE": "62984558411"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "Gupshup 2d1": [
+      {
+        "status": "submitted",
+        "messageId": "9e4b6ec1-43e7-4f6e-88b9-5000c3720fce"
+      }
+    ]
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a1be3c97ead0306c6fd8239491d9bedae5e504e303a6b25d95576edd5becf8eb"
+  }
+}

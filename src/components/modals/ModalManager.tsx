@@ -22,7 +22,8 @@ export function ModalManager() {
         <StageModal 
           isOpen={true} 
           onClose={closeModal} 
-          stage={ui.modal.payload?.stage} 
+          stage={ui.modal.payload?.stage}
+          pipelineId={ui.modal.payload?.pipelineId ?? null}
         />
       )}
 

@@ -103,6 +103,23 @@ export class GupshupAdminService {
     );
     if (providerError) throw providerError;
 
+    if (channel.status === "active") {
+      const { error: instanceError } = await this.crmClient
+        .from("instance")
+        .update({
+          status: "connected",
+          setup_status: "connected",
+          connection_mode: "external_webhook",
+          remote_webhook_connected_at: new Date().toISOString(),
+          setup_expires_at: null,
+          last_error: null,
+        })
+        .eq("aces_id", input.acesId)
+        .eq("instancia", instance.instancia);
+
+      if (instanceError) throw instanceError;
+    }
+
     return normalizeChannel(channel);
   }
 

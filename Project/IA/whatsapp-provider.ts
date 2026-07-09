@@ -26,6 +26,9 @@ export type SendMediaInput = {
   fileName: string;
   kind: "image" | "audio" | "document";
   caption?: string | null;
+  templateName?: string | null;
+  languageCode?: string | null;
+  templateParameters?: string[];
   sourceType: WhatsAppSourceType;
 };
 

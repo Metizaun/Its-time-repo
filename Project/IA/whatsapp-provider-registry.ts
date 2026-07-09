@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
+import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
 import {
   type MetaChannelConfig,
   MetaWhatsAppProvider,
@@ -28,7 +29,9 @@ export type WhatsAppProviderRegistryConfig = {
 export class WhatsAppProviderRegistry {
   private readonly crmClient: SupabaseClient<any, any, any>;
   private readonly metaClient: SupabaseClient<any, any, any>;
+  private readonly gupshupClient: SupabaseClient<any, any, any>;
   private readonly evolutionProvider: WhatsAppProvider;
+  private readonly gupshupProvider: WhatsAppProvider;
   private readonly metaProvider: MetaWhatsAppProvider;
   private readonly defaultEvolutionApiUrl: string;
   private readonly defaultEvolutionApiKey: string;
@@ -42,6 +45,10 @@ export class WhatsAppProviderRegistry {
       db: { schema: "meta" },
       auth: { persistSession: false, autoRefreshToken: false },
     });
+    this.gupshupClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      db: { schema: "gupshup" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
 
     this.defaultEvolutionApiUrl = config.evolutionApiUrl.replace(/\/$/, "");
     this.defaultEvolutionApiKey = config.evolutionApiKey;
@@ -50,6 +57,12 @@ export class WhatsAppProviderRegistry {
       sendTemplate: (input) => this.sendEvolutionTemplate(input),
       sendMedia: (input) => this.sendEvolutionMedia(input),
       sendVoiceNote: (input) => this.sendEvolutionVoiceNote(input),
+    };
+    this.gupshupProvider = {
+      sendText: (input) => this.sendGupshupText(input),
+      sendTemplate: (input) => this.sendGupshupTemplate(input),
+      sendMedia: (input) => this.sendGupshupMedia(input),
+      sendVoiceNote: (input) => this.sendGupshupVoiceNote(input),
     };
 
     this.metaProvider = new MetaWhatsAppProvider({
@@ -61,7 +74,9 @@ export class WhatsAppProviderRegistry {
   }
 
   getProvider(provider: WhatsAppProviderName): WhatsAppProvider {
-    return provider === "meta" ? this.metaProvider : this.evolutionProvider;
+    if (provider === "meta") return this.metaProvider;
+    if (provider === "gupshup") return this.gupshupProvider;
+    return this.evolutionProvider;
   }
 
   async resolveInstanceProvider(instanceName: string): Promise<WhatsAppProviderName> {
@@ -75,7 +90,9 @@ export class WhatsAppProviderRegistry {
       throw error;
     }
 
-    return data?.provider === "meta" ? "meta" : "evolution";
+    if (data?.provider === "meta") return "meta";
+    if (data?.provider === "gupshup") return "gupshup";
+    return "evolution";
   }
 
   private async resolveMetaChannel(instanceName: string): Promise<MetaChannelConfig | null> {
@@ -151,6 +168,32 @@ export class WhatsAppProviderRegistry {
     };
   }
 
+  private async resolveGupshupProvider(instanceName: string) {
+    const { data, error } = await this.gupshupClient
+      .from("channel")
+      .select("api_key, app_name, phone_number")
+      .eq("instance_name", instanceName)
+      .eq("status", "active")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data?.api_key || !data?.app_name || !data?.phone_number) {
+      throw new WhatsAppProviderError("Canal Gupshup ativo sem credenciais completas", {
+        provider: "gupshup",
+        kind: "permanent",
+      });
+    }
+
+    return new GupshupWhatsAppProvider({
+      apiKey: String(data.api_key),
+      appName: String(data.app_name),
+      phoneNumber: String(data.phone_number),
+    });
+  }
+
   private async sendEvolutionText(input: SendTextInput) {
     const resolved = await this.resolveEvolutionProvider(input.instanceName);
     return resolved.provider.sendText({ ...input, instanceName: resolved.instanceName });
@@ -181,6 +224,38 @@ export class WhatsAppProviderRegistry {
       });
     }
     return resolved.provider.sendVoiceNote({ ...input, instanceName: resolved.instanceName });
+  }
+
+  private async sendGupshupText(input: SendTextInput) {
+    const provider = await this.resolveGupshupProvider(input.instanceName);
+    return provider.sendText(input);
+  }
+
+  private async sendGupshupTemplate(input: SendTemplateInput) {
+    const provider = await this.resolveGupshupProvider(input.instanceName);
+    return provider.sendTemplate(input);
+  }
+
+  private async sendGupshupMedia(input: SendMediaInput) {
+    const provider = await this.resolveGupshupProvider(input.instanceName);
+    if (!provider.sendMedia) {
+      throw new WhatsAppProviderError("Provider Gupshup sem suporte a midia", {
+        provider: "gupshup",
+        kind: "permanent",
+      });
+    }
+    return provider.sendMedia(input);
+  }
+
+  private async sendGupshupVoiceNote(input: SendVoiceNoteInput) {
+    const provider = await this.resolveGupshupProvider(input.instanceName);
+    if (!provider.sendVoiceNote) {
+      throw new WhatsAppProviderError("Provider Gupshup sem suporte a audio", {
+        provider: "gupshup",
+        kind: "permanent",
+      });
+    }
+    return provider.sendVoiceNote(input);
   }
 
   private resolveSecret(secretRef: string) {

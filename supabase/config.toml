@@ -1,8 +1,8 @@
 
 [api]
 enabled = true
-schemas = ["public", "storage", "graphql_public", "crm", "meta", "calendar", "agents"]
-extra_search_path = ["public", "extensions", "crm", "agents", "meta", "calendar"]
+schemas = ["public", "storage", "graphql_public", "crm", "meta", "calendar", "agents", "rb"]
+extra_search_path = ["public", "extensions", "crm", "agents", "meta", "calendar", "rb"]
 
 [auth]
 enabled = true

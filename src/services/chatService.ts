@@ -4,6 +4,7 @@ import type {
   ChatAttachmentKind,
   ChatMessage,
   ChatSendPayload,
+  ChatSystemKind,
   ChatUploadIntent,
 } from "@/types/chat";
 
@@ -87,6 +88,8 @@ type BackendChatMessage = {
   sentAt: string;
   leadName: string;
   senderName: string | null;
+  sourceType?: string | null;
+  systemKind?: ChatSystemKind | null;
   providerStatus?: string | null;
   attachments?: BackendChatAttachment[];
 };
@@ -167,6 +170,8 @@ function normalizeMessage(message: BackendChatMessage): ChatMessage {
     sent_at: message.sentAt,
     lead_name: message.leadName,
     sender_name: message.senderName,
+    source_type: message.sourceType ?? "human",
+    system_kind: message.systemKind ?? null,
     provider_status: message.providerStatus ?? null,
     attachments: (message.attachments ?? []).map(normalizeAttachment),
   };
@@ -190,5 +195,16 @@ export async function sendManualMessage(leadId: string, payload: ChatSendPayload
     content: payload.content,
     instanceName: payload.instanceName ?? null,
     attachment: payload.attachment ?? null,
+  });
+}
+
+export async function finalizeHumanHandoff(leadId: string, stageId: string) {
+  return postCrmBackend<{
+    success: boolean;
+    leadId: string;
+    interactionMode: "ai";
+    stageId: string;
+  }>(`/api/chat/leads/${encodeURIComponent(leadId)}/handoff/finalize`, {
+    stageId,
   });
 }

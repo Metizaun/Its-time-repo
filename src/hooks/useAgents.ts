@@ -21,6 +21,7 @@ interface AgentPayload {
   handoff_prompt?: string | null;
   handoff_target_phone?: string | null;
   templateKey?: string | null;
+  rb_token_api?: string | null;
 }
 
 function errorDetails(err: unknown) {
@@ -156,6 +157,7 @@ export function useAgents() {
             handoffPrompt: payload.handoff_prompt,
             handoffTargetPhone: payload.handoff_target_phone,
             templateKey: payload.templateKey || undefined,
+            rbTokenApi: payload.rb_token_api || undefined,
           });
           toast.success("Agente criado com sucesso");
         }

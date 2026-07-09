@@ -1,0 +1,84 @@
+##2 dias antes de vencer:
+
+curl --request POST 'https://api.gupshup.io/wa/api/v1/template/msg' \
+  --header 'Cache-Control: no-cache, no-cache' \
+  --header 'apikey: sk_0829f79557964e85b7498de02fbca212' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'channel=whatsapp' \
+  --data-urlencode 'source=556282591715' \
+  --data-urlencode 'destination={{ $json.phone }}' \
+  --data-urlencode 'src.name=droculos' \
+  --data-urlencode 'template={"id":"d2687393-bd72-4d1d-a652-d3e41d1830ed","params":["{{ ($json.name || '').trim().split(/\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}","{{ $json.Vencimento }}"]}'
+
+
+##dia do vencimento
+
+curl --request POST 'https://api.gupshup.io/wa/api/v1/template/msg' \
+  --header 'Cache-Control: no-cache, no-cache' \
+  --header 'apikey: sk_0829f79557964e85b7498de02fbca212' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'channel=whatsapp' \
+  --data-urlencode 'source=556282591715' \
+  --data-urlencode 'destination={{ $json.phone }}' \
+  --data-urlencode 'src.name=droculos' \
+  --data-urlencode 'template={"id":"5bb297eb-c1f4-4e03-8e62-7f7ed5821782","params":["{{ ($json.name || '').trim().split(/\s+/)[0].toLowerCase().replace(/^./, c => c.toUpperCase()) }}","{{ $json.pix }}"]}'
+
+- A diferença principal dessa para a anterior é o template ID e o segundo parâmetro, que agora envia {{ $json.pix }}.
+
+##1d vencido
+
+curl --request POST 'https://api.gupshup.io/wa/api/v1/template/msg' \
+  --header 'Cache-Control: no-cache, no-cache' \
+  --header 'apikey: sk_0829f79557964e85b7498de02fbca212' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'channel=whatsapp' \
+  --data-urlencode 'source=556282591715' \
+  --data-urlencode 'destination={{ $json.phone }}' \
+  --data-urlencode 'src.name=droculos' \
+  --data-urlencode 'template={"id":"279e2b9e-523c-4e98-a2f0-059f71cc22a4","params":["{{ $json.name }}","{{ $json.Vencimento }}","{{ $json.pix }}"]}'
+
+- Essa usa o template 279e2b9e-523c-4e98-a2f0-059f71cc22a4 com 3 parâmetros: name, Vencimento e pix.
+
+##4d vencido
+
+curl --request POST 'https://api.gupshup.io/wa/api/v1/template/msg' \
+  --header 'Cache-Control: no-cache, no-cache' \
+  --header 'apikey: sk_0829f79557964e85b7498de02fbca212' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'channel=whatsapp' \
+  --data-urlencode 'source=556282591715' \
+  --data-urlencode 'destination=554199031152' \
+  --data-urlencode 'src.name=droculos' \
+  --data-urlencode 'template={"id":"c77f81d7-660b-488c-ba66-8312d1a69784","params":["{{ $json.name }}"]}'
+
+
+- Essa usa o template c77f81d7-660b-488c-ba66-8312d1a69784 com apenas 1 parâmetro: name.
+
+##10d vencido
+
+
+curl --request POST 'https://api.gupshup.io/wa/api/v1/template/msg' \
+  --header 'Cache-Control: no-cache, no-cache' \
+  --header 'apikey: sk_0829f79557964e85b7498de02fbca212' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'channel=whatsapp' \
+  --data-urlencode 'source=556282591715' \
+  --data-urlencode 'destination={{ $json.phone }}' \
+  --data-urlencode 'src.name=droculos' \
+  --data-urlencode 'template={"id":"2e7440ac-6133-4a7c-9bb0-5be887839435","params":["{{ $json.name }}","{{ $json.titulos[0].DtVencimento }}","{{ $json.Vl_liquido }}"]}'
+
+- Essa usa o template 2e7440ac-6133-4a7c-9bb0-5be887839435 com 3 parâmetros: name, DtVencimento e Vl_liquido.
+
+##15d vencido
+
+curl --request POST 'https://api.gupshup.io/wa/api/v1/template/msg' \
+  --header 'Cache-Control: no-cache, no-cache' \
+  --header 'apikey: sk_0829f79557964e85b7498de02fbca212' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'channel=whatsapp' \
+  --data-urlencode 'source=556282591715' \
+  --data-urlencode 'destination={{ $json.phone }}' \
+  --data-urlencode 'src.name=droculos' \
+  --data-urlencode 'template={"id":"2f37cb6d-ae16-4861-80c6-156b7624e9f5","params":["{{ $json.name }}","{{ $json.Vencimento }}","{{ $json.Vl_liquido }}"]}'
+
+Esse template tem id de: 2f37cb6d-ae16-4861-80c6-156b7624e9f5" e usa 3 parâmetros: name, Vencimento e Vl_liquido.

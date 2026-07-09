@@ -26,6 +26,7 @@ import {
   disconnectInstance,
   fetchInstanceStatus,
   listAdminInstances,
+  listGupshupChannels,
   listMetaChannels,
   listMetaTemplates,
   reconnectInstanceWithQr,
@@ -34,6 +35,7 @@ import {
   syncMetaTemplates,
   upsertMetaChannel,
   type AdminInstance,
+  type AdminGupshupChannelSummary,
   type AdminInstanceSetupStatus,
   type AdminMetaChannelSummary,
   type AdminMetaTemplate,
@@ -88,21 +90,6 @@ function setupStatusLabel(setupStatus: AdminInstanceSetupStatus) {
   }
 }
 
-function setupStatusBadge(setupStatus: AdminInstanceSetupStatus) {
-  switch (setupStatus) {
-    case "connected":
-      return <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white">Setup concluido</Badge>;
-    case "expired":
-      return <Badge variant="destructive">Setup expirado</Badge>;
-    case "pending_qr":
-      return <Badge variant="outline">Setup pendente</Badge>;
-    case "cancelled":
-      return <Badge variant="secondary">Setup cancelado</Badge>;
-    default:
-      return <Badge variant="outline">Setup pendente</Badge>;
-  }
-}
-
 function statusBadge(status: AdminInstance["status"]) {
   switch (status) {
     case "connected":
@@ -120,6 +107,7 @@ function statusBadge(status: AdminInstance["status"]) {
 export function InstanceManager() {
   const [instances, setInstances] = useState<AdminInstance[]>([]);
   const [metaChannels, setMetaChannels] = useState<Record<string, AdminMetaChannelSummary>>({});
+  const [gupshupChannels, setGupshupChannels] = useState<Record<string, AdminGupshupChannelSummary>>({});
   const [metaTemplates, setMetaTemplates] = useState<Record<string, AdminMetaTemplate[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -236,12 +224,19 @@ export function InstanceManager() {
       const result = await listAdminInstances({ accessToken });
       setInstances(result.instances ?? []);
       try {
-        const metaResult = await listMetaChannels({ accessToken });
+        const [metaResult, gupshupResult] = await Promise.all([
+          listMetaChannels({ accessToken }),
+          listGupshupChannels({ accessToken }),
+        ]);
         setMetaChannels(
           Object.fromEntries((metaResult.channels ?? []).map((item) => [item.instanceName, item]))
         );
+        setGupshupChannels(
+          Object.fromEntries((gupshupResult.channels ?? []).map((item) => [item.instanceName, item]))
+        );
       } catch (metaErr: any) {
         setMetaChannels({});
+        setGupshupChannels({});
         setMetaError(metaErr?.message ?? "Nao foi possivel carregar canais Meta");
       }
     } catch (err: any) {
@@ -720,7 +715,11 @@ export function InstanceManager() {
               const actions = new Set(instance.actions);
               const isBusy = Boolean(busyAction);
               const metaSummary = metaChannels[instance.instanceName];
+              const gupshupSummary = gupshupChannels[instance.instanceName];
               const metaChannel = metaSummary?.channel ?? null;
+              const gupshupChannel = gupshupSummary?.gupshupChannel ?? null;
+              const providerName =
+                gupshupSummary?.provider ?? metaSummary?.provider ?? "evolution";
               const templates = metaTemplates[instance.instanceName] ?? [];
 
               return (
@@ -733,11 +732,11 @@ export function InstanceManager() {
                       <span className="font-medium text-sm">{instance.instanceName}</span>
                       <div className="flex flex-wrap items-center gap-2">
                         {statusBadge(instance.status)}
-                        {setupStatusBadge(instance.setupStatus)}
-                        {instance.connectionMode === "external_webhook" && (
-                          <Badge variant="secondary">Webhook externo</Badge>
-                        )}
-                        {metaChannel ? (
+                        {providerName === "gupshup" ? (
+                          <Badge variant={gupshupChannel?.status === "active" ? "secondary" : "outline"}>
+                            Gupshup {gupshupChannel?.status ?? "nao configurada"}
+                          </Badge>
+                        ) : metaChannel ? (
                           <Badge variant={metaChannel.status === "active" ? "secondary" : "outline"}>
                             Meta {metaChannel.status}
                           </Badge>
@@ -807,6 +806,20 @@ export function InstanceManager() {
                           </div>
                         </PopoverContent>
                       </Popover>
+
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                        disabled={isBusy}
+                        onClick={() => openDeleteDialog(instance)}
+                      >
+                        {busyAction === `delete:${instance.instanceName}` ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
                     </div>
                   </div>
 
@@ -851,15 +864,17 @@ export function InstanceManager() {
                       </Button>
                     )}
 
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={isBusy}
-                      onClick={() => openMetaDialog(instance.instanceName)}
-                    >
-                      <MessageCircle className="h-3.5 w-3.5 mr-1.5" />
-                      Meta
-                    </Button>
+                    {providerName !== "gupshup" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => openMetaDialog(instance.instanceName)}
+                      >
+                        <MessageCircle className="h-3.5 w-3.5 mr-1.5" />
+                        Meta
+                      </Button>
+                    ) : null}
 
                     {metaChannel && (
                       <Button
@@ -893,19 +908,6 @@ export function InstanceManager() {
                       </Button>
                     )}
 
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={isBusy}
-                      onClick={() => openDeleteDialog(instance)}
-                    >
-                      {busyAction === `delete:${instance.instanceName}` ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                      )}
-                      Excluir
-                    </Button>
                   </div>
                 </div>
               );

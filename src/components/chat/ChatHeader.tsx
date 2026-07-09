@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Bot, CalendarPlus, Info } from "lucide-react";
+import { ArrowLeft, Bot, CalendarPlus, CheckCheck, Info } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 type ChatAiControl = {
   enabled: boolean;
   available: boolean;
-  reason: "active" | "manual_off" | "auto_pause" | "global_inactive" | "no_agent";
+  reason: "active" | "manual_off" | "auto_pause" | "human_handoff" | "global_inactive" | "no_agent";
   bypassingGlobalInactive: boolean;
   loading: boolean;
   saving: boolean;
@@ -21,6 +21,8 @@ interface ChatHeaderProps {
   onBack?: () => void;
   onOpenDetails?: () => void;
   onSchedule?: () => void;
+  showFinalizeButton?: boolean;
+  onFinalize?: () => void;
   aiControl?: ChatAiControl | null;
 }
 
@@ -37,6 +39,10 @@ function getAiTooltipText(aiControl: ChatAiControl) {
 
   if (aiControl.reason === "auto_pause") {
     return "Pausada por atendimento humano";
+  }
+
+  if (aiControl.reason === "human_handoff") {
+    return "Em atendimento humano no Chat Manual";
   }
 
   if (aiControl.bypassingGlobalInactive && aiControl.enabled) {
@@ -57,6 +63,8 @@ export function ChatHeader({
   onBack,
   onOpenDetails,
   onSchedule,
+  showFinalizeButton = false,
+  onFinalize,
   aiControl,
 }: ChatHeaderProps) {
   const initial = leadName.charAt(0).toUpperCase();
@@ -131,6 +139,18 @@ export function ChatHeader({
             className="chat-tool-button h-9 w-9 text-[var(--color-text-secondary)] focus-ring hover:text-foreground"
           >
             <CalendarPlus className="h-[18px] w-[18px]" />
+          </button>
+        )}
+
+        {showFinalizeButton && onFinalize && (
+          <button
+            type="button"
+            aria-label="Finalizar atendimento humano"
+            onClick={onFinalize}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--color-primary-200)] bg-[var(--color-primary-50)] px-3 text-xs font-semibold text-[var(--color-primary-700)] shadow-sm transition-all duration-200 hover:border-[var(--color-primary-300)] hover:bg-[var(--color-surface-1)] hover:shadow-md focus-ring"
+          >
+            <CheckCheck className="h-4 w-4" />
+            Finalizar
           </button>
         )}
 

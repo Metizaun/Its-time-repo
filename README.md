@@ -69,6 +69,10 @@ npm install
 npm run dev
 ```
 
+Esse comando sobe o backend via Docker Compose e o frontend via Vite, usando o
+ambiente local padronizado do projeto. Antes disso, garanta que o Supabase local
+esteja ativo com `npx supabase start`.
+
 ### Padrao de Desenvolvimento para Migrations
 
 - Toda nova feature que depender de schema deve ter migration aplicada no ambiente antes de validar o backend.

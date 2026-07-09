@@ -129,8 +129,9 @@ function useInternalRipple({
 
   const endPressAnimation = async () => {
     const animation = growAnimationRef.current;
-    if (animation && typeof animation.currentTime === "number" && animation.currentTime < MINIMUM_PRESS_MS) {
-      await new Promise((resolve) => setTimeout(resolve, MINIMUM_PRESS_MS - animation.currentTime!));
+    const currentTime = animation?.currentTime;
+    if (typeof currentTime === "number" && currentTime < MINIMUM_PRESS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, MINIMUM_PRESS_MS - currentTime));
     }
 
     if (isMounted.current) {
@@ -270,8 +271,9 @@ const DropdownMenuContent = React.forwardRef<
 >(({ className, sideOffset = 8, children, ...props }, ref) => {
   const staggeredChildren = React.Children.map(children, (child, index) => {
     if (React.isValidElement(child)) {
-      return React.cloneElement(child, {
-        style: { ...child.props.style, "--m3-stagger": index } as React.CSSProperties,
+      const element = child as React.ReactElement<{ style?: React.CSSProperties }>;
+      return React.cloneElement(element, {
+        style: { ...element.props.style, "--m3-stagger": index } as React.CSSProperties,
       });
     }
 

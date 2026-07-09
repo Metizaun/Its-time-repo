@@ -7,6 +7,7 @@ import {
   ScanFace,
   ScanLine,
   Settings2,
+  Wallet,
   Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -14,6 +15,7 @@ import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { OpticsToolConfigPanel } from "@/components/agents/OpticsToolConfigPanel";
+import { RbBillingConfigPanel } from "@/components/agents/RbBillingConfigPanel";
 import {
   listAgentTools,
   updateAgentTool,
@@ -25,10 +27,13 @@ type AgentToolsPanelProps = {
   toolFilterKey?: AgentTool["key"] | null;
 };
 
+type ConfigurableToolKey = "prescription_analyst" | "visagism" | "rb_billing";
+
 const TOOL_ICONS = {
   ai_audio: AudioLines,
   forwarding: Route,
   send_media: Files,
+  rb_billing: Wallet,
   prescription_analyst: ScanLine,
   visagism: ScanFace,
 } as const;
@@ -40,11 +45,15 @@ function readinessCopy(tool: AgentTool) {
   return "Pronta para ativar";
 }
 
+function isConfigurableToolKey(value: string): value is ConfigurableToolKey {
+  return value === "prescription_analyst" || value === "visagism" || value === "rb_billing";
+}
+
 export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPanelProps) {
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
-  const [configuringKey, setConfiguringKey] = useState<"prescription_analyst" | "visagism" | null>(null);
+  const [configuringKey, setConfiguringKey] = useState<ConfigurableToolKey | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -71,7 +80,7 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPan
   }, [agentId, reloadKey]);
 
   useEffect(() => {
-    if (toolFilterKey === "prescription_analyst" || toolFilterKey === "visagism") {
+    if (toolFilterKey && isConfigurableToolKey(toolFilterKey)) {
       setConfiguringKey(toolFilterKey);
       return;
     }
@@ -123,16 +132,16 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPan
   }
 
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 gap-2 overflow-x-hidden">
       {visibleTools.map((tool) => {
         const Icon = TOOL_ICONS[tool.key as keyof typeof TOOL_ICONS] ?? Wrench;
         const canEnable = tool.readiness === "ready";
         const saving = savingKey === tool.key;
 
-        const configurable = tool.key === "prescription_analyst" || tool.key === "visagism";
+        const configurableKey = isConfigurableToolKey(tool.key) ? tool.key : null;
         return (
-          <div key={tool.id} className="grid gap-2">
-          <div className="flex items-center gap-3 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-3 shadow-sm">
+          <div key={tool.id} className="grid min-w-0 gap-2">
+          <div className="flex min-w-0 items-center gap-3 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-3 shadow-sm">
             <div
               className={cn(
                 "grid h-10 w-10 shrink-0 place-items-center rounded-full border",
@@ -168,8 +177,8 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPan
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin text-[var(--color-gray-500)]" aria-label="Salvando" />
             ) : (
-              <div className="flex items-center gap-2">
-              {configurable && <button type="button" onClick={() => setConfiguringKey((current) => current === tool.key ? null : tool.key)} className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--border-input)] px-3 text-xs font-semibold text-[var(--color-gray-700)] transition-all hover:-translate-y-0.5 hover:shadow-md"><Settings2 className="h-3.5 w-3.5" />Configurar</button>}
+              <div className="flex shrink-0 items-center gap-2">
+              {configurableKey && <button type="button" onClick={() => setConfiguringKey((current) => current === configurableKey ? null : configurableKey)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--border-input)] px-3 text-xs font-semibold text-[var(--color-gray-700)] transition-all hover:-translate-y-0.5 hover:shadow-md"><Settings2 className="h-3.5 w-3.5" />Configurar</button>}
               <Switch
                 checked={tool.enabled}
                 disabled={!canEnable && !tool.enabled}
@@ -179,7 +188,21 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPan
               </div>
             )}
           </div>
-          {configurable && configuringKey === tool.key && <OpticsToolConfigPanel agentId={agentId} toolKey={tool.key} onClose={() => setConfiguringKey(null)} onChanged={() => setReloadKey((value) => value + 1)} />}
+          {tool.key === "rb_billing" && configuringKey === tool.key ? (
+            <RbBillingConfigPanel
+              agentId={agentId}
+              onClose={() => setConfiguringKey(null)}
+              onChanged={() => setReloadKey((value) => value + 1)}
+            />
+          ) : null}
+          {(tool.key === "prescription_analyst" || tool.key === "visagism") && configuringKey === tool.key ? (
+            <OpticsToolConfigPanel
+              agentId={agentId}
+              toolKey={tool.key}
+              onClose={() => setConfiguringKey(null)}
+              onChanged={() => setReloadKey((value) => value + 1)}
+            />
+          ) : null}
           </div>
         );
       })}

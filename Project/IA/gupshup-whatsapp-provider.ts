@@ -29,24 +29,40 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
   }
 
   async sendMedia(input: SendMediaInput): Promise<SendResult> {
+    const message = this.buildMediaMessage(input);
+    if (input.templateName?.trim()) {
+      return this.sendTemplateMessage(
+        input.to,
+        {
+          id: input.templateName.trim(),
+          params: input.templateParameters ?? [],
+        },
+        message
+      );
+    }
+
+    return this.sendMessage(input.to, message);
+  }
+
+  private buildMediaMessage(input: SendMediaInput) {
     if (input.kind === "image") {
-      return this.sendMessage(input.to, {
+      return {
         type: "image",
         originalUrl: input.mediaUrl,
         previewUrl: input.mediaUrl,
         ...(input.caption?.trim() ? { caption: input.caption.trim() } : {}),
-      });
+      };
     }
 
     if (input.kind === "audio") {
-      return this.sendMessage(input.to, { type: "audio", url: input.mediaUrl });
+      return { type: "audio", url: input.mediaUrl };
     }
 
-    return this.sendMessage(input.to, {
+    return {
       type: "file",
       url: input.mediaUrl,
       filename: input.fileName,
-    });
+    };
   }
 
   async sendVoiceNote(input: SendVoiceNoteInput): Promise<SendResult> {
@@ -67,6 +83,7 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
 
       const response = await axios.post(`${GUPSHUP_API_BASE}/msg`, params.toString(), {
         headers: {
+          accept: "application/json",
           apikey: this.config.apiKey,
           "Content-Type": "application/x-www-form-urlencoded",
         },
@@ -85,7 +102,18 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
   }
 
   async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
-    const to = toBrazilE164Phone(input.to);
+    return this.sendTemplateMessage(input.to, {
+      id: input.templateName,
+      params: input.parameters,
+    });
+  }
+
+  private async sendTemplateMessage(
+    toPhone: string,
+    template: { id: string; params: string[] },
+    message?: Record<string, unknown>
+  ): Promise<SendResult> {
+    const to = toBrazilE164Phone(toPhone);
     const source = toBrazilE164Phone(this.config.phoneNumber);
     try {
       const params = new URLSearchParams({
@@ -93,14 +121,16 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
         source,
         destination: to,
         "src.name": this.config.appName,
-        template: JSON.stringify({
-          id: input.templateName,
-          params: input.parameters,
-        }),
+        template: JSON.stringify(template),
       });
+
+      if (message) {
+        params.set("message", JSON.stringify(message));
+      }
 
       const response = await axios.post(`${GUPSHUP_API_BASE}/template/msg`, params.toString(), {
         headers: {
+          accept: "application/json",
           apikey: this.config.apiKey,
           "Content-Type": "application/x-www-form-urlencoded",
         },

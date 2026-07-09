@@ -51,7 +51,7 @@ export type AdminMetaChannel = {
 
 export type AdminMetaChannelSummary = {
   instanceName: string;
-  provider: "evolution" | "meta";
+  provider: "evolution" | "meta" | "gupshup";
   metaChannelId: string | null;
   channel: AdminMetaChannel | null;
 };
@@ -68,6 +68,25 @@ export type AdminMetaTemplate = {
   variables: unknown;
   rejectionReason: string | null;
   lastSyncedAt: string;
+};
+
+export type GupshupChannelStatus = "draft" | "active" | "disabled";
+
+export type AdminGupshupChannel = {
+  id: string;
+  instanceName: string;
+  appId: string | null;
+  appName: string;
+  phoneNumber: string;
+  status: GupshupChannelStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminGupshupChannelSummary = {
+  instanceName: string;
+  provider: "evolution" | "meta" | "gupshup";
+  gupshupChannel: AdminGupshupChannel | null;
 };
 
 type BackendResponse<T> = T & {
@@ -281,6 +300,18 @@ export async function listMetaChannels({ accessToken }: AuthHeadersInput) {
   return parseResponse<{
     success: boolean;
     channels: AdminMetaChannelSummary[];
+  }>(response);
+}
+
+export async function listGupshupChannels({ accessToken }: AuthHeadersInput) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/gupshup/channels`, {
+    method: "GET",
+    headers: buildHeaders(accessToken),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    channels: AdminGupshupChannelSummary[];
   }>(response);
 }
 

@@ -1,0 +1,119 @@
+# Análise Técnica: Integração de Cobrança - Registro Base (RB) (Versão Final)
+
+Este documento descreve a especificação técnica refinada para conectar a API de Cobrança do **Registro Base (RB)** ao nosso ecossistema de Pipelines e Automação de WhatsApp, separando a experiência customizada do cliente **"Dr. Óculos"** do fluxo flexível para **novos clientes**, e detalhando o controle de horários e tipo de envio.
+
+---
+
+## 1. Mapeamento da API do Registro Base (RB)
+
+A comunicação com a API do RB utiliza parâmetros serializados como `multipart/form-data` sob requisições do método `GET`.
+
+### A. Autenticação (Obtensão do Token de Sessão)
+- **URL**: `GET https://app.registrobase.com.br:32077/auth?tokenapi={TokenAPI}`
+- **Parâmetro**: `tokenapi` (API Key gerada no Registro Base para a ótica).
+- **Resposta**: Retorna um JSON contendo o token de sessão JWT:
+  ```json
+  {
+    "token": "eyJhbGciOiAiQUVTM..."
+  }
+  ```
+
+### B. Listagem de Títulos a Receber (Vencer)
+- **URL**: `GET https://app.registrobase.com.br:32077/apiIA/listardocreceber`
+- **Cabeçalhos**:
+  - `Authorization: Bearer {token}`
+  - `Accept: application/json`
+- **Payload (multipart/form-data)**:
+  - `function=1`
+  - `TokenAPI={TokenAPI}`
+  - `qtdeDias={dias}` (Ex: `2` para títulos vencendo em 2 dias, `0` para vencer hoje)
+  - `empresa={empresa_ids}` (Ex: `"1,2"`)
+  - `pagenumber=1`
+  - `RowspPage=100`
+  - `CLIE_ID=`
+
+### C. Listagem de Títulos Atrasados (Vencidos)
+- **URL**: `GET https://app.registrobase.com.br:32077/apiIA/listardocvencidos`
+- Mesmo cabeçalho e payload de `/listardocreceber`, mas retorna títulos já vencidos de acordo com `qtdeDias` de atraso.
+
+> [!IMPORTANT]  
+> Conforme solicitado, a funcionalidade de geração de PDFs de boletos (`/apiIA/GetBoletoPDF`) e link de pagamentos **foi excluída** desta fase da integração. Focaremos estritamente nas informações de saldo devedor, datas e dados de contato do cliente devedor.
+
+---
+
+## 2. Diferenciação de Fluxos por Cliente (Dr. Óculos vs. Geral)
+
+Para atender à necessidade de uma solução pronta de imediato para o cliente âncora ("Dr. Óculos") e, ao mesmo tempo, oferecer flexibilidade para novos clientes que utilizarem a integração no futuro, dividiremos o comportamento da criação da integração:
+
+### Fluxo A: Cliente "Dr. Óculos" (Pronto para Uso)
+Quando a ferramenta `rb_billing` for ativada na conta "Dr. Óculos", o sistema criará a estrutura completa de forma automática:
+1. **Pipeline**: Cria o pipeline `"Cobrança - Dr. Óculos"`.
+2. **Etapas Pré-definidas**: Cria automaticamente as 5 etapas de cobrança:
+   - `Etapa 1`: **A vencer (2 dias)**
+   - `Etapa 2`: **Vence Hoje**
+   - `Etapa 3`: **Atrasado (1 dia)**
+   - `Etapa 4`: **Cobrança Suave (4 dias)**
+   - `Etapa 5`: **Cobrança Crítica (15 dias)**
+   - `Etapa 6`: **Pago / Concluído**
+3. **Automação Integrada via Gupshup**: O pipeline do Dr. Óculos já nascerá com as automações de disparos configuradas apontando para a conta e templates homologados da Gupshup (`d2687393-bd72-4d1d-a652-d3e41d1830ed`, etc.), utilizando as credenciais obtidas nos fluxos de referência (origem: `556282591715`).
+
+### Fluxo B: Novos Clientes (Flexível / Customizável)
+Quando a integração for ativada por qualquer outro usuário na criação de um agente do template de ótica:
+1. **Pipeline**: O sistema cria apenas o esqueleto do pipeline chamado `"Cobrança - [Nome do Agente/Ótica]"`, sem etapas pré-definidas.
+2. **Criação de Etapas**: O usuário cria manualmente no Kanban do app as etapas que melhor atendem ao seu processo (ex: "Lembrete", "Venceu ontem", "Cobrar Gerente").
+3. **Mapeamento de Regras**: No painel de configuração do agente, o usuário mapeia os eventos de tempo da API do RB para as etapas criadas por ele:
+   - *A vencer em 2 dias* -> [Seleciona etapa do dropdown]
+   - *Vencendo Hoje* -> [Seleciona etapa do dropdown]
+   - *Atrasado 1 dia* -> [Seleciona etapa do dropdown]
+   - *Atrasado 4 dias* -> [Seleciona etapa do dropdown]
+   - *Atrasado 15 dias* -> [Seleciona etapa do dropdown]
+   - *Pago / Sem débitos* -> [Seleciona etapa do dropdown]
+
+---
+
+## 3. Controle de Horário e Tipo de Envio (Modal de Configuração)
+
+Para dar flexibilidade operacional, adicionaremos controles de tempo diretamente no modal de criação e configuração do Agente:
+
+```
++-------------------------------------------------------------+
+| CONFIGURAÇÕES DE DISPARO DA COBRANÇA (RB)                   |
++-------------------------------------------------------------+
+| Horário do Sincronismo/Disparo: [ 10:00 ] (HH:MM)           |
+|                                                             |
+| Tipo de Envio:                                              |
+| ( ) Pontual    -> Dispara exatamente no horário definido.    |
+| (x) Humanizado -> Agenda os envios com intervalos           |
+|                   aleatórios (cadência) ao longo do dia.    |
++-------------------------------------------------------------+
+```
+
+### Configurações Salvas na Tool (`config` da `agents.agent_tools`):
+- `trigger_time`: String representando o horário (ex: `"10:00"`).
+- `dispatch_mode`: String enum (`"punctual"` ou `"humanized"`).
+
+### Comportamento do Worker Diário:
+- O worker que roda em background consulta periodicamente (a cada hora ou minuto) se há agentes com a ferramenta `rb_billing` ativa cujo `trigger_time` seja igual ao horário atual.
+- Ao identificar um agente elegível, ele inicia a busca de devedores na API do RB.
+- Se o modo de envio for **Pontual** (`punctual`), o lead é inserido/atualizado e movido imediatamente para a etapa mapeada, ativando as automações no mesmo minuto.
+- Se o modo de envio for **Humanizado** (`humanized`), o sistema insere o lead e agenda a execução da automação utilizando o motor nativo de despacho com cadência e atrasos variáveis (Jitter), simulando digitação e evitando bloqueios de spam pelo WhatsApp.
+
+---
+
+## 4. Estrutura de Metadados e Variáveis do Lead
+
+Ao sincronizar o devedor com o banco de dados do CRM (`crm.leads`), o worker salvará as informações financeiras nos metadados do lead. Isso permitirá que as automações de mensagens usem tags dinâmicas:
+
+- `{{lead.lead_name}}` -> Nome do cliente (Ex: "Lucimar Candida de Paula").
+- `{{lead.metadata.saldo_devedor}}` -> Valor líquido consolidado devido (Ex: `R$ 126,67`).
+- `{{lead.metadata.data_vencimento}}` -> Data de vencimento correspondente.
+
+---
+
+## 5. Criterios de Aceite para a Implementação
+
+- **Dr. Óculos**: Funil completo, etapas criadas e automações com template Gupshup prontas ao ativar a tool.
+- **Outros Clientes**: Apenas pipeline base criado, etapas manuais no Kanban e mapeamento flexível na tela de configuração da tool.
+- **Configuração de Horário**: Modal do agente permite alterar o horário de início e o tipo de envio (pontual vs humanizado).
+- **Sem Geração de Boleto**: Nenhuma chamada ao endpoint de PDF é feita, economizando recursos.
+- **Evitar Mensagens Múltiplas**: Regra no worker garante que o devedor não receba mais de uma mensagem por dia mesmo que possua múltiplos títulos vencidos (os valores são agrupados pelo CPF/CNPJ ou ID do cliente).

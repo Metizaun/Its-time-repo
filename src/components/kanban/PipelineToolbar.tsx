@@ -1,4 +1,4 @@
-import { Plus, HelpCircle, Building2 } from "lucide-react";
+import { Plus, HelpCircle, Building2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -11,6 +11,11 @@ interface PipelineToolbarProps {
   onInstanceChange: (instance: string) => void;
   instanceOptions: string[];
   instancesLoading?: boolean;
+  selectedPipelineId: string;
+  onPipelineChange: (pipelineId: string) => void;
+  onCreatePipeline: () => void;
+  pipelineOptions: Array<{ id: string; name: string }>;
+  pipelinesLoading?: boolean;
 }
 
 export function PipelineToolbar({
@@ -18,7 +23,12 @@ export function PipelineToolbar({
   selectedInstance,
   onInstanceChange,
   instanceOptions,
-  instancesLoading = false
+  instancesLoading = false,
+  selectedPipelineId,
+  onPipelineChange,
+  onCreatePipeline,
+  pipelineOptions,
+  pipelinesLoading = false
 }: PipelineToolbarProps) {
   const { userRole } = useAuth();
   const { openModal } = useApp();
@@ -34,7 +44,7 @@ export function PipelineToolbar({
 
         {isAdmin && (
           <button 
-            onClick={() => openModal('STAGE_FORM')} 
+            onClick={() => openModal('STAGE_FORM', { pipelineId: selectedPipelineId })} 
             className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-bg-surface)] text-foreground/70 text-sm font-semibold rounded-xl hover:bg-[var(--color-bg-elevated)] transition-all"
           >
             <Plus className="w-4 h-4 opacity-70" />
@@ -44,6 +54,31 @@ export function PipelineToolbar({
       </div>
 
       <div className="flex items-center gap-3">
+      <Select value={selectedPipelineId} onValueChange={onPipelineChange} disabled={pipelinesLoading || pipelineOptions.length === 0}>
+        <SelectTrigger className="w-[220px] bg-[var(--color-bg-surface)] border-[var(--color-border-subtle)] text-foreground rounded-xl focus:ring-0 focus:ring-offset-0">
+          <Workflow className="w-4 h-4 mr-2 text-[var(--color-text-secondary)]" />
+          <SelectValue placeholder="Pipeline" />
+        </SelectTrigger>
+        <SelectContent className="bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] rounded-xl">
+          {pipelineOptions.map((pipeline) => (
+            <SelectItem key={pipeline.id} value={pipeline.id} className="text-foreground focus:bg-[var(--color-bg-surface)] focus:text-foreground cursor-pointer">
+              {pipeline.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {isAdmin ? (
+        <button
+          type="button"
+          onClick={onCreatePipeline}
+          className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] transition-all hover:bg-[var(--color-bg-elevated)] hover:text-foreground"
+          title="Novo pipeline"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      ) : null}
+
       <Select value={selectedInstance} onValueChange={onInstanceChange} disabled={instancesLoading}>
         <SelectTrigger className="w-[220px] bg-[var(--color-bg-surface)] border-[var(--color-border-subtle)] text-foreground rounded-xl focus:ring-0 focus:ring-offset-0">
           <Building2 className="w-4 h-4 mr-2 text-[var(--color-text-secondary)]" />

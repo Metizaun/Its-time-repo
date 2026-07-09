@@ -75,6 +75,15 @@ Verde = bem-sucedido. Vermelho (`--color-error`) = erro. Amarelo = aviso. Nunca 
 ```
 `font-family-mono` é exclusivo para: labels de seção (section-label), headers de tabela, badges, IDs técnicos, timestamps, placeholders de versão.
 
+### 9. Texto Técnico de Implementação no Front-end
+```
+❌ "O worker consulta o endpoint..."
+❌ "Lead nasce da API..."
+❌ "Prompt técnico", "payload", "bootstrap", "job", "sync", "hook interno"
+❌ Explicações de backend em helper text, cards, badges ou estados vazios
+```
+Front-end operacional não deve expor a mecânica interna do sistema. A interface precisa falar em ações, escolhas e resultado percebido pelo usuário. Se uma frase só existe para descrever infraestrutura, ela pertence à documentação interna, não à tela.
+
 ---
 
 ## ✅ OBRIGATÓRIO — Paradigmas de Consistência

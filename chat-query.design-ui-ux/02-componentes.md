@@ -126,6 +126,14 @@
 }
 ```
 
+### Regra de Microcopy em Formulários
+
+- Helper text existe para destravar a ação, não para explicar arquitetura.
+- O usuário deve ver linguagem operacional curta, nunca termos de implementação como `worker`, `endpoint`, `API`, `prompt`, `payload`, `bootstrap` ou nomes internos de jobs.
+- Se o campo já comunica a decisão sozinho, prefira remover o helper text em vez de preencher espaço.
+- Estados do campo devem dar feedback visual suficiente para que a seleção seja percebida sem texto redundante.
+- Em formulários densos, priorize `label + campo + estado` antes de qualquer descrição.
+
 ### Select e Textarea
 
 ```css
