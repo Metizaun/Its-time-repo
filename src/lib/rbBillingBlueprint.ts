@@ -1,6 +1,6 @@
 import type { AutomationJourneyPayload, AutomationStepPayload } from "@/hooks/useAutomationJourneys";
 
-const RB_PAYMENT_TYPE_IDS = ["6"];
+const RB_PAYMENT_TYPE_IDS = ["6", "8", "9"];
 
 export type RbBillingStageBlueprint = {
   key: string;
@@ -306,6 +306,7 @@ export function buildRbBillingJourneyPayload(params: {
     humanized_dispatch_window_start: "08:00:00",
     humanized_dispatch_window_end: "19:00:00",
     daily_dispatch_enabled: false,
+    daily_dispatch_weekends_enabled: false,
     daily_dispatch_time: null,
     entry_source: "rb",
     entry_rule: {

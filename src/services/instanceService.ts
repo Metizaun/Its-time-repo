@@ -315,6 +315,41 @@ export async function listGupshupChannels({ accessToken }: AuthHeadersInput) {
   }>(response);
 }
 
+export async function upsertGupshupChannel({
+  accessToken,
+  instanceName,
+  appId,
+  appName,
+  apiKey,
+  phoneNumber,
+  status,
+}: AuthHeadersInput & {
+  instanceName: string;
+  appId?: string | null;
+  appName: string;
+  apiKey: string;
+  phoneNumber: string;
+  status?: GupshupChannelStatus;
+}) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/gupshup/channels`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({
+      instanceName,
+      appId,
+      appName,
+      apiKey,
+      phoneNumber,
+      status,
+    }),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    channel: AdminGupshupChannel;
+  }>(response);
+}
+
 export async function upsertMetaChannel({
   accessToken,
   instanceName,

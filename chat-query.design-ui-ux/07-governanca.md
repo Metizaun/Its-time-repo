@@ -84,6 +84,22 @@ Verde = bem-sucedido. Vermelho (`--color-error`) = erro. Amarelo = aviso. Nunca 
 ```
 Front-end operacional não deve expor a mecânica interna do sistema. A interface precisa falar em ações, escolhas e resultado percebido pelo usuário. Se uma frase só existe para descrever infraestrutura, ela pertence à documentação interna, não à tela.
 
+### 10. Texto Interno de Regra na Interface
+```
+❌ "Cliente X segue fixo com 6, 8 e 9"
+❌ Observação explicando trava interna, lista fixa ou regra de backend
+❌ Frase criada só para justificar comportamento técnico do campo
+```
+Se a regra não pode ser dita em linguagem simples de produto, ela não deve aparecer na interface. Prefira estado visual, seleção bloqueada ou ausência total de helper text.
+
+### 11. Caixa Decorativa em Controle Secundário
+```
+❌ Checkbox auxiliar dentro de card, box arredondada ou container com destaque
+❌ Controle secundário competindo com o campo principal
+❌ Helper text longo em opção simples de ligar/desligar
+```
+Controles auxiliares devem ser discretos, compactos e silenciosos. Quiet luxury em SaaS operacional pede hierarquia: campo principal primeiro, ajuste secundário depois.
+
 ---
 
 ## ✅ OBRIGATÓRIO — Paradigmas de Consistência

@@ -65,11 +65,13 @@ type GroupedDebt = {
   totalAmount: number;
   titlesCount: number;
   nextDueDate: string | null;
+  paymentTypeIds: string[];
   titles: Array<{
     titulo: string;
     amount: number;
     due_date: string | null;
     days_due: number | null;
+    payment_type_id: string | null;
     store_emp_id: string;
     store_emp_cpf_cnpj: string;
   }>;
@@ -110,6 +112,20 @@ type WorkerConfig = {
   mockFixturePath?: string | null;
   pollMs?: number;
 };
+
+const RB_PAYMENT_TYPE_LABELS: Record<string, string> = {
+  "1": "Dinheiro",
+  "2": "Cartao",
+  "3": "Cheque",
+  "4": "Movimento bancario",
+  "5": "Credito financeiro",
+  "6": "Carne",
+  "7": "Pix",
+  "8": "Crediario proprio",
+  "9": "Boleto",
+};
+
+const RB_PAYMENT_TAG_PREFIX = "Pagamento: ";
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -189,6 +205,15 @@ function phoneVariants(phone: string) {
 
 function normalizePaymentTypeId(value: unknown) {
   return asString(value);
+}
+
+function resolvePaymentTypeId(record: RbBillingRecord) {
+  return normalizePaymentTypeId(
+    (record as Record<string, unknown>).PGTO_IDORIGEM ??
+      (record as Record<string, unknown>).pgto_idorigem ??
+      (record as Record<string, unknown>).forma_id ??
+      record.FORMA_ID
+  );
 }
 
 function parseDate(value: unknown) {
@@ -293,6 +318,7 @@ function groupRbRecords(records: RbBillingRecord[], config: RbBillingToolConfig)
     const key = `${phone}|${storeEmpId || storeEmpCpfCnpj}`;
     const amount = RbClient.normalizeMoney(record.FIN_VLLIQUIDO);
     const dueDate = parseDate(record.DtVencimento);
+    const paymentTypeId = resolvePaymentTypeId(record);
 
     const existing = grouped.get(key);
     if (!existing) {
@@ -308,12 +334,14 @@ function groupRbRecords(records: RbBillingRecord[], config: RbBillingToolConfig)
         totalAmount: amount,
         titlesCount: 1,
         nextDueDate: dueDate,
+        paymentTypeIds: paymentTypeId ? [paymentTypeId] : [],
         titles: [
           {
             titulo: asString(record.Titulo),
             amount,
             due_date: dueDate,
             days_due: RbClient.normalizeMoney(record.DiasVenc),
+            payment_type_id: paymentTypeId || null,
             store_emp_id: storeEmpId,
             store_emp_cpf_cnpj: storeEmpCpfCnpj,
           },
@@ -329,9 +357,14 @@ function groupRbRecords(records: RbBillingRecord[], config: RbBillingToolConfig)
       amount,
       due_date: dueDate,
       days_due: RbClient.normalizeMoney(record.DiasVenc),
+      payment_type_id: paymentTypeId || null,
       store_emp_id: storeEmpId,
       store_emp_cpf_cnpj: storeEmpCpfCnpj,
     });
+
+    if (paymentTypeId && !existing.paymentTypeIds.includes(paymentTypeId)) {
+      existing.paymentTypeIds.push(paymentTypeId);
+    }
 
     if (dueDate && (!existing.nextDueDate || dueDate < existing.nextDueDate)) {
       existing.nextDueDate = dueDate;
@@ -750,6 +783,89 @@ export class RbBillingWorker {
     }
   }
 
+  private async syncLeadPaymentTypeTags(leadId: string, acesId: number, paymentTypeIds: string[]) {
+    const desiredTagNames = Array.from(
+      new Set(
+        paymentTypeIds
+          .map((paymentTypeId) => RB_PAYMENT_TYPE_LABELS[paymentTypeId])
+          .filter((label): label is string => Boolean(label))
+          .map((label) => `${RB_PAYMENT_TAG_PREFIX}${label}`)
+      )
+    );
+
+    const managedTagNames = Object.values(RB_PAYMENT_TYPE_LABELS).map((label) => `${RB_PAYMENT_TAG_PREFIX}${label}`);
+    const { data: existingTags, error: existingTagsError } = await this.serviceClient
+      .from("tags")
+      .select("id, name")
+      .eq("aces_id", acesId)
+      .in("name", managedTagNames);
+
+    if (existingTagsError) {
+      throw new Error(`Nao foi possivel consultar tags de pagamento RB: ${existingTagsError.message}`);
+    }
+
+    const existingTagByName = new Map(
+      (existingTags ?? []).map((tag) => [String(tag.name), String(tag.id)])
+    );
+
+    for (const tagName of desiredTagNames) {
+      if (existingTagByName.has(tagName)) {
+        continue;
+      }
+
+      const { data: createdTag, error: createTagError } = await this.serviceClient
+        .from("tags")
+        .insert({
+          aces_id: acesId,
+          name: tagName,
+          urgencia: null,
+        })
+        .select("id, name")
+        .single();
+
+      if (createTagError || !createdTag) {
+        throw new Error(`Nao foi possivel criar tag de pagamento RB: ${createTagError?.message ?? tagName}`);
+      }
+
+      existingTagByName.set(String(createdTag.name), String(createdTag.id));
+    }
+
+    const managedTagIds = Array.from(existingTagByName.values());
+    if (managedTagIds.length > 0) {
+      const { error: deleteError } = await this.serviceClient
+        .from("lead_tags")
+        .delete()
+        .eq("lead_id", leadId)
+        .in("tag_id", managedTagIds);
+
+      if (deleteError) {
+        throw new Error(`Nao foi possivel limpar tags de pagamento RB: ${deleteError.message}`);
+      }
+    }
+
+    const desiredTagIds = desiredTagNames
+      .map((tagName) => existingTagByName.get(tagName) ?? null)
+      .filter((tagId): tagId is string => Boolean(tagId));
+
+    if (desiredTagIds.length === 0) {
+      return;
+    }
+
+    const { error: upsertError } = await this.serviceClient
+      .from("lead_tags")
+      .upsert(
+        desiredTagIds.map((tagId) => ({
+          lead_id: leadId,
+          tag_id: tagId,
+        })),
+        { onConflict: "lead_id,tag_id", ignoreDuplicates: true }
+      );
+
+    if (upsertError) {
+      throw new Error(`Nao foi possivel salvar tags de pagamento RB: ${upsertError.message}`);
+    }
+  }
+
   private async moveLeadToStage(leadId: string, stageId: string, acesId: number) {
     const { error } = await this.serviceClient.rpc("service_move_lead_to_stage", {
       p_lead_id: leadId,
@@ -998,7 +1114,7 @@ export class RbBillingWorker {
             return true;
           }
 
-          const paymentTypeId = normalizePaymentTypeId((row as Record<string, unknown>).forma_id ?? row.FORMA_ID);
+          const paymentTypeId = resolvePaymentTypeId(row);
           return paymentTypeId ? allowedPaymentTypeIds.has(paymentTypeId) : false;
         });
 
@@ -1030,6 +1146,7 @@ export class RbBillingWorker {
           }
 
           await this.saveLeadRbState(lead.id, binding.aces_id, agent, debt);
+          await this.syncLeadPaymentTypeTags(lead.id, binding.aces_id, debt.paymentTypeIds);
 
           if (!existed || lead.stage_id !== journeyItem.triggerStageId) {
             await this.moveLeadToStage(lead.id, journeyItem.triggerStageId, binding.aces_id);

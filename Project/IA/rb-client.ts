@@ -15,6 +15,7 @@ export type RbBillingRecord = {
   FIN_VLLIQUIDO: string | number | null;
   DtVencimento: string | null;
   DiasVenc: string | number | null;
+  PGTO_IDORIGEM?: string | number | null;
   FORMA_ID: string | number | null;
   EMP_ID: string | number | null;
   EMP_CPFCNPJ: string | null;
@@ -101,6 +102,7 @@ function buildLegacySampleRows(): RbBillingRecord[] {
       FIN_VLLIQUIDO: 126.67,
       DtVencimento: "2026-07-09",
       DiasVenc: -2,
+      PGTO_IDORIGEM: 6,
       FORMA_ID: 6,
       EMP_ID: 1,
       EMP_CPFCNPJ: "66972304000129",
@@ -117,6 +119,7 @@ function buildLegacySampleRows(): RbBillingRecord[] {
       FIN_VLLIQUIDO: 59.9,
       DtVencimento: "2026-07-09",
       DiasVenc: -2,
+      PGTO_IDORIGEM: 6,
       FORMA_ID: 6,
       EMP_ID: 1,
       EMP_CPFCNPJ: "66972304000129",
@@ -133,6 +136,7 @@ function buildLegacySampleRows(): RbBillingRecord[] {
       FIN_VLLIQUIDO: 214.3,
       DtVencimento: "2026-07-03",
       DiasVenc: 4,
+      PGTO_IDORIGEM: 6,
       FORMA_ID: 6,
       EMP_ID: 2,
       EMP_CPFCNPJ: "66972192000106",
@@ -149,6 +153,7 @@ function buildLegacySampleRows(): RbBillingRecord[] {
       FIN_VLLIQUIDO: 598.5,
       DtVencimento: "2026-06-21",
       DiasVenc: 16,
+      PGTO_IDORIGEM: 6,
       FORMA_ID: 6,
       EMP_ID: 2,
       EMP_CPFCNPJ: "66972192000106",

@@ -133,6 +133,14 @@
 - Se o campo já comunica a decisão sozinho, prefira remover o helper text em vez de preencher espaço.
 - Estados do campo devem dar feedback visual suficiente para que a seleção seja percebida sem texto redundante.
 - Em formulários densos, priorize `label + campo + estado` antes de qualquer descrição.
+- Nunca exponha regra interna, código, enum, ID, apelido técnico ou lista operacional no texto da interface.
+
+### Controles Auxiliares
+
+- Checkbox auxiliar nunca vira card, box destacada ou bloco chamativo.
+- Quando o controle principal for um input de ação, o auxiliar deve vir abaixo dele, menor e mais quieto.
+- Use `checkbox + label curta` em uma linha simples. Sem explicação longa por padrão.
+- O protagonismo visual fica no campo principal; o auxiliar só complementa a decisão.
 
 ### Select e Textarea
 

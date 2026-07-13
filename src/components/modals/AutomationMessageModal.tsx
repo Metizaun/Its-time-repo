@@ -9,6 +9,7 @@ import { formatDelayLabel, getMessagePreview, sortStepsForDisplay } from "@/comp
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAutomationMediaAssets } from "@/hooks/useAutomationMediaAssets";
 import { useAutomationMessageFlow } from "@/hooks/useAutomationMessageFlow";
 import type { Instance } from "@/hooks/useInstances";
@@ -72,15 +74,18 @@ const MIN_HUMANIZED_WINDOW_MINUTES = 30;
 const RECOMMENDED_HUMANIZED_WINDOW_MINUTES = 120;
 const LATE_HUMANIZED_WINDOW_END_MINUTES = 21 * 60;
 const RB_PAYMENT_TYPE_OPTIONS = [
-  { id: "1", label: "dinheiro" },
-  { id: "2", label: "cartao" },
-  { id: "3", label: "cheque" },
-  { id: "4", label: "movimento bancario" },
-  { id: "5", label: "credito financeiro" },
-  { id: "6", label: "carne" },
-  { id: "7", label: "pix" },
+  { id: "1", label: "Dinheiro" },
+  { id: "2", label: "Cartao" },
+  { id: "3", label: "Cheque" },
+  { id: "4", label: "Movimento bancario" },
+  { id: "5", label: "Credito financeiro" },
+  { id: "6", label: "Carne" },
+  { id: "7", label: "Pix" },
+  { id: "8", label: "Crediario proprio" },
+  { id: "9", label: "Boleto" },
 ] as const;
-const DR_OCULOS_RB_PAYMENT_TYPE_ID = "6";
+const DR_OCULOS_ACES_ID = 5;
+const DR_OCULOS_RB_PAYMENT_TYPE_IDS = ["6", "8", "9"] as const;
 
 const RB_MESSAGE_VARIABLES = [
   { token: "{nome}", label: "Nome do lead", description: "Nome usado nas saudacoes da mensagem." },
@@ -102,6 +107,7 @@ type JourneyFormState = {
   humanized_dispatch_window_start: string;
   humanized_dispatch_window_end: string;
   daily_dispatch_enabled: boolean;
+  daily_dispatch_weekends_enabled: boolean;
   daily_dispatch_time: string;
   entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;
@@ -200,21 +206,13 @@ function buildRbStepLabel(stepForm: StepFormState) {
   return `Atrasado (${daysOffset} dias)`;
 }
 
-function normalizeInstanceName(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]+/g, "")
-    .toLowerCase();
-}
+function hasSameStringSelection(currentValues: string[], expectedValues: readonly string[]) {
+  if (currentValues.length !== expectedValues.length) {
+    return false;
+  }
 
-function isDrOculosInstance(instanceName: string) {
-  const normalized = normalizeInstanceName(instanceName);
-  return normalized.includes("droculos");
-}
-
-function getSingleRbPaymentTypeId(selectedIds: string[]) {
-  return selectedIds[0] ?? "";
+  const currentSet = new Set(currentValues);
+  return expectedValues.every((value) => currentSet.has(value));
 }
 
 function findAtendimentoStageId(stages: PipelineStage[]) {
@@ -358,6 +356,7 @@ function buildInitialJourneyForm(params: {
       humanized_dispatch_window_start: "08:00",
       humanized_dispatch_window_end: "19:00",
       daily_dispatch_enabled: false,
+      daily_dispatch_weekends_enabled: false,
       daily_dispatch_time: "08:00",
       entry_source: "conditions",
       entry_rule: createDefaultEntryRule(defaultStageId, params.preselectedInstanceName),
@@ -380,6 +379,7 @@ function buildInitialJourneyForm(params: {
     humanized_dispatch_window_start: toHHMM(params.journey.humanized_dispatch_window_start, "08:00"),
     humanized_dispatch_window_end: toHHMM(params.journey.humanized_dispatch_window_end, "19:00"),
     daily_dispatch_enabled: params.journey.daily_dispatch_enabled ?? false,
+    daily_dispatch_weekends_enabled: params.journey.daily_dispatch_weekends_enabled ?? false,
     daily_dispatch_time: toHHMM(params.journey.daily_dispatch_time, "08:00"),
     entry_source: params.journey.entry_source ?? "conditions",
     entry_rule: updateDefaultEntryRuleInstance(
@@ -1142,6 +1142,7 @@ export function AutomationMessageModal({
   rbEnabledInstanceNames,
   showDebugTools = false,
 }: AutomationMessageModalProps) {
+  const { acesId } = useAuth();
   const [journeyForm, setJourneyForm] = useState<JourneyFormState>(() =>
     buildInitialJourneyForm({
       journey,
@@ -1177,16 +1178,11 @@ export function AutomationMessageModal({
   );
   const humanizedDispatchQuality = useMemo(
     () => getHumanizedDispatchQuality(journeyForm),
-    [
-      journeyForm.dispatch_limit_per_hour,
-      journeyForm.humanized_dispatch_enabled,
-      journeyForm.humanized_dispatch_window_end,
-      journeyForm.humanized_dispatch_window_start,
-    ],
+    [journeyForm],
   );
   const dailyDispatchQuality = useMemo(
     () => getDailyDispatchQuality(journeyForm),
-    [journeyForm.daily_dispatch_enabled, journeyForm.daily_dispatch_time],
+    [journeyForm],
   );
   const rbEntryAvailable = useMemo(
     () =>
@@ -1195,8 +1191,8 @@ export function AutomationMessageModal({
     [journeyForm.instance_name, rbEnabledInstanceNames],
   );
   const drOculosRbLocked = useMemo(
-    () => journeyForm.entry_source === "rb" && isDrOculosInstance(journeyForm.instance_name),
-    [journeyForm.entry_source, journeyForm.instance_name],
+    () => journeyForm.entry_source === "rb" && acesId === DR_OCULOS_ACES_ID,
+    [acesId, journeyForm.entry_source],
   );
   const {
     assets: mediaAssets,
@@ -1262,16 +1258,13 @@ export function AutomationMessageModal({
     }
 
     setStepForm((previous) => {
-      if (
-        previous.rb_payment_type_ids.length === 1 &&
-        previous.rb_payment_type_ids[0] === DR_OCULOS_RB_PAYMENT_TYPE_ID
-      ) {
+      if (hasSameStringSelection(previous.rb_payment_type_ids, DR_OCULOS_RB_PAYMENT_TYPE_IDS)) {
         return previous;
       }
 
       return {
         ...previous,
-        rb_payment_type_ids: [DR_OCULOS_RB_PAYMENT_TYPE_ID],
+        rb_payment_type_ids: [...DR_OCULOS_RB_PAYMENT_TYPE_IDS],
         content_mode: "text",
       };
     });
@@ -1371,6 +1364,10 @@ export function AutomationMessageModal({
         humanized_dispatch_window_start: normalizeTimeForDb(journeyForm.humanized_dispatch_window_start),
         humanized_dispatch_window_end: normalizeTimeForDb(journeyForm.humanized_dispatch_window_end),
         daily_dispatch_enabled: journeyForm.entry_source === "rb" && journeyForm.daily_dispatch_enabled,
+        daily_dispatch_weekends_enabled:
+          journeyForm.entry_source === "rb" &&
+          journeyForm.daily_dispatch_enabled &&
+          journeyForm.daily_dispatch_weekends_enabled,
         daily_dispatch_time: journeyForm.entry_source === "rb" && journeyForm.daily_dispatch_enabled
           ? normalizeTimeForDb(journeyForm.daily_dispatch_time)
           : null,
@@ -1820,37 +1817,42 @@ export function AutomationMessageModal({
                         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px]">
                           <div className="space-y-2">
                             <Label className="text-[var(--color-gray-600)]">Tipo de pagamento</Label>
-                            <Select
-                              value={getSingleRbPaymentTypeId(stepForm.rb_payment_type_ids)}
-                              onValueChange={(value) =>
-                                handleStepFormChange((previous) => ({
-                                  ...previous,
-                                  rb_payment_type_ids: value ? [value] : [],
-                                  content_mode: "text",
-                                }))
-                              }
-                              disabled={drOculosRbLocked}
-                            >
-                              <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
-                                <SelectValue placeholder="Selecione o tipo" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {RB_PAYMENT_TYPE_OPTIONS.map((option) => (
-                                  <SelectItem key={option.id} value={option.id}>
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <div className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--border-input)] bg-[var(--color-surface-1)] p-3 sm:grid-cols-2">
+                              {RB_PAYMENT_TYPE_OPTIONS.map((option) => {
+                                const checked = stepForm.rb_payment_type_ids.includes(option.id);
+
+                                return (
+                                  <label
+                                    key={option.id}
+                                    className="flex items-center gap-2 rounded-md px-1 py-1 text-sm text-[var(--color-gray-900)]"
+                                  >
+                                    <Checkbox
+                                      checked={checked}
+                                      disabled={drOculosRbLocked}
+                                      onCheckedChange={(nextChecked) =>
+                                        handleStepFormChange((previous) => {
+                                          const nextIds = nextChecked
+                                            ? [...new Set([...previous.rb_payment_type_ids, option.id])]
+                                            : previous.rb_payment_type_ids.filter((item) => item !== option.id);
+
+                                          return {
+                                            ...previous,
+                                            rb_payment_type_ids: nextIds,
+                                            content_mode: "text",
+                                          };
+                                        })
+                                      }
+                                    />
+                                    <span>
+                                      {option.id} - {option.label}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
                           </div>
 
-                          {drOculosRbLocked ? (
-                            <div className="flex items-end">
-                              <p className="text-xs text-[var(--color-gray-500)]">
-                                Dr. Oculos segue fixo com carne.
-                              </p>
-                            </div>
-                          ) : null}
+                          {drOculosRbLocked ? <div className="flex items-end" /> : null}
                         </div>
                       </div>
                     ) : (
@@ -1989,18 +1991,34 @@ export function AutomationMessageModal({
                     ) : null}
 
                     {journeyForm.entry_source === "rb" && journeyForm.daily_dispatch_enabled ? (
-                      <div className="flex min-h-14 items-center justify-between gap-4 py-3">
-                        <Label htmlFor="daily-dispatch-time" className="text-sm font-medium">
-                          Horario do disparo
-                        </Label>
-                        <Input
-                          id="daily-dispatch-time"
-                          type="time"
-                          step={60}
-                          className="h-9 w-32"
-                          value={journeyForm.daily_dispatch_time}
-                          onChange={(event) => handleJourneyFieldChange("daily_dispatch_time", event.target.value)}
-                        />
+                      <div className="space-y-3 py-3">
+                        <div className="flex min-h-14 items-center justify-between gap-4">
+                          <Label htmlFor="daily-dispatch-time" className="text-sm font-medium">
+                            Horario do disparo
+                          </Label>
+                          <Input
+                            id="daily-dispatch-time"
+                            type="time"
+                            step={60}
+                            className="h-9 w-32"
+                            value={journeyForm.daily_dispatch_time}
+                            onChange={(event) => handleJourneyFieldChange("daily_dispatch_time", event.target.value)}
+                          />
+                        </div>
+
+                        <label
+                          htmlFor="daily-dispatch-weekends"
+                          className="flex cursor-pointer items-center gap-2 pl-0.5 text-sm text-muted-foreground"
+                        >
+                          <Checkbox
+                            id="daily-dispatch-weekends"
+                            checked={journeyForm.daily_dispatch_weekends_enabled}
+                            onCheckedChange={(checked) =>
+                              handleJourneyFieldChange("daily_dispatch_weekends_enabled", checked === true)
+                            }
+                          />
+                          <span>Disparar fim de semana</span>
+                        </label>
                       </div>
                     ) : null}
                   </div>

@@ -14,7 +14,10 @@ import { RbBillingWorker } from "./rb-billing-worker.js";
 import { MetaWebhookProcessor } from "./meta-webhook.js";
 import { MetaTemplateService } from "./meta-template-service.js";
 import { MetaAdminService } from "./meta-admin-service.js";
-import { GupshupWebhookProcessor } from "./gupshup-webhook.js";
+import {
+  GupshupWebhookProcessor,
+  parseGupshupWebhookPayload,
+} from "./gupshup-webhook.js";
 import { GupshupAdminService } from "./gupshup-admin-service.js";
 
 type AuthenticatedRequest = Request & {
@@ -83,6 +86,34 @@ function summarizeEvolutionWebhookPayload(payload: WebhookPayload) {
         asString(data.participantPn),
     };
   }
+}
+
+function summarizeGupshupWebhookPayload(payload: unknown) {
+  const root = asRecord(payload);
+  const events = parseGupshupWebhookPayload(payload);
+
+  return {
+    object: asString(root.object),
+    gsAppId: asString(root.gs_app_id),
+    eventCount: events.length,
+    events: events.slice(0, 10).map((event) =>
+      event.kind === "inbound"
+        ? {
+            kind: event.kind,
+            messageId: event.message.messageId,
+            phone: event.message.phone,
+            messageType: event.message.messageType,
+            lookup: event.lookup,
+          }
+        : {
+            kind: event.kind,
+            messageId: event.providerMessageId,
+            status: event.rawStatus,
+            destination: event.destination,
+            lookup: event.lookup,
+          }
+    ),
+  };
 }
 
 function requireEnv(name: string) {
@@ -404,8 +435,32 @@ const gupshupWebhookHandler = asyncHandler(async (req, res) => {
     throw new HttpError(503, "GUPSHUP_WEBHOOK_SECRET nao configurado");
   }
 
-  await gupshupWebhookProcessor.processWebhook(req.body);
-  res.status(204).end();
+  const startedAt = Date.now();
+  const summary = summarizeGupshupWebhookPayload(req.body);
+
+  try {
+    const result = await gupshupWebhookProcessor.processWebhook(req.body);
+    const logPayload = {
+      ...summary,
+      result,
+      elapsedMs: Date.now() - startedAt,
+    };
+
+    if (result.ignored > 0) {
+      console.warn("[crm-ai-webhook] Gupshup webhook processado com eventos ignorados:", logPayload);
+    } else {
+      console.info("[crm-ai-webhook] Gupshup webhook processado:", logPayload);
+    }
+    res.status(204).end();
+  } catch (error) {
+    console.error("[crm-ai-webhook] Gupshup webhook falhou:", {
+      ...summary,
+      error: error instanceof Error ? error.message : String(error),
+      details: error instanceof HttpError ? error.details ?? null : null,
+      elapsedMs: Date.now() - startedAt,
+    });
+    throw error;
+  }
 });
 
 const gupshupWebhookProbeHandler = (_req: Request, res: Response) => {
@@ -560,10 +615,11 @@ app.post(
     const status = ["draft", "active", "disabled"].includes(requestedStatus ?? "")
       ? (requestedStatus as "draft" | "active" | "disabled")
       : "draft";
+    const appId = asString(req.body.appId);
     const channel = await gupshupAdminService.upsertChannel({
       acesId: context.acesId,
       instanceName,
-      appId: asString(req.body.appId),
+      appId,
       appName,
       apiKey,
       phoneNumber,

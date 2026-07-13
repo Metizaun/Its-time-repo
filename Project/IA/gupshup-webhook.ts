@@ -84,6 +84,9 @@ export class GupshupWebhookProcessor {
 
     for (const event of events) {
       const channel = await this.resolveChannel(event.lookup);
+      if (channel && event.lookup.appId) {
+        await this.syncChannelAppId(channel.id, event.lookup.appId);
+      }
       if (event.kind === "inbound") {
         if (!channel) {
           ignored += 1;
@@ -233,6 +236,22 @@ export class GupshupWebhookProcessor {
 
     return null;
   }
+
+  private async syncChannelAppId(channelId: string, appId: string) {
+    const normalizedAppId = appId.trim();
+    if (!normalizedAppId) {
+      return;
+    }
+
+    const { error } = await this.gupshupClient
+      .from("channel")
+      .update({ app_id: normalizedAppId, updated_at: new Date().toISOString() })
+      .eq("id", channelId);
+
+    if (error) {
+      throw error;
+    }
+  }
 }
 
 export function parseGupshupWebhookPayload(payload: unknown): ParsedGupshupWebhookEvent[] {
@@ -323,6 +342,7 @@ function parseV2StatusEvent(root: Record<string, unknown>): ParsedStatusEvent | 
 function parseMetaV3Events(root: Record<string, unknown>): ParsedGupshupWebhookEvent[] {
   const events: ParsedGupshupWebhookEvent[] = [];
   const entries = Array.isArray(root.entry) ? root.entry : [];
+  const rootGupshupAppId = asString(root.gs_app_id);
 
   for (const entryValue of entries) {
     const entry = asRecord(entryValue);
@@ -333,7 +353,11 @@ function parseMetaV3Events(root: Record<string, unknown>): ParsedGupshupWebhookE
       const metadata = asRecord(value.metadata);
       const lookup: ChannelLookup = {
         appName: asString(value.app) ?? asString(root.app),
-        appId: asString(entry.id) ?? asString(value.app_id),
+        appId:
+          asString(value.gs_app_id) ??
+          rootGupshupAppId ??
+          asString(value.app_id) ??
+          asString(entry.id),
         phoneNumber:
           asString(metadata.display_phone_number) ?? asString(metadata.phone_number),
       };
