@@ -30,6 +30,7 @@ dist
 build
 coverage
 .tmp/
+/tmp/
 .DS_Store
 DEPLOY_ENV_VPS.local.md
 .vercel
@@ -48,3 +49,6 @@ update/guias/*
 chat-query.design-ui-ux/
 design-refatoracao/
 exemples/
+
+# Local VPS diagnostics may contain machine-specific access details.
+/scripts/*vps*.js

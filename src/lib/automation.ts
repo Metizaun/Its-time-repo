@@ -61,6 +61,7 @@ export interface AutomationJourney {
   humanized_dispatch_window_start: string;
   humanized_dispatch_window_end: string;
   daily_dispatch_enabled: boolean;
+  daily_dispatch_weekends_enabled: boolean;
   daily_dispatch_time: string | null;
   entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;

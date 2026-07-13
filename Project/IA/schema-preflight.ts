@@ -824,9 +824,9 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       serviceClient,
       "automation_funnels",
-      ["id", "daily_dispatch_enabled", "daily_dispatch_time"],
+      ["id", "daily_dispatch_enabled", "daily_dispatch_weekends_enabled", "daily_dispatch_time"],
       "crm.automation_funnels (disparo diario)",
-      "supabase/migrations/20260709140504_add_daily_dispatch_to_automation_funnels.sql"
+      "supabase/migrations/20260710170000_add_daily_dispatch_weekends_control.sql"
     ),
     validateSelectedColumns(
       serviceClient,

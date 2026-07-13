@@ -33,7 +33,9 @@ import {
   refreshInstanceQrCode,
   syncInstanceStatus,
   syncMetaTemplates,
+  upsertGupshupChannel,
   upsertMetaChannel,
+  type AdminGupshupChannel,
   type AdminInstance,
   type AdminGupshupChannelSummary,
   type AdminInstanceSetupStatus,
@@ -74,6 +76,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
+type ExternalConnectionType = "selection" | "webhook" | "gupshup";
 
 function setupStatusLabel(setupStatus: AdminInstanceSetupStatus) {
   switch (setupStatus) {
@@ -118,9 +121,17 @@ export function InstanceManager() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [instanceNameInput, setInstanceNameInput] = useState("");
   const [connectWebhookEnabled, setConnectWebhookEnabled] = useState(false);
+  const [externalConnectionType, setExternalConnectionType] = useState<ExternalConnectionType | null>(null);
   const [remoteEvolutionUrlInput, setRemoteEvolutionUrlInput] = useState("");
   const [remoteApiKeyInput, setRemoteApiKeyInput] = useState("");
   const [remoteInstanceNameInput, setRemoteInstanceNameInput] = useState("");
+  const [gupshupSaving, setGupshupSaving] = useState(false);
+  const [gupshupForm, setGupshupForm] = useState({
+    appName: "",
+    appId: "",
+    apiKey: "",
+    phoneNumber: "",
+  });
   const [creatingInstance, setCreatingInstance] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
@@ -519,6 +530,49 @@ export function InstanceManager() {
     }
   };
 
+  const handleSaveGupshupChannel = async () => {
+    const instanceName = instanceNameInput.trim();
+    if (!instanceName) {
+      toast.error("Informe o nome da instancia.");
+      return;
+    }
+
+    if (!gupshupForm.appName.trim() || !gupshupForm.appId.trim() || !gupshupForm.apiKey.trim() || !gupshupForm.phoneNumber.trim()) {
+      toast.error("Preencha os dados da conexao Gupshup.");
+      return;
+    }
+
+    try {
+      setGupshupSaving(true);
+      const accessToken = await getAccessToken();
+      const result = await upsertGupshupChannel({
+        accessToken,
+        instanceName,
+        appName: gupshupForm.appName.trim(),
+        appId: gupshupForm.appId.trim(),
+        apiKey: gupshupForm.apiKey.trim(),
+        phoneNumber: gupshupForm.phoneNumber.trim(),
+        status: "active",
+      });
+
+      setGupshupChannels((current) => ({
+        ...current,
+        [instanceName]: {
+          instanceName,
+          provider: "gupshup",
+          gupshupChannel: result.channel as AdminGupshupChannel,
+        },
+      }));
+      await loadInstances();
+      toast.success("Conexao Gupshup salva");
+      resetCreateDialog();
+    } catch (err: any) {
+      toast.error("Falha ao salvar conexao Gupshup", { description: err?.message });
+    } finally {
+      setGupshupSaving(false);
+    }
+  };
+
   const handleDisconnect = async (instanceName: string) => {
     const confirmed = window.confirm(`Desconectar a instancia "${instanceName}" agora?`);
     if (!confirmed) return;
@@ -601,9 +655,17 @@ export function InstanceManager() {
     setCreateDialogOpen(false);
     setInstanceNameInput("");
     setConnectWebhookEnabled(false);
+    setExternalConnectionType(null);
     setRemoteEvolutionUrlInput("");
     setRemoteApiKeyInput("");
     setRemoteInstanceNameInput("");
+    setGupshupForm({
+      appName: "",
+      appId: "",
+      apiKey: "",
+      phoneNumber: "",
+    });
+    setGupshupSaving(false);
     setCreatedInstanceName(null);
     setQrCodeBase64(null);
     setCreateConnectionMode(null);
@@ -616,6 +678,7 @@ export function InstanceManager() {
 
   const openCreateDialog = (mode: InstanceConnectionMode) => {
     setConnectWebhookEnabled(mode === "external_webhook");
+    setExternalConnectionType(mode === "external_webhook" ? "selection" : null);
     setCreateConnectionMode(mode);
     setCreateDialogOpen(true);
   };
@@ -642,6 +705,13 @@ export function InstanceManager() {
 
     return () => clearInterval(timer);
   }, [createDialogOpen, createdInstanceName, connectionState]);
+
+  const isExternalConnectionPicker =
+    activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "selection";
+  const isWebhookConnectionForm =
+    activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "webhook";
+  const isGupshupConnectionForm =
+    activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "gupshup";
 
   if (loading) {
     return (
@@ -674,14 +744,14 @@ export function InstanceManager() {
               className="flex-1 gap-2 sm:flex-none"
             >
               <QrCode className="h-4 w-4" />
-              Nova com QR
+              Nova Conexão
             </Button>
             <Button
               onClick={() => openCreateDialog("external_webhook")}
               className="flex-1 gap-2 sm:flex-none"
             >
               <Link2 className="h-4 w-4" />
-              Vincular Evolution externa
+              Conexão Externa
             </Button>
           </div>
         </div>
@@ -733,9 +803,14 @@ export function InstanceManager() {
                       <div className="flex flex-wrap items-center gap-2">
                         {statusBadge(instance.status)}
                         {providerName === "gupshup" ? (
-                          <Badge variant={gupshupChannel?.status === "active" ? "secondary" : "outline"}>
-                            Gupshup {gupshupChannel?.status ?? "nao configurada"}
-                          </Badge>
+                          <>
+                            <Badge variant={gupshupChannel?.status === "active" ? "secondary" : "outline"}>
+                              Gupshup {gupshupChannel?.status ?? "nao configurada"}
+                            </Badge>
+                            {gupshupChannel && !gupshupChannel.appId ? (
+                              <Badge variant="destructive">Sem appId</Badge>
+                            ) : null}
+                          </>
                         ) : metaChannel ? (
                           <Badge variant={metaChannel.status === "active" ? "secondary" : "outline"}>
                             Meta {metaChannel.status}
@@ -765,6 +840,9 @@ export function InstanceManager() {
                         <span className={cn("text-sm font-medium", getInstanceTextColor(instance.color))}>
                           {instance.instanceName}
                         </span>
+                        {providerName === "gupshup" && gupshupChannel?.appId ? (
+                          <span className="text-[10px] text-muted-foreground">appId: {gupshupChannel.appId}</span>
+                        ) : null}
                       </div>
 
                       <Popover>
@@ -1171,113 +1249,210 @@ export function InstanceManager() {
       </Dialog>
 
       <Dialog open={createDialogOpen} onOpenChange={(open) => (open ? undefined : resetCreateDialog())}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className={cn("max-w-lg", activeCreateMode === "external_webhook" && !createdInstanceName && "max-w-md")}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {activeCreateMode === "external_webhook" ? (
-                <Link2 className="h-5 w-5" />
+                isGupshupConnectionForm ? (
+                  <MessageCircle className="h-5 w-5" />
+                ) : (
+                  <Link2 className="h-5 w-5" />
+                )
               ) : (
                 <QrCode className="h-5 w-5" />
               )}
-              {activeCreateMode === "external_webhook" ? "Vincular Evolution externa" : "Nova instancia local"}
-            </DialogTitle>
-            <DialogDescription>
               {activeCreateMode === "external_webhook"
-                ? "Use uma instancia que ja esta conectada ao WhatsApp em outro servidor. Este fluxo vincula somente o webhook."
-                : "Crie a instancia na Evolution deste CRM e conecte o WhatsApp pelo QR code."}
-            </DialogDescription>
+                ? isExternalConnectionPicker
+                  ? "Conexao Externa"
+                  : isGupshupConnectionForm
+                    ? "Via Gupshup"
+                    : "Via webhook"
+                : "Nova Conexao"}
+            </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="instance-name">
-                {activeCreateMode === "external_webhook" ? "Nome da instancia no CRM" : "Nome da instancia"}
-              </Label>
-              <Input
-                id="instance-name"
-                placeholder="Ex: EquipeComercial01"
-                value={instanceNameInput}
-                onChange={(event) => setInstanceNameInput(event.target.value)}
-                disabled={creatingInstance || Boolean(createdInstanceName)}
-              />
-            </div>
-
-            {!createdInstanceName && activeCreateMode === "external_webhook" && (
-              <div className="space-y-4 rounded-xl border border-border bg-[var(--color-surface-2)] p-4 shadow-sm">
-                <Alert>
-                  <Link2 className="h-4 w-4" />
-                  <AlertTitle>Nenhum QR code sera gerado</AlertTitle>
-                  <AlertDescription>
-                    Mantenha o WhatsApp conectado na Evolution externa. Ao vincular, o backend configurara o endpoint
-                    abaixo para o evento MESSAGES_UPSERT.
-                  </AlertDescription>
-                </Alert>
-
-                <div className="space-y-2">
-                  <Label htmlFor="external-webhook-endpoint">Endpoint do nosso webhook</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="external-webhook-endpoint"
-                      value={webhookEndpoint}
-                      readOnly
-                      className="min-w-0 font-mono text-xs"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      onClick={handleCopyWebhookEndpoint}
-                      disabled={creatingInstance}
-                      aria-label="Copiar endpoint do webhook"
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="remote-evolution-url">URL da Evolution externa</Label>
-                  <Input
-                    id="remote-evolution-url"
-                    type="url"
-                    placeholder="https://evolution.exemplo.com"
-                    value={remoteEvolutionUrlInput}
-                    onChange={(event) => setRemoteEvolutionUrlInput(event.target.value)}
-                    disabled={creatingInstance}
-                    autoComplete="url"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="remote-api-key">API key da Evolution externa</Label>
-                  <Input
-                    id="remote-api-key"
-                    type="password"
-                    placeholder="Informe a API key"
-                    value={remoteApiKeyInput}
-                    onChange={(event) => setRemoteApiKeyInput(event.target.value)}
-                    disabled={creatingInstance}
-                    autoComplete="new-password"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    A credencial sera enviada somente ao backend e nao sera exibida novamente.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="remote-instance-name">Nome exato na Evolution externa</Label>
-                  <Input
-                    id="remote-instance-name"
-                    placeholder={instanceNameInput.trim() || "Ex: Cliente01"}
-                    value={remoteInstanceNameInput}
-                    onChange={(event) => setRemoteInstanceNameInput(event.target.value)}
-                    disabled={creatingInstance}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Esse nome identifica os eventos recebidos. Se ficar vazio, usaremos o nome informado no CRM.
-                  </p>
-                </div>
+            {isExternalConnectionPicker ? (
+              <div className="grid gap-3">
+                <button
+                  type="button"
+                  onClick={() => setExternalConnectionType("gupshup")}
+                  className="group flex items-center justify-between rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--color-primary-200)] hover:bg-[var(--color-surface-1)] hover:shadow-md"
+                >
+                  <span className="text-sm font-semibold text-[var(--color-gray-900)]">Via Gupshup</span>
+                  <MessageCircle className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExternalConnectionType("webhook")}
+                  className="group flex items-center justify-between rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--color-primary-200)] hover:bg-[var(--color-surface-1)] hover:shadow-md"
+                >
+                  <span className="text-sm font-semibold text-[var(--color-gray-900)]">Via webhook</span>
+                  <Link2 className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
+                </button>
               </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="instance-name">
+                    {activeCreateMode === "external_webhook" ? "Nome da instancia" : "Nome da instancia"}
+                  </Label>
+                  <Input
+                    id="instance-name"
+                    placeholder="Ex: EquipeComercial01"
+                    value={instanceNameInput}
+                    onChange={(event) => setInstanceNameInput(event.target.value)}
+                    disabled={creatingInstance || gupshupSaving || Boolean(createdInstanceName)}
+                  />
+                </div>
+
+                {isWebhookConnectionForm ? (
+                  <div className="grid gap-4 rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] p-4 shadow-sm">
+                    <div className="space-y-2">
+                      <Label htmlFor="external-webhook-endpoint">Webhook</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="external-webhook-endpoint"
+                          value={webhookEndpoint}
+                          readOnly
+                          className="min-w-0 font-mono text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          onClick={handleCopyWebhookEndpoint}
+                          disabled={creatingInstance}
+                          aria-label="Copiar webhook"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-evolution-url">URL</Label>
+                      <Input
+                        id="remote-evolution-url"
+                        type="url"
+                        placeholder="https://evolution.exemplo.com"
+                        value={remoteEvolutionUrlInput}
+                        onChange={(event) => setRemoteEvolutionUrlInput(event.target.value)}
+                        disabled={creatingInstance}
+                        autoComplete="url"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-api-key">API key</Label>
+                      <Input
+                        id="remote-api-key"
+                        type="password"
+                        placeholder="Informe a API key"
+                        value={remoteApiKeyInput}
+                        onChange={(event) => setRemoteApiKeyInput(event.target.value)}
+                        disabled={creatingInstance}
+                        autoComplete="new-password"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-instance-name">Nome externo</Label>
+                      <Input
+                        id="remote-instance-name"
+                        placeholder={instanceNameInput.trim() || "Ex: Cliente01"}
+                        value={remoteInstanceNameInput}
+                        onChange={(event) => setRemoteInstanceNameInput(event.target.value)}
+                        disabled={creatingInstance}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {isGupshupConnectionForm ? (
+                  <div className="grid gap-4 rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] p-4 shadow-sm">
+                    <div className="space-y-2">
+                      <Label htmlFor="gupshup-webhook-endpoint">Webhook</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="gupshup-webhook-endpoint"
+                          value={`${(import.meta.env.VITE_WEBHOOK_PUBLIC_BASE_URL as string | undefined || import.meta.env.VITE_CRM_BACKEND_URL as string | undefined || window.location.origin).replace(/\/$/, "")}/api/webhook/gupshup`}
+                          readOnly
+                          className="min-w-0 font-mono text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          onClick={async () => {
+                            try {
+                              const base =
+                                (import.meta.env.VITE_WEBHOOK_PUBLIC_BASE_URL as string | undefined) ||
+                                (import.meta.env.VITE_CRM_BACKEND_URL as string | undefined) ||
+                                window.location.origin;
+                              await navigator.clipboard.writeText(`${base.replace(/\/$/, "")}/api/webhook/gupshup`);
+                              toast.success("Webhook copiado");
+                            } catch {
+                              toast.error("Nao foi possivel copiar o webhook");
+                            }
+                          }}
+                          disabled={gupshupSaving}
+                          aria-label="Copiar webhook Gupshup"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="gupshup-app-name">App name</Label>
+                      <Input
+                        id="gupshup-app-name"
+                        placeholder="Ex: droculos"
+                        value={gupshupForm.appName}
+                        onChange={(event) => setGupshupForm((current) => ({ ...current, appName: event.target.value }))}
+                        disabled={gupshupSaving}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="gupshup-app-id">App id</Label>
+                      <Input
+                        id="gupshup-app-id"
+                        placeholder="Ex: 147dd060-2210-4c8e-919f-592e4180d0f1"
+                        value={gupshupForm.appId}
+                        onChange={(event) => setGupshupForm((current) => ({ ...current, appId: event.target.value }))}
+                        disabled={gupshupSaving}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="gupshup-api-key">API key</Label>
+                      <Input
+                        id="gupshup-api-key"
+                        type="password"
+                        placeholder="Informe a API key"
+                        value={gupshupForm.apiKey}
+                        onChange={(event) => setGupshupForm((current) => ({ ...current, apiKey: event.target.value }))}
+                        disabled={gupshupSaving}
+                        autoComplete="new-password"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="gupshup-phone-number">Telefone</Label>
+                      <Input
+                        id="gupshup-phone-number"
+                        placeholder="5562999999999"
+                        value={gupshupForm.phoneNumber}
+                        onChange={(event) => setGupshupForm((current) => ({ ...current, phoneNumber: event.target.value }))}
+                        disabled={gupshupSaving}
+                        inputMode="tel"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </>
             )}
 
             {createdInstanceName && (
@@ -1359,10 +1534,24 @@ export function InstanceManager() {
                 <Button variant="ghost" onClick={resetCreateDialog} disabled={creatingInstance}>
                   Cancelar
                 </Button>
-                <Button onClick={handleCreateInstance} disabled={creatingInstance}>
-                  {creatingInstance ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                  {activeCreateMode === "external_webhook" ? "Vincular webhook" : "Criar e gerar QR"}
-                </Button>
+                {(isWebhookConnectionForm || isGupshupConnectionForm) && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setExternalConnectionType("selection")}
+                    disabled={creatingInstance || gupshupSaving}
+                  >
+                    Trocar
+                  </Button>
+                )}
+                {!isExternalConnectionPicker && (
+                  <Button
+                    onClick={isGupshupConnectionForm ? handleSaveGupshupChannel : handleCreateInstance}
+                    disabled={creatingInstance || gupshupSaving}
+                  >
+                    {creatingInstance || gupshupSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                    {isGupshupConnectionForm ? "Conectar" : activeCreateMode === "external_webhook" ? "Conectar" : "Criar e gerar QR"}
+                  </Button>
+                )}
               </>
             )}
           </DialogFooter>

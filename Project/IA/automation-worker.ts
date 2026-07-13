@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
 
 import { registerOutboundEcho } from "./outbound-echo-registry.js";
+import { GupshupTemplateService } from "./gupshup-template-service.js";
 import {
   type SendResult,
   type WhatsAppProvider,
@@ -110,7 +111,21 @@ type DispatchFailureKind = "transient" | "permanent";
 
 type WhatsAppSendResult = {
   providerMessageId: string | null;
+  providerStatus: "accepted" | "sent" | "failed" | null;
   providerPayloadSummary: Record<string, unknown> | null;
+};
+
+const RB_GUPSHUP_TEMPLATE_FALLBACKS: Record<string, string> = {
+  "d2687393-bd72-4d1d-a652-d3e41d1830ed":
+    "Olá {{1}}, tudo bem?\n\nPassamos para lembrar que o seu pagamento vence em 2 dias. Para sua comodidade, recomendamos que se programe para efetuá-lo até a data de vencimento: {{2}}\n\nAgradecemos a sua atenção e permanecemos à disposição!\n\nAté logo 👋",
+  "5bb297eb-c1f4-4e03-8e62-7f7ed5821782":
+    "Olá {{1}}, tudo bem?\n\nPassamos para lembrar que o seu boleto vence hoje. Para evitar encargos por atraso, pedimos a gentileza de verificar o pagamento dentro do prazo.\n\nPara sua comodidade, o pagamento pode ser realizado através da chave pix {{2}} e nos envie o comprovante para a baixa ou em uma de nossas unidades.\n\nObrigado! 💙\n\nEquipe Óticas Dr. Óculos",
+  "279e2b9e-523c-4e98-a2f0-059f71cc22a4":
+    "Oi {{1}}, tudo bem? 😊\n\nSabemos que imprevistos acontecem e, por isso, estamos entrando em contato para lembrar que há em aberto a parcela com vencimento em {{2}}. \n\nPara sua comodidade, o pagamento ser realizado através da chave pix: {{3}}, e nos envie aqui o comprovante para a baixa ou em uma de nossas unidades.\n\nCaso já tenha realizado o pagamento, por favor, nos envie o comprovante para a baixa.  \n\nAguardamos seu retorno. \n\nEquipe Óticas Dr. Óculos",
+  "c77f81d7-660b-488c-ba66-8312d1a69784":
+    "Prezado(a) {{1}},\n\nIdentificamos boleto(s) que se encontra em aberto(s). Contamos com sua prontidão em regularizar o quanto antes.\n\nMe informe como posso auxiliar",
+  "2f37cb6d-ae16-4861-80c6-156b7624e9f5":
+    "AVISO URGENTE\nParcelas em aberto: {{1}}\n\nMesmo após novas tentativas de renegociar o(s) débito(s) não identificamos o(s) pagamento(s) boleto(s) que se encontra em aberto(s) e informamos que a partir de agora seu cadastro será incluído aos órgãos de proteção ao crédito e protesto. \n\nVencimento {{2}} Valor {{3}}\n\nMe informe como posso auxiliar",
 };
 
 class AutomationDispatchError extends Error {
@@ -338,12 +353,133 @@ function renderExecutionTemplateParameters(execution: ClaimedExecution) {
     return [];
   }
 
-  const vars = buildExecutionTemplateVariables(execution);
+  const vars = buildExecutionTemplateVariables(execution) as Record<string, string>;
+  const templateParamAliases: Record<string, string> = {
+    nome: "name",
+    primeiro_nome: "primeiro_nome",
+    name: "name",
+    vencimento: "vencimento",
+    pix: "pix",
+    dtvencimento: "vencimento",
+    vl_liquido: "vl_liquido",
+    valor_liquido: "vl_liquido",
+    rb_total_amount: "rb_total_amount",
+  };
   return execution.gupshup_template_params.map((param) => {
-    const renderedParam = renderTemplate(String(param ?? ""), vars);
+    const rawParam = String(param ?? "").trim();
+    const normalizedParam = normalizeTemplateKey(rawParam);
+    const aliasedParam = templateParamAliases[normalizedParam] ?? normalizedParam;
+    if (vars[aliasedParam]) {
+      return vars[aliasedParam];
+    }
+
+    const renderedParam = renderTemplate(rawParam, vars);
     assertNoUnresolvedPlaceholders(renderedParam);
     return renderedParam;
   });
+}
+
+function buildGupshupTemplateHistoryContent(execution: ClaimedExecution) {
+  const templateRef = execution.gupshup_template_name?.trim() || execution.gupshup_template_id?.trim() || "template";
+  const params = renderExecutionTemplateParameters(execution);
+  return params.length > 0
+    ? `[Template Gupshup enviado: ${templateRef}] Parametros: ${params.join(" | ")}`
+    : `[Template Gupshup enviado: ${templateRef}]`;
+}
+
+function getLocalGupshupTemplateFallback(execution: ClaimedExecution) {
+  const templateId = execution.gupshup_template_id?.trim();
+  if (!templateId) {
+    return null;
+  }
+
+  return RB_GUPSHUP_TEMPLATE_FALLBACKS[templateId] ?? null;
+}
+
+function applyGupshupTemplateParameters(templateBody: string, params: string[]) {
+  let rendered = templateBody;
+
+  params.forEach((param, index) => {
+    const tokenPattern = new RegExp(`\\{\\{\\s*${index + 1}\\s*\\}\\}`, "g");
+    rendered = rendered.replace(tokenPattern, param);
+  });
+
+  return rendered.replace(/\s+\n/g, "\n").trim();
+}
+
+async function buildOutboundHistoryContent(
+  execution: ClaimedExecution,
+  providerName: WhatsAppProviderName | null | undefined,
+  renderedMessage: string,
+  crmClient: ReturnType<typeof createClient>
+) {
+  if (
+    providerName === "gupshup" &&
+    (execution.gupshup_template_id?.trim() || execution.gupshup_template_name?.trim())
+  ) {
+    if (!execution.instance_name) {
+      return buildGupshupTemplateHistoryContent(execution);
+    }
+
+    const instanceName = execution.instance_name;
+    const { data: channel, error } = await crmClient
+      .from("instance")
+      .select("aces_id")
+      .eq("instancia", instanceName)
+      .maybeSingle();
+    if (error) {
+      throw error;
+    }
+
+    const gupshupClient = createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
+      db: { schema: "gupshup" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: gupshupChannel, error: gupshupError } = await gupshupClient
+      .from("channel")
+      .select("app_id, app_name, api_key")
+      .eq("instance_name", instanceName)
+      .eq("aces_id", Number((channel as { aces_id?: number } | null)?.aces_id))
+      .eq("status", "active")
+      .maybeSingle();
+
+    if (gupshupError) {
+      throw gupshupError;
+    }
+
+    const appId = typeof gupshupChannel?.app_id === "string" ? gupshupChannel.app_id.trim() : "";
+    const apiKey = typeof gupshupChannel?.api_key === "string" ? gupshupChannel.api_key.trim() : "";
+    if (appId && apiKey) {
+      try {
+        const templateService = new GupshupTemplateService({ apiKey, appId });
+        const templateId = execution.gupshup_template_id?.trim() || "";
+        const templateName = execution.gupshup_template_name?.trim() || "";
+        const template =
+          (templateId ? await templateService.getTemplateById(templateId) : null) ??
+          (await templateService.listTemplates()).find((item) => item.name === templateName) ??
+          null;
+
+        if (template?.body?.trim()) {
+          return applyGupshupTemplateParameters(template.body, renderExecutionTemplateParameters(execution));
+        }
+      } catch (error) {
+        console.warn("[automation-worker] Falha ao consultar catalogo da Gupshup para salvar historico:", {
+          executionId: execution.execution_id,
+          templateId: execution.gupshup_template_id ?? null,
+          error: extractErrorMessage(error),
+        });
+      }
+    }
+
+    const localFallback = getLocalGupshupTemplateFallback(execution);
+    if (localFallback) {
+      return applyGupshupTemplateParameters(localFallback, renderExecutionTemplateParameters(execution));
+    }
+
+    return buildGupshupTemplateHistoryContent(execution);
+  }
+
+  return renderedMessage;
 }
 
 function buildMediaHistoryContent(execution: ClaimedExecution, caption: string) {
@@ -674,6 +810,7 @@ async function sendWhatsAppMessage(
 
     return {
       providerMessageId: response.providerMessageId,
+      providerStatus: response.providerStatus ?? null,
       providerPayloadSummary: summarizeProviderPayload(response.raw),
     };
   } catch (error) {
@@ -711,6 +848,7 @@ async function sendRawWhatsAppText(
 
     return {
       providerMessageId: response.providerMessageId,
+      providerStatus: response.providerStatus ?? null,
       providerPayloadSummary: summarizeProviderPayload(response.raw),
     };
   } catch (error) {
@@ -787,6 +925,7 @@ async function sendWhatsAppMedia(
 
     return {
       providerMessageId: response.providerMessageId,
+      providerStatus: response.providerStatus ?? null,
       providerPayloadSummary: summarizeProviderPayload(response.raw),
     };
   } catch (error) {
@@ -1010,7 +1149,7 @@ export function startAutomationWorker() {
       sent_at: sentAt,
       provider: providerName ?? null,
       provider_message_id: sendResult?.providerMessageId ?? null,
-      provider_status: sendResult ? "sent" : null,
+      provider_status: sendResult?.providerStatus ?? null,
       provider_payload_summary: sendResult?.providerPayloadSummary ?? null,
     });
 
@@ -1650,8 +1789,14 @@ export function startAutomationWorker() {
                     renderedMessage
                   );
 
-            await registerAutomationOutboundEcho(execution, renderedMessage, sentAt);
-            await saveOutboundMessage(execution, renderedMessage, sentAt, sendResult, providerName);
+            const historyContent = await buildOutboundHistoryContent(
+              execution,
+              providerName,
+              renderedMessage,
+              supabase as any
+            );
+            await registerAutomationOutboundEcho(execution, historyContent, sentAt);
+            await saveOutboundMessage(execution, historyContent, sentAt, sendResult, providerName);
             try {
               await repairAutomationAiFreezes(
                 execution.lead_id,

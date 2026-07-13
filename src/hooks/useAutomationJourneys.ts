@@ -30,6 +30,7 @@ export interface AutomationJourneyPayload {
   humanized_dispatch_window_start: string;
   humanized_dispatch_window_end: string;
   daily_dispatch_enabled: boolean;
+  daily_dispatch_weekends_enabled: boolean;
   daily_dispatch_time: string | null;
   entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;
@@ -69,6 +70,7 @@ function normalizeJourney(row: Record<string, unknown>) {
     humanized_dispatch_window_start: String(row.humanized_dispatch_window_start ?? "08:00:00"),
     humanized_dispatch_window_end: String(row.humanized_dispatch_window_end ?? "19:00:00"),
     daily_dispatch_enabled: Boolean(row.daily_dispatch_enabled),
+    daily_dispatch_weekends_enabled: Boolean(row.daily_dispatch_weekends_enabled),
     daily_dispatch_time: typeof row.daily_dispatch_time === "string" ? row.daily_dispatch_time : null,
     entry_source: row.entry_source === "rb" ? "rb" : "conditions",
     anchor_event: (row.anchor_event as AutomationAnchorEvent | null) ?? "stage_entered_at",

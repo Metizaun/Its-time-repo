@@ -72,6 +72,9 @@ export class GupshupAdminService {
     const existing = await this.findChannel(input.acesId, instance.instancia);
     const apiKey = input.apiKey?.trim() || existing?.api_key || null;
     if (!apiKey) throw new Error("API key Gupshup e obrigatoria para criar o canal");
+    if ((input.status ?? "draft") === "active" && !input.appId?.trim() && !existing?.app_id?.trim()) {
+      throw new Error("appId Gupshup e obrigatorio para ativar o canal");
+    }
     const phoneNumber = input.phoneNumber.replace(/\D/g, "");
     if (phoneNumber.length < 10 || phoneNumber.length > 15) {
       throw new Error("Numero do WhatsApp Gupshup invalido");

@@ -4002,6 +4002,7 @@ export class AgentManager {
     const isPilot = acesId === RB_PILOT_ACES_ID;
     const companyName = accountName;
     const namePrefix = "Cobranca";
+    const defaultRbPaymentTypeIds = isPilot ? ["6", "8", "9"] : ["6"];
 
     const journeys = [
       {
@@ -4010,7 +4011,7 @@ export class AgentManager {
         stepLabel: "A vencer (2 dias)",
         rbMessageKind: "reminder" as const,
         rbDaysOffset: 2,
-        rbPaymentTypeIds: ["6"],
+        rbPaymentTypeIds: defaultRbPaymentTypeIds,
         message: `Oi {nome}, tudo bem? Passando para lembrar que existe uma parcela prevista para {rb_next_due_date}. Se preferir, o pagamento pode ser feito via Pix {rb_pix_key}. Equipe ${companyName}`,
       },
       {
@@ -4019,7 +4020,7 @@ export class AgentManager {
         stepLabel: "Vence hoje",
         rbMessageKind: "reminder" as const,
         rbDaysOffset: 0,
-        rbPaymentTypeIds: ["6"],
+        rbPaymentTypeIds: defaultRbPaymentTypeIds,
         message: `Oi {nome}, tudo bem? Passamos para lembrar que o seu titulo vence hoje. Para facilitar, o pagamento pode ser realizado via Pix {rb_pix_key}. Caso ja tenha pago, nos envie o comprovante. Equipe ${companyName}`,
       },
       {
@@ -4028,7 +4029,7 @@ export class AgentManager {
         stepLabel: "Atrasado (1 dia)",
         rbMessageKind: "charge" as const,
         rbDaysOffset: 1,
-        rbPaymentTypeIds: ["6"],
+        rbPaymentTypeIds: defaultRbPaymentTypeIds,
         message: `Oi {nome}, tudo bem? Identificamos um valor em aberto de {rb_total_amount} com vencimento em {rb_next_due_date}. Para regularizar, voce pode pagar pelo Pix {rb_pix_key}. Caso ja tenha pago, nos envie o comprovante. Equipe ${companyName}`,
       },
       {
@@ -4037,7 +4038,7 @@ export class AgentManager {
         stepLabel: "Atrasado (4 dias)",
         rbMessageKind: "charge" as const,
         rbDaysOffset: 4,
-        rbPaymentTypeIds: ["6"],
+        rbPaymentTypeIds: defaultRbPaymentTypeIds,
         message: `Oi {nome}, seguimos com um saldo pendente de {rb_total_amount} referente a {rb_titles_count} titulo(s). Para facilitar a baixa, use o Pix {rb_pix_key} e nos envie o comprovante. Equipe ${companyName}`,
       },
       {
@@ -4046,7 +4047,7 @@ export class AgentManager {
         stepLabel: "Atrasado (15 dias)",
         rbMessageKind: "charge" as const,
         rbDaysOffset: 15,
-        rbPaymentTypeIds: ["6"],
+        rbPaymentTypeIds: defaultRbPaymentTypeIds,
         message: `Oi {nome}, precisamos da sua ajuda para regularizar o saldo de {rb_total_amount}, vencido desde {rb_next_due_date}. O pagamento pode ser feito via Pix {rb_pix_key}. Se precisar negociar, nos responda por aqui. Equipe ${companyName}`,
       },
     ];
@@ -6336,6 +6337,29 @@ export class AgentManager {
     return data?.id ? String(data.id) : null;
   }
 
+  private async validateLeadOwnerForAccount(acesId: number, ownerId: string) {
+    const { data, error } = await this.serviceClient
+      .from("users")
+      .select("id")
+      .eq("id", ownerId)
+      .eq("aces_id", acesId)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar o responsavel do lead", error);
+    }
+
+    if (!data?.id) {
+      console.warn("[crm-ai] Responsavel candidato do lead pertence a outra conta; usando fallback:", {
+        acesId,
+        ownerId,
+      });
+      return null;
+    }
+
+    return String(data.id);
+  }
+
   private async findOrCreateLead(
     acesId: number,
     phone: string,
@@ -6348,8 +6372,11 @@ export class AgentManager {
   ) {
     const found = await this.findLeadByPhone(acesId, phone);
     const payloadName = normalizeLeadDisplayName(pushName);
+    const validatedOwnerId = ownerId
+      ? await this.validateLeadOwnerForAccount(acesId, ownerId)
+      : null;
     if (found) {
-      if (ownerId && found.owner_id !== ownerId) {
+      if (validatedOwnerId && found.owner_id !== validatedOwnerId) {
         throw new HttpError(403, "Lead pertence a outro responsavel");
       }
 
@@ -6381,7 +6408,7 @@ export class AgentManager {
     const selectedStage = attendanceStage ?? fallbackStage;
     const preferredPhone = normalizePhone(phone);
     const name = payloadName || `Lead ${preferredPhone}`;
-    const resolvedOwnerId = ownerId ?? await this.getDefaultLeadOwnerId(acesId);
+    const resolvedOwnerId = validatedOwnerId ?? await this.getDefaultLeadOwnerId(acesId);
 
     const { data, error } = await this.serviceClient
       .from("leads")

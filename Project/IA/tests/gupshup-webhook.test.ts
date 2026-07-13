@@ -69,6 +69,7 @@ test("normaliza imagem e documento no formato Gupshup v2", () => {
 test("normaliza mensagens e status no formato Meta v3", () => {
   const events = parseGupshupWebhookPayload({
     object: "whatsapp_business_account",
+    gs_app_id: "gupshup-app-id",
     entry: [
       {
         id: "app-or-waba-id",
@@ -111,6 +112,7 @@ test("normaliza mensagens e status no formato Meta v3", () => {
   const status = events.find((event) => event.kind === "status");
   assert.equal(inbound?.kind === "inbound" ? inbound.message.mediaKind : null, "document");
   assert.equal(inbound?.kind === "inbound" ? inbound.message.pushName : null, "Lucas");
+  assert.equal(inbound?.lookup.appId, "gupshup-app-id");
   assert.equal(inbound?.lookup.phoneNumber, "5562920000407");
   assert.equal(status?.kind === "status" ? status.rawStatus : null, "delivered");
 });

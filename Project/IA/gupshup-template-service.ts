@@ -108,4 +108,39 @@ export class GupshupTemplateService {
       templateType: t?.templateType ?? (input.templateType ?? "TEXT"),
     };
   }
+
+  async getTemplateById(templateId: string): Promise<GupshupTemplateNormalized | null> {
+    const normalizedTemplateId = templateId.trim();
+    if (!normalizedTemplateId) {
+      return null;
+    }
+
+    const response = await axios.get(
+      `${GUPSHUP_API_BASE}/wa/app/${encodeURIComponent(this.config.appId)}/template/${encodeURIComponent(normalizedTemplateId)}`,
+      {
+        headers: { apikey: this.config.apiKey },
+        timeout: GUPSHUP_REQUEST_TIMEOUT_MS,
+      }
+    );
+
+    const template = normalizeTemplateRecord(response.data?.template ?? response.data);
+    return template?.id ? template : null;
+  }
+}
+
+function normalizeTemplateRecord(value: unknown): GupshupTemplateNormalized | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const template = value as Partial<GupshupTemplate>;
+  return {
+    id: typeof template.id === "string" ? template.id : "",
+    name: typeof template.elementName === "string" ? template.elementName : "",
+    status: typeof template.status === "string" ? template.status : "",
+    body: typeof template.data === "string" ? template.data : "",
+    language: typeof template.languageCode === "string" ? template.languageCode : "pt_BR",
+    category: typeof template.category === "string" ? template.category : "",
+    templateType: typeof template.templateType === "string" ? template.templateType : "",
+  };
 }
