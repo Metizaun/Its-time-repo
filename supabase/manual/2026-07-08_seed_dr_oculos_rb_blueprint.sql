@@ -20,7 +20,7 @@ BEGIN
   FROM crm.users u
   WHERE u.aces_id = 5
     AND u.role = 'ADMIN'
-  ORDER BY u.created_at
+    AND lower(u.email) = 'publigyntrafego@gmail.com'
   LIMIT 1;
 
   IF v_user_id IS NULL THEN

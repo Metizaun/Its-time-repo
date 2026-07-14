@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { OpticsToolConfigPanel } from "@/components/agents/OpticsToolConfigPanel";
 import { RbBillingConfigPanel } from "@/components/agents/RbBillingConfigPanel";
+import { AudioToolConfigPanel } from "@/components/agents/AudioToolConfigPanel";
 import {
   listAgentTools,
   updateAgentTool,
@@ -27,7 +28,7 @@ type AgentToolsPanelProps = {
   toolFilterKey?: AgentTool["key"] | null;
 };
 
-type ConfigurableToolKey = "prescription_analyst" | "visagism" | "rb_billing";
+type ConfigurableToolKey = "ai_audio" | "prescription_analyst" | "visagism" | "rb_billing";
 
 const TOOL_ICONS = {
   ai_audio: AudioLines,
@@ -46,7 +47,7 @@ function readinessCopy(tool: AgentTool) {
 }
 
 function isConfigurableToolKey(value: string): value is ConfigurableToolKey {
-  return value === "prescription_analyst" || value === "visagism" || value === "rb_billing";
+  return value === "ai_audio" || value === "prescription_analyst" || value === "visagism" || value === "rb_billing";
 }
 
 export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPanelProps) {
@@ -194,6 +195,9 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null }: AgentToolsPan
               onClose={() => setConfiguringKey(null)}
               onChanged={() => setReloadKey((value) => value + 1)}
             />
+          ) : null}
+          {tool.key === "ai_audio" && configuringKey === tool.key ? (
+            <AudioToolConfigPanel agentId={agentId} tool={tool} onClose={() => setConfiguringKey(null)} onChanged={() => setReloadKey((value) => value + 1)} />
           ) : null}
           {(tool.key === "prescription_analyst" || tool.key === "visagism") && configuringKey === tool.key ? (
             <OpticsToolConfigPanel

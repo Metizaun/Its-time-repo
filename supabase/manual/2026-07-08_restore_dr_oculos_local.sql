@@ -8,7 +8,7 @@ BEGIN
   FROM crm.users u
   WHERE u.aces_id = 5
     AND u.role = 'ADMIN'
-  ORDER BY u.created_at
+    AND lower(u.email) = 'publigyntrafego@gmail.com'
   LIMIT 1;
 
   IF v_user_id IS NULL THEN
@@ -144,7 +144,8 @@ BEGIN
       ),
       'gupshup_defaults', '{}'::jsonb,
       'is_dr_oculos_bootstrap', true,
-      'last_run_on_local_date', NULL
+      'last_run_on_local_date', NULL,
+      'default_owner_id', v_user_id
     )
   WHERE agent_id = v_agent.id
     AND tool_key = 'rb_billing';

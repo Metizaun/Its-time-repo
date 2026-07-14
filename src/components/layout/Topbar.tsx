@@ -1,4 +1,4 @@
-import { Search, Bell, LogOut, Menu } from "lucide-react";
+import { Search, LogOut, Menu } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/context/AppContext";
@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 
 interface TopbarProps {
   onOpenMobileSidebar?: () => void;
@@ -71,9 +72,7 @@ export function Topbar({ onOpenMobileSidebar, isMobile }: TopbarProps) {
       </div>
 
       <div className="topbar-actions">
-        <Button variant="ghost" size="icon" className="topbar-icon-button hidden sm:inline-flex">
-          <Bell className="w-5 h-5" />
-        </Button>
+        <NotificationCenter />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

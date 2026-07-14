@@ -90,17 +90,27 @@ export function usePipelines() {
         "postgres_changes",
         {
           event: "*",
-          schema: "Crm",
+          schema: "crm",
           table: "pipelines",
         },
         () => {
           fetchPipelines();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void fetchPipelines();
+      });
+
+    const handleResume = () => {
+      if (document.visibilityState === "visible") void fetchPipelines();
+    };
+    window.addEventListener("focus", handleResume);
+    document.addEventListener("visibilitychange", handleResume);
 
     return () => {
-      supabase.removeChannel(channel);
+      window.removeEventListener("focus", handleResume);
+      document.removeEventListener("visibilitychange", handleResume);
+      void supabase.removeChannel(channel);
     };
   }, [fetchPipelines, isAuthenticated]);
 

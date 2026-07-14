@@ -21,6 +21,8 @@ const GUPSHUP_FOUNDATION_MIGRATION =
   "supabase/migrations/20260707201001_add_gupshup_channel_foundation.sql";
 const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
+const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
+  "supabase/migrations/20260714172130_chat_realtime_notifications_audio.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -590,6 +592,27 @@ export async function assertRuntimeSchemaCompatibility(
   const checks = await Promise.all([
     validateChatAttachmentsStorage(serviceClient),
     validateAutomationMediaStorage(serviceClient),
+    validateSelectedColumns(
+      serviceClient,
+      "chat_read_states",
+      ["crm_user_id", "aces_id", "lead_id", "last_read_at", "updated_at"],
+      "crm.chat_read_states",
+      CHAT_NOTIFICATIONS_AUDIO_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "notifications",
+      ["id", "aces_id", "category", "title", "description", "published_at", "idempotency_key"],
+      "crm.notifications",
+      CHAT_NOTIFICATIONS_AUDIO_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "notification_reads",
+      ["notification_id", "crm_user_id", "read_at"],
+      "crm.notification_reads",
+      CHAT_NOTIFICATIONS_AUDIO_MIGRATION
+    ),
     validateSelectedColumns(
       calendarClient,
       "events",

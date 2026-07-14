@@ -319,7 +319,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
         "postgres_changes",
         {
           event: "*",
-          schema: "Crm",
+          schema: "crm",
           table: "leads",
         },
         (payload) => {
@@ -334,7 +334,15 @@ export function useLeads(options: UseLeadsOptions = {}) {
           queueRealtimeLeadUpdate(leadId);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void fetchLeads({ showLoading: false });
+      });
+
+    const handleResume = () => {
+      if (document.visibilityState === "visible") void fetchLeads({ showLoading: false });
+    };
+    window.addEventListener("focus", handleResume);
+    document.addEventListener("visibilitychange", handleResume);
 
     return () => {
       if (flushRealtimeTimeoutRef.current) {
@@ -342,7 +350,9 @@ export function useLeads(options: UseLeadsOptions = {}) {
         flushRealtimeTimeoutRef.current = null;
       }
       pendingRealtimeLeadIdsRef.current.clear();
-      supabase.removeChannel(channel);
+      window.removeEventListener("focus", handleResume);
+      document.removeEventListener("visibilitychange", handleResume);
+      void supabase.removeChannel(channel);
     };
   }, [enabled, enableRealtime, fetchLeads, queueRealtimeLeadUpdate]);
 

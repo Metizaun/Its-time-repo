@@ -9,6 +9,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
+import { createWhatsAppProviderRegistry, type WhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 import {
   matchOutboundEcho,
   registerOutboundEcho,
@@ -826,6 +827,8 @@ type ServiceConfig = {
   elevenLabsModel?: string;
   elevenLabsOutputFormat?: string;
   elevenLabsTtsEnabled?: boolean;
+  metaProviderMode?: string;
+  metaGraphApiVersion?: string;
   visagismToolEnabled?: boolean;
   visagismInternalRuntimeEnabled?: boolean;
   visagismAnalysisWorkerModel?: string;
@@ -2119,6 +2122,7 @@ export class AgentManager {
   private readonly prescriptionWorkerModel: string;
   private readonly toolMediaAllowedHosts: Set<string>;
   private readonly instancePhoneAllowlists: Record<string, string[]>;
+  private readonly whatsAppProviders: WhatsAppProviderRegistry;
 
   constructor(private readonly config: ServiceConfig) {
     void this.transferLeadToAgent;
@@ -2191,6 +2195,14 @@ export class AgentManager {
         .filter(Boolean)
     );
     this.instancePhoneAllowlists = config.instancePhoneAllowlists ?? {};
+    this.whatsAppProviders = createWhatsAppProviderRegistry({
+      supabaseUrl: config.supabaseUrl,
+      supabaseServiceRoleKey: config.supabaseServiceRoleKey,
+      evolutionApiUrl: config.evolutionApiUrl,
+      evolutionApiKey: config.evolutionApiKey,
+      metaProviderMode: config.metaProviderMode,
+      metaGraphApiVersion: config.metaGraphApiVersion,
+    });
   }
 
   async authenticate(authHeader?: string): Promise<AuthContext> {
@@ -3219,8 +3231,7 @@ export class AgentManager {
         is_enabled: ready ? Boolean(audioTool.is_enabled) : false,
         config: {
           ...currentConfig,
-          selectionRate:
-            typeof currentConfig.selectionRate === "number" ? currentConfig.selectionRate : 0.018,
+          selectionRate: 0.018,
           voiceId: voiceId ?? null,
         },
         last_validated_at: new Date().toISOString(),
@@ -3608,6 +3619,63 @@ export class AgentManager {
     });
   }
 
+  async listElevenLabsVoices(
+    context: AuthContext,
+    agentId: string,
+    input: { search?: string | null; nextPageToken?: string | null; pageSize?: number }
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (!this.elevenLabsApiKey) {
+      throw new HttpError(503, "Catalogo de vozes indisponivel no momento");
+    }
+
+    try {
+      const response = await axios.get("https://api.elevenlabs.io/v2/voices", {
+        headers: { "xi-api-key": this.elevenLabsApiKey },
+        params: {
+          page_size: Math.min(Math.max(input.pageSize ?? 20, 1), 50),
+          search: input.search?.trim() || undefined,
+          next_page_token: input.nextPageToken?.trim() || undefined,
+        },
+        timeout: 20_000,
+      });
+      const payload = asRecord(response.data);
+      const voices = Array.isArray(payload.voices) ? payload.voices : [];
+      return {
+        voices: voices.map((value) => {
+          const voice = asRecord(value);
+          return {
+            id: String(voice.voice_id ?? ""),
+            name: String(voice.name ?? "Voz sem nome"),
+            description: asString(voice.description),
+            category: asString(voice.category),
+            previewUrl: asString(voice.preview_url),
+            attributes: asRecord(voice.labels),
+          };
+        }).filter((voice) => Boolean(voice.id)),
+        hasMore: payload.has_more === true,
+        nextPageToken: asString(payload.next_page_token),
+      };
+    } catch (error) {
+      throw new HttpError(502, "Nao foi possivel consultar as vozes disponiveis", summarizeProviderPayload(error));
+    }
+  }
+
+  private async validateElevenLabsVoice(voiceId: string) {
+    if (!this.elevenLabsApiKey) throw new HttpError(503, "Catalogo de vozes indisponivel no momento");
+    try {
+      const response = await axios.get(`https://api.elevenlabs.io/v1/voices/${encodeURIComponent(voiceId)}`, {
+        headers: { "xi-api-key": this.elevenLabsApiKey },
+        timeout: 15_000,
+      });
+      const voice = asRecord(response.data);
+      if (asString(voice.voice_id) !== voiceId) throw new Error("Voz nao encontrada");
+    } catch (error) {
+      throw new HttpError(400, "A voz selecionada nao esta disponivel", summarizeProviderPayload(error));
+    }
+  }
+
   async updateAgentTool(
     context: AuthContext,
     agentId: string,
@@ -3637,6 +3705,12 @@ export class AgentManager {
       input.config !== undefined
         ? { ...asRecord(current.config), ...input.config }
         : asRecord(current.config);
+    if (toolKey === "ai_audio") {
+      const voiceId = asString(nextConfig.voiceId);
+      if (input.config !== undefined && voiceId) await this.validateElevenLabsVoice(voiceId);
+      nextConfig.selectionRate = 0.018;
+      nextConfig.voiceId = voiceId;
+    }
     const isRbBillingTool = toolKey === "rb_billing";
     const rbBillingReady = isRbBillingTool ? isRbBillingToolConfigReady(nextConfig) : false;
 
@@ -5042,9 +5116,10 @@ export class AgentManager {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
 
-    const { error: moveStageError } = await this.serviceClient.rpc("rpc_move_lead_to_stage", {
+    const { error: moveStageError } = await this.serviceClient.rpc("service_move_lead_to_stage", {
       p_lead_id: lead.id,
       p_stage_id: input.stageId,
+      p_aces_id: context.acesId,
     });
     if (moveStageError) {
       throw new HttpError(500, "Nao foi possivel mover o lead para a etapa selecionada", moveStageError);
@@ -7314,34 +7389,13 @@ export class AgentManager {
     mediaUrl: string,
     acesId: number
   ): Promise<SendResult> {
-    const recipient = resolveWhatsappRecipient(phone);
-    const transport = await this.resolveEvolutionTransport(instanceName, acesId);
-
-    try {
-      const response = await axios.post(
-        `${transport.apiUrl}/message/sendWhatsAppAudio/${encodeURIComponent(transport.instanceName)}`,
-        {
-          number: recipient.jid,
-          audio: mediaUrl,
-          delay: 1000,
-          encoding: true,
-        },
-        { headers: { apikey: transport.apiKey } }
-      );
-      const root = asRecord(response.data);
-      const key = asRecord(root.key);
-      const providerMessageId =
-        asString(root.id) ?? asString(root.messageId) ?? asString(key.id) ?? null;
-
-      return {
-        provider: "evolution",
-        providerMessageId,
-        providerStatus: "sent",
-        raw: summarizeProviderPayload(response.data),
-      };
-    } catch (error) {
-      throw buildExternalRequestError(error, "Falha ao enviar audio na Evolution");
+    void acesId;
+    const providerName = await this.whatsAppProviders.resolveInstanceProvider(instanceName);
+    const provider = this.whatsAppProviders.getProvider(providerName);
+    if (!provider.sendVoiceNote) {
+      throw new WhatsAppProviderError("Canal sem suporte a audio", { provider: providerName, kind: "permanent" });
     }
+    return provider.sendVoiceNote({ instanceName, to: phone, mediaUrl, sourceType: "ai" });
   }
 
   private async trySendAiAudio(params: {
@@ -7356,8 +7410,7 @@ export class AgentManager {
     const text = params.blocks.join("\n\n").trim();
     const config = asRecord(binding.config);
     const voiceId = asString(config.voiceId) ?? this.elevenLabsDefaultVoiceId;
-    const selectionRate =
-      typeof config.selectionRate === "number" ? config.selectionRate : 0.018;
+    const selectionRate = 0.018;
     const eligible = Boolean(voiceId && this.isAudioEligible(text));
     const selected = eligible
       ? this.shouldSelectAudio(params.runId, params.agent.id, params.lead.id, selectionRate)

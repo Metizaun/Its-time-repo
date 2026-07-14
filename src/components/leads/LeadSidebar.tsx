@@ -15,6 +15,7 @@ interface LeadSidebarProps {
   activeFilter: LeadSidebarFilter;
   onFilterChange: (filter: LeadSidebarFilter) => void;
   manualCount: number;
+  unreadByLead: Record<string, number>;
 }
 
 function PendingDot({ state }: { state: Lead["manual_pending_state"] }) {
@@ -73,6 +74,7 @@ export function LeadSidebar({
   activeFilter,
   onFilterChange,
   manualCount,
+  unreadByLead,
 }: LeadSidebarProps) {
   if (loading && leads.length === 0) {
     return (
@@ -125,6 +127,7 @@ export function LeadSidebar({
 
               const urgencyStyle = getUrgencyStyle(lead.last_tag_urgencia);
               const instanceColor = getInstanceTextColor(lead.instance_color);
+              const unreadCount = unreadByLead[lead.id] ?? 0;
 
               return (
                 <button
@@ -182,14 +185,18 @@ export function LeadSidebar({
                         )}
                       </div>
 
-                      {lead.last_tag_name && urgencyStyle && (
+                      {unreadCount > 0 ? (
+                        <span className="inline-flex min-w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-50)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--color-primary-700)]">
+                          {unreadCount > 99 ? "99+" : unreadCount}
+                        </span>
+                      ) : lead.last_tag_name && urgencyStyle ? (
                         <div className="flex items-center gap-1.5 shrink-0">
                           <div className={cn("w-2 h-2 rounded-full", urgencyStyle.dot)} />
                           <span className={cn("text-xs font-medium", urgencyStyle.text)}>
                             {lead.last_tag_name}
                           </span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </button>

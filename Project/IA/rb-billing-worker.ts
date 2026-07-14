@@ -20,6 +20,7 @@ type RbBillingToolConfig = {
   gupshup_defaults: Record<string, string>;
   is_dr_oculos_bootstrap: boolean;
   last_run_on_local_date: string | null;
+  default_owner_id?: string | null;
 };
 
 type RbToolBinding = {
@@ -283,6 +284,7 @@ function parseRbConfig(value: JsonRecord): RbBillingToolConfig {
     ),
     is_dr_oculos_bootstrap: value.is_dr_oculos_bootstrap === true,
     last_run_on_local_date: asString(value.last_run_on_local_date) || null,
+    default_owner_id: asString(value.default_owner_id) || null,
   };
 }
 
@@ -584,7 +586,34 @@ export class RbBillingWorker {
     await this.agentsClient.from("agent_tools").update({ config: nextConfig }).eq("id", bindingId);
   }
 
-  private async getDefaultOwnerId(acesId: number) {
+  private async getDefaultOwnerId(acesId: number, config?: RbBillingToolConfig) {
+    const configuredOwnerId = config?.default_owner_id?.trim();
+    if (configuredOwnerId) {
+      if (!isUuid(configuredOwnerId)) {
+        throw new Error("O responsavel padrao configurado para a cobranca e invalido");
+      }
+
+      const { data: configuredOwner, error: configuredOwnerError } = await this.serviceClient
+        .from("users")
+        .select("id")
+        .eq("id", configuredOwnerId)
+        .eq("aces_id", acesId)
+        .neq("role", "NENHUM")
+        .maybeSingle();
+
+      if (configuredOwnerError) {
+        throw new Error(
+          `Nao foi possivel validar o responsavel padrao da cobranca: ${configuredOwnerError.message}`
+        );
+      }
+
+      if (!configuredOwner) {
+        throw new Error("O responsavel padrao da cobranca nao pertence a esta conta ou esta inativo");
+      }
+
+      return configuredOwnerId;
+    }
+
     const { data, error } = await this.serviceClient
       .from("users")
       .select("id")
@@ -709,8 +738,12 @@ export class RbBillingWorker {
     };
   }
 
-  private async createLead(acesId: number, agent: AgentRow, debt: GroupedDebt): Promise<LeadRow> {
-    const ownerId = await this.getDefaultOwnerId(acesId);
+  private async createLead(
+    acesId: number,
+    agent: AgentRow,
+    debt: GroupedDebt,
+    ownerId: string | null
+  ): Promise<LeadRow> {
     const { data, error } = await this.serviceClient
       .from("leads")
       .insert({
@@ -744,13 +777,20 @@ export class RbBillingWorker {
     };
   }
 
-  private async saveLeadRbState(leadId: string, acesId: number, agent: AgentRow, debt: GroupedDebt) {
+  private async saveLeadRbState(
+    leadId: string,
+    acesId: number,
+    agent: AgentRow,
+    debt: GroupedDebt,
+    enforcedOwnerId: string | null
+  ) {
     const { error: leadError } = await this.serviceClient
       .from("leads")
       .update({
         name: debt.customerName || null,
         contact_phone: debt.phone,
         instancia: agent.instance_name,
+        ...(enforcedOwnerId ? { owner_id: enforcedOwnerId } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", leadId)
@@ -1075,6 +1115,8 @@ export class RbBillingWorker {
     const activeKeysByStageId: Record<string, Set<string>> = {};
 
     try {
+      const defaultOwnerId = await this.getDefaultOwnerId(binding.aces_id, config);
+      const enforcedOwnerId = config.default_owner_id ? defaultOwnerId : null;
       const client = new RbClient({
         mode: config.rb_mode,
         baseUrl: config.rb_base_url,
@@ -1139,13 +1181,19 @@ export class RbBillingWorker {
 
           const existed = Boolean(lead);
           if (!lead) {
-            lead = await this.createLead(binding.aces_id, agent, debt);
+            lead = await this.createLead(binding.aces_id, agent, debt, defaultOwnerId);
             summary.created_leads_count += 1;
           } else {
             summary.updated_leads_count += 1;
           }
 
-          await this.saveLeadRbState(lead.id, binding.aces_id, agent, debt);
+          await this.saveLeadRbState(
+            lead.id,
+            binding.aces_id,
+            agent,
+            debt,
+            enforcedOwnerId
+          );
           await this.syncLeadPaymentTypeTags(lead.id, binding.aces_id, debt.paymentTypeIds);
 
           if (!existed || lead.stage_id !== journeyItem.triggerStageId) {

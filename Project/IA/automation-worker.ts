@@ -278,7 +278,7 @@ function assertNoUnresolvedPlaceholders(message: string) {
   }
 }
 
-function buildExecutionTemplateVariables(execution: ClaimedExecution) {
+export function buildExecutionTemplateVariables(execution: ClaimedExecution) {
   const rbTotalAmount =
     execution.rb_total_amount === null || execution.rb_total_amount === undefined
       ? null
@@ -319,11 +319,13 @@ function buildExecutionTemplateVariables(execution: ClaimedExecution) {
     rb_store_emp_cpf_cnpj: execution.rb_store_emp_cpf_cnpj ?? "",
     pix: execution.rb_pix_key ?? "",
     vencimento: dueDate,
+    dtvencimento: dueDate,
     vl_liquido: totalAmount,
+    valor_liquido: totalAmount,
   };
 }
 
-function renderExecutionMessage(execution: ClaimedExecution) {
+export function renderExecutionMessage(execution: ClaimedExecution) {
   if (!execution.template) {
     throw new AutomationDispatchError("Template do disparo nao encontrado", {
       kind: "permanent",

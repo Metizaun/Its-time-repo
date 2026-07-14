@@ -10,6 +10,7 @@ import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { PendingApprovalModal } from "@/components/auth/PendingApprovalModal";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { ModalManager } from "@/components/modals/ModalManager";
+import { ChatUnreadProvider } from "@/contexts/ChatUnreadContext";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
 const Leads = lazy(() => import("./pages/Leads"));
@@ -29,6 +30,7 @@ const App = () => (
     <TooltipProvider>
       <BrowserRouter>
         <AuthProvider>
+          <ChatUnreadProvider>
           <AppProvider>
             <Toaster />
             <Sonner position="top-right" />
@@ -56,6 +58,7 @@ const App = () => (
               </Routes>
             </Suspense>
           </AppProvider>
+          </ChatUnreadProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

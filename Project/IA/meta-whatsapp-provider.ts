@@ -7,6 +7,7 @@ import {
   type SendResult,
   type SendTemplateInput,
   type SendTextInput,
+  type SendVoiceNoteInput,
   WhatsAppProviderError,
   type WhatsAppProvider,
 } from "./whatsapp-provider.js";
@@ -103,6 +104,32 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     }
   }
 
+  async sendVoiceNote(input: SendVoiceNoteInput): Promise<SendResult> {
+    const channel = await this.requireChannel(input.instanceName);
+    const to = toBrazilE164Phone(input.to);
+
+    if (this.config.mode === "mock") {
+      return buildMockResult("audio", input.instanceName, to);
+    }
+
+    const accessToken = await this.requireAccessToken(channel);
+    try {
+      const response = await axios.post(
+        this.messagesUrl(channel),
+        {
+          messaging_product: "whatsapp",
+          to,
+          type: "audio",
+          audio: { link: input.mediaUrl },
+        },
+        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
+      );
+      return buildGraphSendResult(response.data);
+    } catch (error) {
+      throw buildMetaProviderError(error);
+    }
+  }
+
   private async requireChannel(instanceName: string) {
     const channel = await this.config.resolveChannel(instanceName);
     if (!channel) {
@@ -168,7 +195,7 @@ function buildTemplateComponents(parameters: string[]) {
   ];
 }
 
-function buildMockResult(kind: "text" | "template", instanceName: string, to: string): SendResult {
+function buildMockResult(kind: "text" | "template" | "audio", instanceName: string, to: string): SendResult {
   return {
     provider: "meta",
     providerMessageId: `mock_wamid_${randomUUID()}`,

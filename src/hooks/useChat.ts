@@ -109,9 +109,7 @@ export function useChat(leadId: string | null) {
         });
       }
 
-      setTimeout(async () => {
-        await fetchMessages();
-      }, 500);
+      await fetchMessages();
     } catch (error: unknown) {
       if (tempMessage) {
         setMessages((prev) => prev.filter((message) => message.id !== tempMessage.id));
@@ -149,9 +147,6 @@ export function useChat(leadId: string | null) {
           const newMessage = payload.new as { direction?: string };
           if (newMessage.direction === "inbound" || newMessage.direction === "outbound") {
             await fetchMessages();
-            window.setTimeout(() => {
-              void fetchMessages();
-            }, 900);
           }
         }
       )
@@ -181,10 +176,20 @@ export function useChat(leadId: string | null) {
           await fetchMessages();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void fetchMessages();
+      });
+
+    const handleResume = () => {
+      if (document.visibilityState === "visible") void fetchMessages();
+    };
+    window.addEventListener("focus", handleResume);
+    document.addEventListener("visibilitychange", handleResume);
 
     return () => {
-      supabase.removeChannel(channel);
+      window.removeEventListener("focus", handleResume);
+      document.removeEventListener("visibilitychange", handleResume);
+      void supabase.removeChannel(channel);
     };
   }, [fetchMessages, leadId]);
 

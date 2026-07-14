@@ -236,6 +236,8 @@ const manager = new AgentManager({
   elevenLabsModel: process.env.ELEVENLABS_TTS_MODEL,
   elevenLabsOutputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT,
   elevenLabsTtsEnabled: process.env.ELEVENLABS_TTS_ENABLED === "true",
+  metaProviderMode: process.env.META_PROVIDER_MODE,
+  metaGraphApiVersion: process.env.META_GRAPH_API_VERSION,
   visagismToolEnabled: process.env.VISAGISM_TOOL_ENABLED === "true",
   visagismInternalRuntimeEnabled: process.env.VISAGISM_INTERNAL_RUNTIME_ENABLED !== "false",
   visagismAnalysisWorkerModel: process.env.VISAGISM_ANALYSIS_WORKER_MODEL,
@@ -691,6 +693,91 @@ app.get(
         name: context.name,
       },
     });
+  })
+);
+
+app.get(
+  "/api/notifications",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+
+    const category = req.query.category === "notice" ? "notice" : "internal";
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 50);
+    const before = asString(req.query.before);
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_list_notifications", {
+      p_category: category,
+      p_limit: limit,
+      p_before: before,
+    });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar as notificacoes", error);
+
+    res.json({
+      success: true,
+      notifications: (data ?? []).map((item: Record<string, unknown>) => {
+        const actionPath = asString(item.action_path);
+        const actionUrl = actionPath ? new URL(actionPath, "https://crm.local") : null;
+        return {
+          key: String(item.notification_id),
+          title: String(item.title ?? ""),
+          description: String(item.description ?? ""),
+          publishedAt: String(item.published_at ?? ""),
+          read: Boolean(item.is_read),
+          action: actionUrl?.pathname === "/chat" && actionUrl.searchParams.get("leadId")
+            ? { kind: "openConversation", target: actionUrl.searchParams.get("leadId") }
+            : null,
+        };
+      }),
+    });
+  })
+);
+
+app.post(
+  "/api/notifications/:key/read",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { error } = await client.rpc("rpc_mark_notification_read", {
+      p_notification_id: getSingleParam(req.params.key),
+    });
+    if (error) throw new HttpError(400, "Nao foi possivel marcar a notificacao", error);
+    res.json({ success: true });
+  })
+);
+
+app.get(
+  "/api/notifications/unread-counts",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_get_notification_unread_counts");
+    if (error) throw new HttpError(500, "Nao foi possivel contar as notificacoes", error);
+    const counts = Array.isArray(data) ? asRecord(data[0]) : asRecord(data);
+    res.json({
+      success: true,
+      internal: Number(counts.internal_count ?? 0),
+      notice: Number(counts.notice_count ?? 0),
+    });
+  })
+);
+
+app.post(
+  "/api/notifications/read-all",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const category = req.body.category === "notice" ? "notice" : "internal";
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { error } = await client.rpc("rpc_mark_all_notifications_read", { p_category: category });
+    if (error) throw new HttpError(400, "Nao foi possivel atualizar as notificacoes", error);
+    res.json({ success: true });
   })
 );
 
@@ -1434,6 +1521,20 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const tools = await manager.listAgentTools(req.authContext!, agentId);
     res.json({ success: true, tools });
+  })
+);
+
+app.get(
+  "/api/agents/:id/audio/voices",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const result = await manager.listElevenLabsVoices(req.authContext!, agentId, {
+      search: asString(req.query.search),
+      nextPageToken: asString(req.query.nextPageToken),
+      pageSize: Number(req.query.pageSize ?? 20),
+    });
+    res.json({ success: true, ...result });
   })
 );
 

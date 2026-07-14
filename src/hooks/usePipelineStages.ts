@@ -33,7 +33,7 @@ function normalizeStage(row: Record<string, unknown>): PipelineStage {
   };
 }
 
-export function usePipelineStages(pipelineId?: string | null) {
+export function usePipelineStages(pipelineId?: string | null, enabled = true) {
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [loading, setLoading] = useState(true);
   const { session } = useAuth();
@@ -51,7 +51,8 @@ export function usePipelineStages(pipelineId?: string | null) {
   }, []);
 
   const fetchStages = useCallback(async () => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !enabled) {
+      setStages([]);
       setLoading(false);
       return;
     }
@@ -84,12 +85,12 @@ export function usePipelineStages(pipelineId?: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [fetchCurrentAcesId, isAuthenticated, pipelineId]);
+  }, [enabled, fetchCurrentAcesId, isAuthenticated, pipelineId]);
 
   useEffect(() => {
     fetchStages();
 
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !enabled) return;
 
     const channel = supabase
       .channel("pipeline-stages-changes")
@@ -97,19 +98,29 @@ export function usePipelineStages(pipelineId?: string | null) {
         "postgres_changes",
         {
           event: "*",
-          schema: "Crm",
+          schema: "crm",
           table: "pipeline_stages",
         },
         () => {
           fetchStages();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void fetchStages();
+      });
+
+    const handleResume = () => {
+      if (document.visibilityState === "visible") void fetchStages();
+    };
+    window.addEventListener("focus", handleResume);
+    document.addEventListener("visibilitychange", handleResume);
 
     return () => {
-      supabase.removeChannel(channel);
+      window.removeEventListener("focus", handleResume);
+      document.removeEventListener("visibilitychange", handleResume);
+      void supabase.removeChannel(channel);
     };
-  }, [fetchStages, isAuthenticated]);
+  }, [enabled, fetchStages, isAuthenticated]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

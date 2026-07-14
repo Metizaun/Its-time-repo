@@ -33,6 +33,21 @@ export type AgentTool = AgentTemplateTool & {
   lastValidatedAt: string | null;
 };
 
+export type AudioVoice = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  previewUrl: string | null;
+  attributes: Record<string, unknown>;
+};
+
+export type AudioVoicePage = {
+  voices: AudioVoice[];
+  hasMore: boolean;
+  nextPageToken: string | null;
+};
+
 export type RbBillingBootstrapResponse = {
   tool: AgentTool | null;
   pipeline?: { id: string; name: string; description: string | null };
@@ -106,6 +121,13 @@ export async function updateAgentTool(
     input
   );
   return response.tool;
+}
+
+export async function listAudioVoices(agentId: string, input: { search?: string; nextPageToken?: string | null } = {}) {
+  const params = new URLSearchParams({ pageSize: "20" });
+  if (input.search?.trim()) params.set("search", input.search.trim());
+  if (input.nextPageToken) params.set("nextPageToken", input.nextPageToken);
+  return getCrmBackend<AudioVoicePage>(`/api/agents/${encodeURIComponent(agentId)}/audio/voices?${params}`);
 }
 
 export async function listToolMediaAssets(agentId: string) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MessageSquare } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { ChatHeader } from "@/components/chat/ChatHeader";
@@ -25,26 +25,36 @@ import { useLeadAiControl } from "@/hooks/useLeadAiControl";
 import { type Lead, useLeads } from "@/hooks/useLeads";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
+import { usePipelines } from "@/hooks/usePipelines";
+import { useChatUnread } from "@/contexts/ChatUnreadContext";
+import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { finalizeHumanHandoff } from "@/services/chatService";
 import type { ChatComposerPayload } from "@/types/chat";
 
 export default function Chat() {
   const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
-  const { stages, loading: stagesLoading } = usePipelineStages();
+  const { pipelines, loading: pipelinesLoading } = usePipelines();
   const { ui } = useApp();
   const { userRole } = useAuth();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [activeFilter, setActiveFilter] = useState<"all" | "manual">("all");
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
   const [finalizeStageId, setFinalizeStageId] = useState("");
+  const [finalizePipelineId, setFinalizePipelineId] = useState("");
   const [finalizingHandoff, setFinalizingHandoff] = useState(false);
 
   const { messages, loading: messagesLoading, sendMessage } = useChat(selectedLeadId);
+  const { byLead: unreadByLead, markRead } = useChatUnread();
+  const { stages, loading: stagesLoading } = usePipelineStages(
+    finalizePipelineId || null,
+    finalizeDialogOpen && Boolean(finalizePipelineId)
+  );
 
   const filteredLeads = useMemo(() => {
     if (!ui.searchQuery) return leads;
@@ -78,6 +88,13 @@ export default function Chat() {
     setSelectedLeadId(leadIdFromQuery);
   }, [searchParams]);
 
+  useEffect(() => {
+    const conversationTarget = (location.state as { conversationTarget?: unknown } | null)?.conversationTarget;
+    if (typeof conversationTarget !== "string" || !conversationTarget) return;
+    setSelectedLeadId(conversationTarget);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
+
   const handleSelectLead = (leadId: string | null) => {
     setSelectedLeadId(leadId);
     if (leadId) {
@@ -96,18 +113,21 @@ export default function Chat() {
   }, [activeFilter, selectedLead]);
 
   useEffect(() => {
-    if (!finalizeDialogOpen || !selectedLead) {
-      return;
-    }
+    if (!finalizeDialogOpen || !finalizePipelineId) return;
+    setFinalizeStageId((current) => stages.some((stage) => stage.id === current) ? current : stages[0]?.id ?? "");
+  }, [finalizeDialogOpen, finalizePipelineId, stages]);
 
-    setFinalizeStageId((currentValue) => {
-      if (currentValue) {
-        return currentValue;
-      }
+  useEffect(() => {
+    if (!selectedLeadId || document.visibilityState !== "visible") return;
+    void markRead(selectedLeadId);
+  }, [markRead, messages.length, selectedLeadId]);
 
-      return selectedLead.stage_id ?? stages[0]?.id ?? "";
-    });
-  }, [finalizeDialogOpen, selectedLead, stages]);
+  useEffect(() => {
+    if (!selectedLeadId) return;
+    const onVisible = () => document.visibilityState === "visible" && void markRead(selectedLeadId);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [markRead, selectedLeadId]);
 
   const isAdmin = userRole === "ADMIN";
   const leadAiControl = useLeadAiControl(
@@ -131,12 +151,19 @@ export default function Chat() {
     navigate(`/calendar?leadId=${selectedLead.id}&new=1`);
   };
 
-  const openFinalizeDialog = () => {
+  const openFinalizeDialog = async () => {
     if (!selectedLead) {
       return;
     }
 
-    setFinalizeStageId(selectedLead.stage_id ?? stages[0]?.id ?? "");
+    let currentPipelineId = "";
+    if (selectedLead.stage_id) {
+      const { data } = await supabase.from("pipeline_stages").select("pipeline_id").eq("id", selectedLead.stage_id).maybeSingle();
+      currentPipelineId = String(data?.pipeline_id ?? "");
+    }
+    const fallbackPipelineId = pipelines.find((pipeline) => pipeline.is_default)?.id ?? pipelines[0]?.id ?? "";
+    setFinalizePipelineId(currentPipelineId || fallbackPipelineId);
+    setFinalizeStageId(selectedLead.stage_id ?? "");
     setFinalizeDialogOpen(true);
   };
 
@@ -145,8 +172,8 @@ export default function Chat() {
       return;
     }
 
-    if (!finalizeStageId) {
-      toast.error("Selecione a etapa final do lead");
+    if (!finalizePipelineId || !finalizeStageId || !stages.some((stage) => stage.id === finalizeStageId)) {
+      toast.error("Selecione um pipeline e uma etapa validos");
       return;
     }
 
@@ -161,6 +188,7 @@ export default function Chat() {
 
       setFinalizeDialogOpen(false);
       setFinalizeStageId("");
+      setFinalizePipelineId("");
       toast.success("Atendimento humano finalizado e IA reativada");
     } catch (error) {
       console.error("Erro ao finalizar handoff humano:", error);
@@ -184,6 +212,7 @@ export default function Chat() {
             activeFilter={activeFilter}
             onFilterChange={setActiveFilter}
             manualCount={manualCount}
+            unreadByLead={unreadByLead}
           />
         </div>
       )}
@@ -249,6 +278,7 @@ export default function Chat() {
           setFinalizeDialogOpen(open);
           if (!open) {
             setFinalizeStageId("");
+            setFinalizePipelineId("");
           }
         }}
       >
@@ -266,6 +296,16 @@ export default function Chat() {
               <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
                 A IA sera reativada assim que este handoff for finalizado.
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="handoff-final-pipeline" className="text-sm font-medium text-foreground">Pipeline de destino</label>
+              <Select value={finalizePipelineId} onValueChange={(value) => { setFinalizePipelineId(value); setFinalizeStageId(""); }} disabled={pipelinesLoading || finalizingHandoff}>
+                <SelectTrigger id="handoff-final-pipeline" className="rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-surface)]"><SelectValue placeholder={pipelinesLoading ? "Carregando pipelines..." : "Selecione o pipeline"} /></SelectTrigger>
+                <SelectContent className="rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
+                  {pipelines.map((pipeline) => <SelectItem key={pipeline.id} value={pipeline.id}>{pipeline.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
@@ -300,12 +340,13 @@ export default function Chat() {
               onClick={() => {
                 setFinalizeDialogOpen(false);
                 setFinalizeStageId("");
+                setFinalizePipelineId("");
               }}
               disabled={finalizingHandoff}
             >
               Cancelar
             </Button>
-            <Button onClick={() => void handleFinalizeHandoff()} disabled={finalizingHandoff || stagesLoading || !finalizeStageId}>
+            <Button onClick={() => void handleFinalizeHandoff()} disabled={finalizingHandoff || pipelinesLoading || stagesLoading || !finalizePipelineId || !finalizeStageId}>
               {finalizingHandoff ? "Finalizando..." : "Finalizar atendimento"}
             </Button>
           </DialogFooter>

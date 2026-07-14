@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
+import { useChatUnread } from "@/contexts/ChatUnreadContext";
 
 const navigation = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard },
@@ -49,6 +50,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const { user, userRole, profileName } = useAuth();
   const location = useLocation();
   const isAdmin = userRole === "ADMIN";
+  const { total: chatUnreadTotal } = useChatUnread();
 
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < TABLET_BP);
   const [collapsed, setCollapsed] = useState<boolean>(getInitialCollapsed);
@@ -122,11 +124,13 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
     icon: Icon,
     name,
     end,
+    badge,
   }: {
     path: string;
     icon: ElementType;
     name: string;
     end?: boolean;
+    badge?: number;
   }) {
     return (
       <li>
@@ -140,6 +144,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         >
           <Icon className="nav-item__icon" />
           <span className="nav-item__label">{name}</span>
+          {badge ? <span className="nav-item__badge">{badge > 99 ? "99+" : badge}</span> : null}
         </NavLink>
       </li>
     );
@@ -185,7 +190,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         <nav className="sidebar-nav">
           <ul className="sidebar-list">
             {navigation.map((item) => (
-              <NavItem key={item.path} path={item.path} icon={item.icon} name={item.name} end={item.path === "/"} />
+              <NavItem key={item.path} path={item.path} icon={item.icon} name={item.name} end={item.path === "/"} badge={item.path === "/chat" ? chatUnreadTotal : undefined} />
             ))}
 
             {isAdmin && <NavItem path="/automacao" icon={Workflow} name="Automacao" />}
