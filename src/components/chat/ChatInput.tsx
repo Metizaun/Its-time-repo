@@ -18,8 +18,8 @@ import {
   CHAT_ATTACHMENT_ACCEPT,
   CHAT_ATTACHMENT_MAX_FILE_SIZE,
   formatFileSize,
-  normalizeMimeType,
   resolveChatAttachmentKind,
+  resolveChatAttachmentMimeType,
 } from "@/services/chatService";
 import type { ChatAttachmentKind, ChatComposerPayload } from "@/types/chat";
 import { cn } from "@/lib/utils";
@@ -308,6 +308,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           ? {
               file: selectedAttachment.file,
               kind: selectedAttachment.kind,
+              mimeType: selectedAttachment.mimeType,
             }
           : null,
       });
@@ -343,7 +344,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       return;
     }
 
-    const mimeType = normalizeMimeType(file.type);
+    const mimeType = resolveChatAttachmentMimeType(file);
     const kind = resolveChatAttachmentKind(mimeType);
 
     if (!kind) {

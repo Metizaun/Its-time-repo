@@ -5,7 +5,6 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   createAttachmentUploadUrl,
   listChatMessages,
-  normalizeMimeType,
   sendManualMessage,
 } from "@/services/chatService";
 import type { ChatComposerPayload, ChatMessage } from "@/types/chat";
@@ -68,7 +67,7 @@ export function useChat(leadId: string | null) {
 
     try {
       if (attachment) {
-        const mimeType = normalizeMimeType(attachment.file.type);
+        const mimeType = attachment.mimeType;
         const uploadIntent = await createAttachmentUploadUrl({
           leadId,
           instanceName: instanceName || null,

@@ -60,6 +60,7 @@ export interface ChatUploadIntent {
 export interface ChatComposerAttachment {
   file: File;
   kind: ChatAttachmentKind;
+  mimeType: string;
 }
 
 export interface ChatComposerPayload {

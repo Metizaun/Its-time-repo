@@ -11,6 +11,9 @@ import type {
 export const CHAT_ATTACHMENT_MAX_FILE_SIZE = 104_857_600;
 
 export const CHAT_ATTACHMENT_ACCEPT = [
+  ".csv",
+  ".xls",
+  ".xlsx",
   "image/jpeg",
   "image/png",
   "image/webp",
@@ -68,6 +71,12 @@ const DOCUMENT_MIME_TYPES = new Set<string>([
   "application/rtf",
 ]);
 
+const SPREADSHEET_MIME_TYPE_BY_EXTENSION = new Map<string, string>([
+  ["csv", "text/csv"],
+  ["xls", "application/vnd.ms-excel"],
+  ["xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+]);
+
 type BackendChatAttachment = {
   id: string;
   kind: ChatAttachmentKind;
@@ -110,6 +119,22 @@ type CreateAttachmentUploadUrlParams = {
 
 export function normalizeMimeType(mimeType: string | null | undefined) {
   return String(mimeType ?? "").split(";")[0].trim().toLowerCase();
+}
+
+export function resolveChatAttachmentMimeType(
+  file: Pick<File, "name" | "type">
+) {
+  const extension = file.name.trim().toLowerCase().split(".").pop() ?? "";
+  const spreadsheetMimeType = SPREADSHEET_MIME_TYPE_BY_EXTENSION.get(extension);
+
+  // Browsers and operating systems frequently report spreadsheet files with an
+  // empty, generic or legacy MIME type. The extension gives these formats a
+  // stable canonical MIME type accepted by the chat upload endpoints.
+  if (spreadsheetMimeType) {
+    return spreadsheetMimeType;
+  }
+
+  return normalizeMimeType(file.type);
 }
 
 export function resolveChatAttachmentKind(mimeType: string | null | undefined): ChatAttachmentKind | null {
