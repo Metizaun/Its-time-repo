@@ -365,8 +365,9 @@ $$;
 DROP TRIGGER IF EXISTS trg_install_default_agent_tools ON agents.ai_agents;
 CREATE TRIGGER trg_install_default_agent_tools
 AFTER INSERT ON agents.ai_agents
+FOR EACH ROW
 WHEN (NEW.template_key IS NULL)
-FOR EACH ROW EXECUTE FUNCTION agents.install_default_agent_tools();
+EXECUTE FUNCTION agents.install_default_agent_tools();
 
 REVOKE ALL ON FUNCTION agents.install_default_agent_tools() FROM PUBLIC, anon, authenticated;
 
