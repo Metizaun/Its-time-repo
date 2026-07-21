@@ -25,12 +25,22 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { InstanceManager } from "@/components/admin/InstanceManager";
+import { InstanceAccessSelect } from "@/components/admin/InstanceAccessSelect";
 import { CreateUserModal, CreateUserFormData } from "@/components/admin/CreateUserModal";
+import { useInstanceAccess } from "@/hooks/useInstanceAccess";
 
 export default function Admin() {
   const { combinedList, loading, updateUserRole, inviteUser, cancelInvitation } = useCrmUsers();
   const { userRole } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const {
+    instances,
+    memberships,
+    loading: accessLoading,
+    savingKeys,
+    reload: reloadInstanceAccess,
+    toggleInstanceAccess,
+  } = useInstanceAccess(userRole === "ADMIN");
 
   if (userRole !== "ADMIN") {
     return <Navigate to="/" replace />;
@@ -64,6 +74,14 @@ export default function Admin() {
 
   const handleCancelInvitation = async (invitationId: string) => {
     await cancelInvitation(invitationId);
+  };
+
+  const handleRoleChange = async (
+    userId: string,
+    role: "VENDEDOR" | "ADMIN" | "NENHUM"
+  ) => {
+    await updateUserRole(userId, role);
+    await reloadInstanceAccess();
   };
 
   return (
@@ -120,6 +138,7 @@ export default function Admin() {
                     <TableHead>Nome</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Role Atual</TableHead>
+                    <TableHead>Instâncias</TableHead>
                     <TableHead>Cadastrado em</TableHead>
                     <TableHead>Ações</TableHead>
                   </TableRow>
@@ -140,6 +159,21 @@ export default function Admin() {
                       </TableCell>
                       <TableCell>{user.email}</TableCell>
                       <TableCell>{getRoleBadge(user.role, user.isPending)}</TableCell>
+                      <TableCell>
+                        {!user.isPending && user.role === "VENDEDOR" ? (
+                          <InstanceAccessSelect
+                            userId={user.id}
+                            userName={user.name || user.email}
+                            instances={instances}
+                            memberships={memberships}
+                            loading={accessLoading}
+                            savingKeys={savingKeys}
+                            onToggle={toggleInstanceAccess}
+                          />
+                        ) : (
+                          <span className="text-[var(--color-gray-400)]">—</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {format(new Date(user.created_at), "dd/MM/yy HH:mm", { locale: ptBR })}
                       </TableCell>
@@ -164,8 +198,11 @@ export default function Admin() {
                           // Usuário confirmado: select de role
                           <Select
                             value={user.role}
-                            onValueChange={(value) => 
-                              updateUserRole(user.id, value as "VENDEDOR" | "ADMIN" | "NENHUM")
+                            onValueChange={(value) =>
+                              void handleRoleChange(
+                                user.id,
+                                value as "VENDEDOR" | "ADMIN" | "NENHUM"
+                              )
                             }
                           >
                             <SelectTrigger className="w-32">

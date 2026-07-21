@@ -58,6 +58,39 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       mediaUrl: "https://example.com/audio.mp3",
       sourceType: "ai",
     });
+    await provider.sendMedia({
+      instanceName: "test-instance",
+      to: "(11) 98888-7777",
+      mediaUrl: "https://example.com/cabecalho.png",
+      mimeType: "image/png",
+      fileName: "cabecalho.png",
+      kind: "image",
+      templateName: "template-image-id",
+      templateParameters: ["Lucas"],
+      sourceType: "automation",
+    });
+    await provider.sendMedia({
+      instanceName: "test-instance",
+      to: "(11) 98888-7777",
+      mediaUrl: "https://example.com/apresentacao.mp4",
+      mimeType: "video/mp4",
+      fileName: "apresentacao.mp4",
+      kind: "video",
+      templateName: "template-video-id",
+      templateParameters: [],
+      sourceType: "automation",
+    });
+    await provider.sendMedia({
+      instanceName: "test-instance",
+      to: "(11) 98888-7777",
+      mediaUrl: "https://example.com/proposta.pdf",
+      mimeType: "application/pdf",
+      fileName: "proposta.pdf",
+      kind: "document",
+      templateName: "template-document-id",
+      templateParameters: ["Lucas", "Hoje"],
+      sourceType: "automation",
+    });
 
     assert.equal(calls[0]?.url, "https://api.gupshup.io/wa/api/v1/msg");
     const textBody = new URLSearchParams(calls[0]?.body);
@@ -91,6 +124,33 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
     assert.deepEqual(JSON.parse(new URLSearchParams(calls[4]?.body).get("message") ?? "{}"), {
       type: "audio",
       url: "https://example.com/audio.mp3",
+    });
+    const imageTemplateBody = new URLSearchParams(calls[5]?.body);
+    assert.equal(calls[5]?.url, "https://api.gupshup.io/wa/api/v1/template/msg");
+    assert.deepEqual(JSON.parse(imageTemplateBody.get("template") ?? "{}"), {
+      id: "template-image-id",
+      params: ["Lucas"],
+    });
+    assert.deepEqual(JSON.parse(imageTemplateBody.get("message") ?? "{}"), {
+      type: "image",
+      image: { link: "https://example.com/cabecalho.png" },
+    });
+
+    const videoTemplateBody = new URLSearchParams(calls[6]?.body);
+    assert.equal(calls[6]?.url, "https://api.gupshup.io/wa/api/v1/template/msg");
+    assert.deepEqual(JSON.parse(videoTemplateBody.get("message") ?? "{}"), {
+      type: "video",
+      video: { link: "https://example.com/apresentacao.mp4" },
+    });
+
+    const documentTemplateBody = new URLSearchParams(calls[7]?.body);
+    assert.equal(calls[7]?.url, "https://api.gupshup.io/wa/api/v1/template/msg");
+    assert.deepEqual(JSON.parse(documentTemplateBody.get("message") ?? "{}"), {
+      type: "document",
+      document: {
+        link: "https://example.com/proposta.pdf",
+        filename: "proposta.pdf",
+      },
     });
   } finally {
     axios.post = originalPost;

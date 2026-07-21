@@ -13,7 +13,7 @@
     "schema:check": "tsx schema-preflight.ts",
     "build": "tsc",
     "start": "node dist/api-server.js",
-    "test": "node --import tsx --test tests/audio-idempotency.test.ts tests/automation-template-variables.test.ts tests/prescription-matching.test.ts tests/visagism-selection.test.ts tests/optics-image-analysis.test.ts tests/visagism-delivery.test.ts tests/evolution-provider.test.ts tests/evolution-webhook-lid.test.ts tests/gupshup-provider.test.ts tests/gupshup-webhook.test.ts tests/meta-provider.test.ts",
+    "test": "node --import tsx --test tests/ai-costs.test.ts tests/audio-idempotency.test.ts tests/automation-template-variables.test.ts tests/chat-quick-replies.test.ts tests/chat-send-policy.test.ts tests/pipeline-classifier.test.ts tests/prescription-matching.test.ts tests/visagism-selection.test.ts tests/optics-image-analysis.test.ts tests/visagism-delivery.test.ts tests/evolution-provider.test.ts tests/evolution-webhook-lid.test.ts tests/gupshup-provider.test.ts tests/gupshup-template-service.test.ts tests/gupshup-media-downloader.test.ts tests/gupshup-webhook.test.ts tests/meta-provider.test.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,json,md}\""
   },

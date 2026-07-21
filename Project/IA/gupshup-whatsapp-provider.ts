@@ -29,7 +29,6 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
   }
 
   async sendMedia(input: SendMediaInput): Promise<SendResult> {
-    const message = this.buildMediaMessage(input);
     if (input.templateName?.trim()) {
       return this.sendTemplateMessage(
         input.to,
@@ -37,14 +36,14 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
           id: input.templateName.trim(),
           params: input.templateParameters ?? [],
         },
-        message
+        this.buildTemplateMediaMessage(input)
       );
     }
 
-    return this.sendMessage(input.to, message);
+    return this.sendMessage(input.to, this.buildSessionMediaMessage(input));
   }
 
-  private buildMediaMessage(input: SendMediaInput) {
+  private buildSessionMediaMessage(input: SendMediaInput) {
     if (input.kind === "image") {
       return {
         type: "image",
@@ -58,11 +57,41 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
       return { type: "audio", url: input.mediaUrl };
     }
 
+    if (input.kind === "video") {
+      return {
+        type: "video",
+        url: input.mediaUrl,
+        ...(input.caption?.trim() ? { caption: input.caption.trim() } : {}),
+      };
+    }
+
     return {
       type: "file",
       url: input.mediaUrl,
       filename: input.fileName,
     };
+  }
+
+  private buildTemplateMediaMessage(input: SendMediaInput) {
+    if (input.kind === "image") {
+      return { type: "image", image: { link: input.mediaUrl } };
+    }
+
+    if (input.kind === "video") {
+      return { type: "video", video: { link: input.mediaUrl } };
+    }
+
+    if (input.kind === "document") {
+      return {
+        type: "document",
+        document: { link: input.mediaUrl, filename: input.fileName },
+      };
+    }
+
+    throw new WhatsAppProviderError("Template Gupshup nao suporta este tipo de midia", {
+      provider: "gupshup",
+      kind: "permanent",
+    });
   }
 
   async sendVoiceNote(input: SendVoiceNoteInput): Promise<SendResult> {

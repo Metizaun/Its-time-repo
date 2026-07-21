@@ -134,7 +134,7 @@ export function KanbanBoard({ leads, pipelineId, onLeadsChanged }: KanbanBoardPr
   };
 
   if (loading && stages.length === 0) {
-    return <div className="flex w-full gap-3 pb-4">Carregando funil...</div>;
+    return <div className="pipeline-board-loading">Carregando funil...</div>;
   }
 
   const groupedLeads = stages.reduce((acc, col) => {
@@ -161,7 +161,14 @@ export function KanbanBoard({ leads, pipelineId, onLeadsChanged }: KanbanBoardPr
   }, {} as Record<string, Lead[]>);
 
   return (
-    <div className="flex w-full gap-3 pb-4 overflow-x-auto min-h-[70vh]">
+    <div className="pipeline-board-scroll">
+      <div
+        className="pipeline-board"
+        style={{
+          gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, minmax(${stages.length <= 4 ? "280px" : "300px"}, 1fr))`,
+          minWidth: stages.length > 4 ? `${stages.length * 300 + (stages.length - 1) * 16}px` : undefined,
+        }}
+      >
       {stages.map((column) => (
         <KanbanColumn
           key={column.id}
@@ -190,6 +197,7 @@ export function KanbanBoard({ leads, pipelineId, onLeadsChanged }: KanbanBoardPr
           isDraggingColumn={activeDragType === "column" && activeDragId === column.id}
         />
       ))}
+      </div>
     </div>
   );
 }

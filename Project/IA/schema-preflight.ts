@@ -23,6 +23,12 @@ const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
   "supabase/migrations/20260714172130_chat_realtime_notifications_audio.sql";
+const PIPELINE_CLASSIFIER_MIGRATION =
+  "supabase/migrations/20260716184250_standardize_pipeline_classifier_stages.sql";
+const PIPELINE_ATTENDANCE_MIGRATION =
+  "supabase/migrations/20260717190747_pipeline_attendance_cycles_and_controls.sql";
+const GUPSHUP_CHAT_WINDOW_MIGRATION =
+  "supabase/migrations/20260720180517_backfill_gupshup_chat_window.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -175,6 +181,41 @@ async function validateSelectedColumns(
 ) {
   const { error } = await serviceClient.from(table).select(columns.join(",")).limit(1);
   return error ? buildSchemaFailure(label, migration, error) : null;
+}
+
+async function validatePipelineAttendanceRpcs(
+  serviceClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    serviceClient.rpc("rpc_set_pipeline_classification", {
+      p_pipeline_id: NIL_UUID,
+      p_enabled: false,
+    }),
+    serviceClient.rpc("rpc_designate_attendance_stage", {
+      p_pipeline_id: NIL_UUID,
+      p_stage_id: NIL_UUID,
+    }),
+    serviceClient.rpc("service_claim_pipeline_analyses", {
+      p_limit: 0,
+      p_lease_seconds: 30,
+      p_per_account_limit: 1,
+    }),
+  ];
+
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => {
+    if (!error) return false;
+    const normalized = normalizePostgrestError(error);
+    return normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message);
+  });
+
+  return missing?.error
+    ? buildSchemaFailure(
+        "RPCs do ciclo de Atendimento e fairness",
+        PIPELINE_ATTENDANCE_MIGRATION,
+        missing.error
+      )
+    : null;
 }
 
 async function validateHumanizedPlanRpc(serviceClient: SupabaseClient<any, any, any>) {
@@ -598,6 +639,70 @@ export async function assertRuntimeSchemaCompatibility(
       ["crm_user_id", "aces_id", "lead_id", "last_read_at", "updated_at"],
       "crm.chat_read_states",
       CHAT_NOTIFICATIONS_AUDIO_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "leads",
+      [
+        "id",
+        "check",
+        "last_pipeline_activity_at",
+        "pre_attendance_stage_id",
+        "attendance_cycle_started_at",
+      ],
+      "crm.leads (watermark da classificacao incremental)",
+      PIPELINE_ATTENDANCE_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "leads",
+      ["id", "last_lead_inbound_at"],
+      "crm.leads (janela de atendimento Gupshup)",
+      GUPSHUP_CHAT_WINDOW_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "pipelines",
+      ["id", "ai_reply_enabled", "ai_classification_enabled", "classification_auto_apply_threshold"],
+      "crm.pipelines (controles independentes de IA)",
+      PIPELINE_CLASSIFIER_MIGRATION
+    ),
+    validatePipelineAttendanceRpcs(serviceClient),
+    validateSelectedColumns(
+      serviceClient,
+      "pipeline_stages",
+      [
+        "id",
+        "classifier_description",
+        "classifier_positive_signals",
+        "classifier_negative_signals",
+        "classifier_examples",
+        "classifier_semantic_key",
+        "classifier_is_destination",
+      ],
+      "crm.pipeline_stages (criterios do classificador)",
+      PIPELINE_CLASSIFIER_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "lead_pipeline_analysis",
+      ["lead_id", "pipeline_id", "summary", "last_confidence", "claim_token", "claimed_until"],
+      "crm.lead_pipeline_analysis",
+      PIPELINE_CLASSIFIER_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "pipeline_analysis_runs",
+      ["id", "lead_id", "mode", "cutoff_at", "status", "tokens_input", "tokens_output"],
+      "crm.pipeline_analysis_runs",
+      PIPELINE_CLASSIFIER_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "ai_agents",
+      ["id", "unanswered_followup_enabled"],
+      "agents.ai_agents.unanswered_followup_enabled",
+      PIPELINE_CLASSIFIER_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,

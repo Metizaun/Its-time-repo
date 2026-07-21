@@ -6,6 +6,7 @@ export interface Instance {
   instancia: string;
   color: string | null;
   aces_id: number;
+  provider: "evolution" | "meta" | "gupshup";
   status?: string | null;
   setup_status?: "pending_qr" | "connected" | "expired" | "cancelled" | null;
   created_by?: string | null;
@@ -23,11 +24,12 @@ export function useInstances() {
 
       const { instances: nextInstances } = await getCrmBackend<{ instances: Instance[] }>("/api/crm/instances");
       setInstances(nextInstances ?? []);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Tente novamente.";
       console.error("Erro ao carregar instancias:", error);
-      setError(error.message);
+      setError(message);
       setInstances([]);
-      toast.error("Erro ao carregar instancias", { description: error.message });
+      toast.error("Erro ao carregar instancias", { description: message });
     } finally {
       setLoading(false);
     }

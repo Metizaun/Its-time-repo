@@ -46,6 +46,7 @@ SELECT
   inst.color AS instance_color,
   latest_tag.last_tag_name,
   latest_tag.last_tag_urgencia,
+  l.aces_id,
   l.interaction_mode,
   CASE
     WHEN l.interaction_mode <> 'human' THEN NULL::text
@@ -64,8 +65,7 @@ SELECT
       AND handoff_state.last_lead_inbound_at > handoff_state.last_human_reply_at
       THEN handoff_state.last_lead_inbound_at
     ELSE NULL::timestamptz
-  END AS manual_pending_since,
-  l.aces_id
+  END AS manual_pending_since
 FROM crm.leads l
 LEFT JOIN crm.users owner_user
   ON owner_user.id = l.owner_id

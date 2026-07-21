@@ -1,5 +1,31 @@
 export type ChatAttachmentKind = "image" | "audio" | "document";
 export type ChatSystemKind = "handoff_transition" | "handoff_note" | "handoff_complete";
+export type ChatProvider = "evolution" | "meta" | "gupshup";
+
+export interface ChatSendPolicy {
+  provider: ChatProvider;
+  mode: "freeform" | "template_required";
+  lastInboundAt: string | null;
+  windowExpiresAt: string | null;
+  evaluatedAt: string;
+  remainingMs: number | null;
+}
+
+export interface ChatQuickReplyOption {
+  id: string | null;
+  title: string;
+}
+
+export type ChatQuickReply =
+  | {
+      kind: "options";
+      options: ChatQuickReplyOption[];
+    }
+  | {
+      kind: "selection";
+      selectedOption: ChatQuickReplyOption;
+      replyToMessageId: string | null;
+    };
 
 export interface ChatAttachment {
   id: string;
@@ -24,6 +50,7 @@ export interface ChatMessage {
   source_type: string;
   system_kind: ChatSystemKind | null;
   provider_status?: string | null;
+  quick_reply: ChatQuickReply | null;
   attachments: ChatAttachment[];
 }
 

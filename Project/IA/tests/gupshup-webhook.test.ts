@@ -41,6 +41,7 @@ test("normaliza imagem e documento no formato Gupshup v2", () => {
         url: "https://filemanager.gupshup.io/image",
         contentType: "image/jpeg",
         caption: "Receita",
+        urlExpiry: 1718608420228,
       },
     },
   })[0];
@@ -62,6 +63,10 @@ test("normaliza imagem e documento no formato Gupshup v2", () => {
 
   assert.equal(image?.kind === "inbound" ? image.message.mediaKind : null, "image");
   assert.equal(image?.kind === "inbound" ? image.message.content : null, "Receita");
+  assert.equal(
+    image?.kind === "inbound" ? image.message.mediaUrlExpiresAt : null,
+    "2024-06-17T07:13:40.228Z",
+  );
   assert.equal(document?.kind === "inbound" ? document.message.mediaKind : null, "document");
   assert.equal(document?.kind === "inbound" ? document.message.fileName : null, "receita.pdf");
 });
@@ -115,4 +120,62 @@ test("normaliza mensagens e status no formato Meta v3", () => {
   assert.equal(inbound?.lookup.appId, "gupshup-app-id");
   assert.equal(inbound?.lookup.phoneNumber, "5562920000407");
   assert.equal(status?.kind === "status" ? status.rawStatus : null, "delivered");
+});
+
+test("preserva resposta rapida e contexto no formato Gupshup v2", () => {
+  const event = parseGupshupWebhookPayload({
+    app: "DemoApp",
+    version: 2,
+    type: "message",
+    payload: {
+      id: "button-v2",
+      source: "5511999999999",
+      type: "text",
+      payload: { text: "Preciso negociar o débito", type: "button" },
+      context: { id: "wamid-original", gsId: "gs-original" },
+    },
+  })[0];
+
+  assert.equal(event?.kind === "inbound" ? event.message.content : null, "Preciso negociar o débito");
+  assert.deepEqual(
+    event?.kind === "inbound"
+      ? (event.message.raw as { payload?: { context?: unknown } }).payload?.context
+      : null,
+    { id: "wamid-original", gsId: "gs-original" },
+  );
+});
+
+test("preserva resposta interativa e contexto no formato Gupshup v3", () => {
+  const event = parseGupshupWebhookPayload({
+    object: "whatsapp_business_account",
+    gs_app_id: "gupshup-app-id",
+    entry: [{
+      id: "waba-id",
+      changes: [{
+        field: "messages",
+        value: {
+          metadata: { display_phone_number: "5562920000407" },
+          messages: [{
+            from: "5511999999999",
+            id: "button-v3",
+            timestamp: "1718003620",
+            type: "interactive",
+            interactive: {
+              type: "button_reply",
+              button_reply: { id: "negociar", title: "Preciso negociar o débito" },
+            },
+            context: { id: "wamid-original", gs_id: "gs-original" },
+          }],
+        },
+      }],
+    }],
+  })[0];
+
+  assert.equal(event?.kind === "inbound" ? event.message.content : null, "Preciso negociar o débito");
+  assert.deepEqual(
+    event?.kind === "inbound"
+      ? (event.message.raw as { _gupshupMetaMessage?: { context?: unknown } })._gupshupMetaMessage?.context
+      : null,
+    { id: "wamid-original", gs_id: "gs-original" },
+  );
 });

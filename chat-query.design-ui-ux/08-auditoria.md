@@ -46,6 +46,14 @@
 - [ ] Modais têm backdrop com `blur(4px)`, animation com `ease-spring`
 - [ ] Section labels sempre com `::before` barra laranja 20px × 2px + mono uppercase
 - [ ] Skeletons usam `--color-bg-muted` (#E8E5DF) — warm, nunca cinza frio
+- [ ] Nenhuma caixa explicativa repete controles autoexplicativos
+- [ ] Apenas um editor principal está visível em cada superfície
+- [ ] Modos mutuamente exclusivos substituem conteúdo por abas ou controle segmentado
+- [ ] Nenhum formulário está envolvido por fundo laranja ou tint de acento
+- [ ] Helpers são curtos, operacionais e diretamente ligados ao campo
+- [ ] IDs técnicos não aparecem no fluxo operacional principal
+- [ ] Timelines e modais de release não exibem badges decorativos de “Novidade”, “Melhoria”, “Correção” ou equivalentes
+- [ ] Ícones editoriais usam 40px a 64px e degradês somente no suporte visual, sem texto sobreposto
 
 ### 🔻 Funil (`03-funil.md`) — Validação Crítica
 - [ ] Número de stages **igual ao original** do CRM (não alterar)
@@ -76,6 +84,8 @@
 - [ ] Trackers horizontais: scroll oculto + coluna de nome sticky
 - [ ] Tabelas mobile: converte em cards empilhados abaixo de 640px
 - [ ] Sidebar mobile: overlay com lock de scroll
+- [ ] Formulários são agrupados por tarefa, sem colunas vazias ou campos órfãos
+- [ ] Controles compostos mantêm continuidade visual e empilham de forma previsível no mobile
 
 ### ⚡ Transições e Animações (`06-ux-animacoes.md`)
 - [ ] Nenhum componente aparece com "pop-in" brusco
@@ -87,7 +97,8 @@
 - [ ] Drag placeholder usa borda dashed `primary-300` + `primary-50` bg
 
 ### 🎯 Identidade Visual
-- [ ] Gradiente laranja→pink **nunca** em botões, textos ou backgrounds funcionais
+- [ ] Gradientes editoriais usam exclusivamente os quatro tokens documentados
+- [ ] Gradientes **nunca** aparecem em botões, textos, campos, formulários, cards completos ou backgrounds funcionais
 - [ ] Tipografia mono **apenas** em labels, badges, IDs, timestamps
 - [ ] Nenhum card de hero/destaque sem barra accent de 3px no topo
 - [ ] Section labels precedem cada bloco temático da dashboard

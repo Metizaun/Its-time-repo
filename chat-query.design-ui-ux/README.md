@@ -1,4 +1,4 @@
-# 📋 CRM Its Time — Design System v2
+# 📋 CRM Its Time — Design System v2.1
 **White Minimalist SaaS — Soft UI Edition**
 
 > Sistema de design unificado baseado nas referências visuais KP & Kromap.
@@ -70,6 +70,16 @@ var(--shadow-primary-hover)  /* Botão solid hover */
 var(--shadow-focus)          /* Focus ring + shadow */
 ```
 
+### Gradientes editoriais
+```css
+var(--gradient-orange-coral)
+var(--gradient-coral-pink)
+var(--gradient-orange-pink-electric)
+var(--gradient-coral-pink-soft)
+```
+
+Uso restrito a ilustrações, barras de acento e suportes visuais de ícones grandes. Em releases, essa linguagem substitui badges decorativos de categoria.
+
 ### Tipografia
 ```css
 var(--text-xs)      /* 12px — labels, badges, mono */
@@ -115,6 +125,13 @@ var(--space-10)  /* 40px — margin de página */
 1. **Fundo da página = `#F7F6F4`** — nunca branco puro
 2. **CTA = `#E8511A` sólido** — única cor de ação principal, sem exceção
 3. **Elevação = Soft UI bilateral** — toda sombra tem componente escuro + claro
+
+### Quiet luxury operacional
+
+- Uma decisão principal e um editor por superfície.
+- Hierarquia, alinhamento e progressive disclosure substituem caixas explicativas.
+- Laranja indica ação, foco ou seleção; nunca serve como fundo decorativo para formulários.
+- Fluxos mutuamente exclusivos trocam o conteúdo da superfície, sem empilhar experiências concorrentes.
 
 ---
 

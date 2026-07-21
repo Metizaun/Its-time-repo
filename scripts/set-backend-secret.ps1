@@ -1,6 +1,6 @@
 param(
   [string]$EnvFile = ".env.local",
-  [ValidateSet("ELEVENLABS_API_KEY")]
+  [ValidateSet("ELEVENLABS_API_KEY", "GEMINI_API_KEY")]
   [string]$Name = "ELEVENLABS_API_KEY"
 )
 
@@ -18,10 +18,11 @@ try {
     throw "O segredo nao pode conter quebra de linha."
   }
 
-  $lines = if (Test-Path -LiteralPath $resolvedFile) {
-    [System.Collections.Generic.List[string]](Get-Content -LiteralPath $resolvedFile)
-  } else {
-    [System.Collections.Generic.List[string]]::new()
+  $lines = [System.Collections.Generic.List[string]]::new()
+  if (Test-Path -LiteralPath $resolvedFile) {
+    foreach ($line in (Get-Content -LiteralPath $resolvedFile)) {
+      $lines.Add($line)
+    }
   }
   $replacement = "$Name=$plainText"
   $found = $false

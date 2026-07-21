@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, Loader2, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Bell, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
@@ -12,6 +12,10 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import {
+  CURRENT_RELEASE_VERSION,
+  isCurrentReleasePublished,
+} from "@/lib/releaseSchedule";
+import {
   listNotifications,
   getNotificationUnreadCounts,
   readAllNotifications,
@@ -22,8 +26,15 @@ import {
 
 const LABELS: Record<NotificationCategory, string> = { internal: "Interno", notice: "Avisos" };
 
+// ─── Card fixo de novidades — atualizar a cada release ───────────────────────
+const NOTICE_VERSION = CURRENT_RELEASE_VERSION;
+const NOTICE_SUMMARY =
+  "IA por voz, pipeline inteligente sem agente ativo, templates Meta e chat redesenhado.";
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function NotificationCenter() {
   const navigate = useNavigate();
+  const [popoverOpen, setPopoverOpen] = useState(false);
   const [active, setActive] = useState<NotificationCategory>("internal");
   const [items, setItems] = useState<Record<NotificationCategory, ProductNotification[]>>({ internal: [], notice: [] });
   const [loading, setLoading] = useState(true);
@@ -65,6 +76,7 @@ export function NotificationCenter() {
 
   const unread = unreadByCategory.internal + unreadByCategory.notice;
   const activeItems = items[active];
+  const showCurrentRelease = isCurrentReleasePublished();
 
   async function openNotification(item: ProductNotification) {
     if (!item.read) {
@@ -101,7 +113,7 @@ export function NotificationCenter() {
   }
 
   return (
-    <Popover>
+    <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="icon" className="topbar-icon-button relative" aria-label={unread ? `${unread} notificacoes nao lidas` : "Notificacoes"}>
           <Bell className="h-5 w-5" />
@@ -119,8 +131,42 @@ export function NotificationCenter() {
           </TabsList>
         </Tabs>
         <ScrollArea className="h-[min(60vh,25rem)]">
-          {loading ? <div className="flex h-40 items-center justify-center text-sm text-[var(--color-gray-500)]"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando</div> : error ? <div className="flex h-40 flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-sm text-[var(--color-gray-600)]">Nao foi possivel carregar as notificacoes.</p><Button variant="outline" size="sm" onClick={() => void refresh()}><RefreshCw className="mr-2 h-4 w-4" />Tentar novamente</Button></div> : activeItems.length === 0 ? <div className="flex h-40 items-center justify-center px-6 text-center text-sm text-[var(--color-gray-500)]">Nada novo por aqui.</div> : <div className="p-2">
-            {activeItems.map((item) => <button key={item.key} type="button" onClick={() => void openNotification(item)} className={cn("mb-1 w-full rounded-[var(--radius-lg)] border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm focus-ring", item.read ? "border-transparent bg-transparent" : "border-[var(--color-primary-100)] bg-[var(--color-primary-50)]")}><div className="flex gap-2"><span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", item.read ? "bg-[var(--color-bg-muted)]" : "bg-[var(--color-primary-500)]")} /><div className="min-w-0"><p className="text-sm font-semibold text-[var(--color-gray-900)]">{item.title}</p><p className="mt-1 text-xs leading-relaxed text-[var(--color-gray-600)]">{item.description}</p><time className="mt-2 block font-mono text-[10px] text-[var(--color-gray-500)]">{formatDistanceToNow(new Date(item.publishedAt), { addSuffix: true, locale: ptBR })}</time></div></div></button>)}
+          {loading ? <div className="flex h-40 items-center justify-center text-sm text-[var(--color-gray-500)]"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando</div> : error ? <div className="flex h-40 flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-sm text-[var(--color-gray-600)]">Nao foi possivel carregar as notificacoes.</p><Button variant="outline" size="sm" onClick={() => void refresh()}><RefreshCw className="mr-2 h-4 w-4" />Tentar novamente</Button></div> : activeItems.length === 0 && active !== "notice" ? <div className="flex h-40 items-center justify-center px-6 text-center text-sm text-[var(--color-gray-500)]">Nada novo por aqui.</div> : <div className="p-2">
+            {/* Card fixo de novidades — visível apenas na aba Avisos */}
+            {active === "notice" && showCurrentRelease && (
+              <div className="mb-2 rounded-[var(--radius-lg)] border border-[var(--color-primary-100)] bg-[var(--color-primary-50)] p-3">
+                <div className="flex gap-2">
+                  <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-[var(--color-primary-100)] text-[var(--color-primary-600)]">
+                    <Sparkles className="h-3 w-3" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-[var(--color-gray-900)]">
+                        Novidades desta semana — {NOTICE_VERSION}
+                      </p>
+                      <span className="shrink-0 font-mono text-[9px] font-semibold tracking-wider text-[var(--color-primary-600)] uppercase bg-[var(--color-primary-100)] px-1.5 py-0.5 rounded">
+                        NOVO
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--color-gray-600)]">
+                      {NOTICE_SUMMARY}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => { setPopoverOpen(false); navigate("/updates"); }}
+                      className="mt-2 inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-[var(--color-primary-600)] hover:text-[var(--color-primary-700)] transition-colors"
+                    >
+                      Ver mais <ArrowUpRight className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {activeItems.length === 0 && active === "notice" ? (
+              <div className="flex h-28 items-center justify-center px-6 text-center text-sm text-[var(--color-gray-500)]">Nada novo por aqui.</div>
+            ) : (
+              activeItems.map((item) => <button key={item.key} type="button" onClick={() => void openNotification(item)} className={cn("mb-1 w-full rounded-[var(--radius-lg)] border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-sm focus-ring", item.read ? "border-transparent bg-transparent" : "border-[var(--color-primary-100)] bg-[var(--color-primary-50)]")}>  <div className="flex gap-2"><span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", item.read ? "bg-[var(--color-bg-muted)]" : "bg-[var(--color-primary-500)]")} /><div className="min-w-0"><p className="text-sm font-semibold text-[var(--color-gray-900)]">{item.title}</p><p className="mt-1 text-xs leading-relaxed text-[var(--color-gray-600)]">{item.description}</p><time className="mt-2 block font-mono text-[10px] text-[var(--color-gray-500)]">{formatDistanceToNow(new Date(item.publishedAt), { addSuffix: true, locale: ptBR })}</time></div></div></button>)
+            )}
             {activeItems.length >= 20 ? <Button variant="ghost" className="w-full" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Carregando..." : "Ver mais"}</Button> : null}
           </div>}
         </ScrollArea>

@@ -1,34 +1,40 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
 import {
   createAttachmentUploadUrl,
+  getTemplateRequiredPolicyFromError,
   listChatMessages,
   sendManualMessage,
 } from "@/services/chatService";
-import type { ChatComposerPayload, ChatMessage } from "@/types/chat";
+import type { ChatComposerPayload, ChatMessage, ChatSendPolicy } from "@/types/chat";
 
 export type { ChatMessage } from "@/types/chat";
 
 export function useChat(leadId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sendPolicy, setSendPolicy] = useState<ChatSendPolicy | null>(null);
   const [loading, setLoading] = useState(false);
+  const activeLeadIdRef = useRef(leadId);
+  activeLeadIdRef.current = leadId;
 
-  const fetchMessages = useCallback(async () => {
+  const fetchMessages = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!leadId) return;
 
-    setLoading(true);
+    if (!options.silent) setLoading(true);
     try {
-      const nextMessages = await listChatMessages(leadId);
-      setMessages(nextMessages);
+      const result = await listChatMessages(leadId);
+      if (activeLeadIdRef.current !== leadId) return;
+      setMessages(result.messages);
+      setSendPolicy(result.sendPolicy);
     } catch (error: unknown) {
       console.error("Erro ao carregar mensagens:", error);
       toast.error("Erro ao carregar chat", {
         description: error instanceof Error ? error.message : "Tente novamente.",
       });
     } finally {
-      setLoading(false);
+      if (!options.silent && activeLeadIdRef.current === leadId) setLoading(false);
     }
   }, [leadId]);
 
@@ -57,6 +63,7 @@ export function useChat(leadId: string | null) {
             source_type: "human",
             system_kind: null,
             provider_status: null,
+            quick_reply: null,
             attachments: [],
           }
       : null;
@@ -114,6 +121,11 @@ export function useChat(leadId: string | null) {
         setMessages((prev) => prev.filter((message) => message.id !== tempMessage.id));
       }
 
+      const blockedPolicy = getTemplateRequiredPolicyFromError(error);
+      if (blockedPolicy) {
+        setSendPolicy(blockedPolicy);
+      }
+
       console.error("Erro ao enviar mensagem:", error);
       toast.error("Erro ao enviar mensagem", {
         description: error instanceof Error ? error.message : "Tente novamente.",
@@ -125,9 +137,12 @@ export function useChat(leadId: string | null) {
   useEffect(() => {
     if (!leadId) {
       setMessages([]);
+      setSendPolicy(null);
+      setLoading(false);
       return;
     }
 
+    setSendPolicy(null);
     fetchMessages();
 
     const channel = supabase
@@ -145,7 +160,7 @@ export function useChat(leadId: string | null) {
 
           const newMessage = payload.new as { direction?: string };
           if (newMessage.direction === "inbound" || newMessage.direction === "outbound") {
-            await fetchMessages();
+            await fetchMessages({ silent: true });
           }
         }
       )
@@ -159,7 +174,7 @@ export function useChat(leadId: string | null) {
         },
         async (payload) => {
           console.log("Realtime detectou novo anexo de mensagem:", payload);
-          await fetchMessages();
+          await fetchMessages({ silent: true });
         }
       )
       .on(
@@ -172,15 +187,15 @@ export function useChat(leadId: string | null) {
         },
         async (payload) => {
           console.log("Realtime detectou atualizacao de anexo de mensagem:", payload);
-          await fetchMessages();
+          await fetchMessages({ silent: true });
         }
       )
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") void fetchMessages();
+        if (status === "SUBSCRIBED") void fetchMessages({ silent: true });
       });
 
     const handleResume = () => {
-      if (document.visibilityState === "visible") void fetchMessages();
+      if (document.visibilityState === "visible") void fetchMessages({ silent: true });
     };
     window.addEventListener("focus", handleResume);
     document.addEventListener("visibilitychange", handleResume);
@@ -192,5 +207,27 @@ export function useChat(leadId: string | null) {
     };
   }, [fetchMessages, leadId]);
 
-  return { messages, loading, sendMessage, refetch: fetchMessages };
+  useEffect(() => {
+    if (
+      sendPolicy?.provider !== "gupshup" ||
+      sendPolicy.mode !== "freeform" ||
+      sendPolicy.remainingMs === null
+    ) {
+      return;
+    }
+
+    const delayMs = Math.max(0, sendPolicy.remainingMs) + 25;
+    const timeoutId = window.setTimeout(() => {
+      setSendPolicy((current) =>
+        current?.provider === "gupshup"
+          ? { ...current, mode: "template_required", remainingMs: 0 }
+          : current
+      );
+      void fetchMessages({ silent: true });
+    }, delayMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [fetchMessages, sendPolicy]);
+
+  return { messages, sendPolicy, loading, sendMessage, refetch: fetchMessages };
 }

@@ -63,6 +63,9 @@ export interface PipelineStage {
   classifier_positive_signals: string[];
   classifier_negative_signals: string[];
   classifier_examples: string[];
+  classifier_semantic_key: string | null;
+  classifier_is_destination: boolean;
+  isAttendanceStage: boolean;
 }
 
 export interface Pipeline {
@@ -73,6 +76,9 @@ export interface Pipeline {
   classifier_key: string;
   is_default: boolean;
   is_active: boolean;
+  ai_reply_enabled: boolean;
+  ai_classification_enabled: boolean;
+  classification_auto_apply_threshold: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;

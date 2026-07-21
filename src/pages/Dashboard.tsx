@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { BadgeDollarSign, Check, Clock3, Filter, Send, Target } from "lucide-react";
+import { UpdatesModal } from "@/components/dashboard/UpdatesModal";
 
 import { ChartCard } from "@/components/charts/ChartCard";
 import { FunnelChart } from "@/components/charts/FunnelChart";
@@ -170,6 +171,7 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-page">
+      <UpdatesModal />
       <DashboardHeader
         selectedInstance={selectedInstance}
         onInstanceChange={setSelectedInstance}

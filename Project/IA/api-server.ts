@@ -1,5 +1,9 @@
 import "./load-env.js";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import { createClient } from "@supabase/supabase-js";
 import {
   AgentManager,
@@ -10,6 +14,7 @@ import {
 } from "./sdr-agent-gemini.js";
 import { assertRuntimeSchemaCompatibility } from "./schema-preflight.js";
 import { startAutomationWorker } from "./automation-worker.js";
+import { startPipelineWorker } from "./pipeline-worker.js";
 import { RbBillingWorker } from "./rb-billing-worker.js";
 import { MetaWebhookProcessor } from "./meta-webhook.js";
 import { MetaTemplateService } from "./meta-template-service.js";
@@ -19,6 +24,11 @@ import {
   parseGupshupWebhookPayload,
 } from "./gupshup-webhook.js";
 import { GupshupAdminService } from "./gupshup-admin-service.js";
+import {
+  GupshupTemplateApiError,
+  validateCreateGupshupTemplateInput,
+  type CreateGupshupTemplateInput,
+} from "./gupshup-template-service.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -69,17 +79,28 @@ function summarizeEvolutionWebhookPayload(payload: WebhookPayload) {
         asString(root.instanceName) ??
         asString(data.instance) ??
         asString(data.instanceName),
-      messageId: asString(key.id) ?? asString(messageDataKey.id) ?? asString(root.messageId),
-      fromMe: Boolean(key.fromMe ?? messageDataKey.fromMe ?? data.fromMe ?? root.fromMe),
+      messageId:
+        asString(key.id) ??
+        asString(messageDataKey.id) ??
+        asString(root.messageId),
+      fromMe: Boolean(
+        key.fromMe ?? messageDataKey.fromMe ?? data.fromMe ?? root.fromMe,
+      ),
       phone: null,
       conversationId: null,
       messageType: asString(data.messageType) ?? asString(root.messageType),
-      remoteJid: asString(key.remoteJid) ?? asString(messageDataKey.remoteJid) ?? asString(data.remoteJid),
+      remoteJid:
+        asString(key.remoteJid) ??
+        asString(messageDataKey.remoteJid) ??
+        asString(data.remoteJid),
       remoteJidAlt:
         asString(key.remoteJidAlt) ??
         asString(messageDataKey.remoteJidAlt) ??
         asString(data.remoteJidAlt),
-      senderPn: asString(key.senderPn) ?? asString(messageDataKey.senderPn) ?? asString(data.senderPn),
+      senderPn:
+        asString(key.senderPn) ??
+        asString(messageDataKey.senderPn) ??
+        asString(data.senderPn),
       participantPn:
         asString(key.participantPn) ??
         asString(messageDataKey.participantPn) ??
@@ -111,7 +132,7 @@ function summarizeGupshupWebhookPayload(payload: unknown) {
             status: event.rawStatus,
             destination: event.destination,
             lookup: event.lookup,
-          }
+          },
     ),
   };
 }
@@ -133,7 +154,7 @@ function getSingleParam(value: string | string[] | undefined) {
 }
 
 function resolveEnvSecretRef(secretRef: string | undefined) {
-  return secretRef?.trim() ? process.env[secretRef.trim()] ?? null : null;
+  return secretRef?.trim() ? (process.env[secretRef.trim()] ?? null) : null;
 }
 
 function getSupabaseUrl() {
@@ -152,11 +173,15 @@ function createUserScopedSupabaseClient(accessToken: string) {
   });
 }
 
-function createServiceSupabaseClient() {
-  return createClient(getSupabaseUrl(), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
-    auth: { persistSession: false, autoRefreshToken: false },
-    db: { schema: "crm" },
-  });
+function createServiceSupabaseClient(schema = "crm") {
+  return createClient(
+    getSupabaseUrl(),
+    requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    {
+      auth: { persistSession: false, autoRefreshToken: false },
+      db: { schema },
+    },
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -174,16 +199,23 @@ function readBackendError(payload: unknown, fallback: string) {
       : fallback;
 }
 
-async function forwardSupabaseFunction(functionName: string, accessToken: string, body: unknown) {
-  const response = await fetch(`${getSupabaseUrl()}/functions/v1/${functionName}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-      apikey: getSupabasePublicKey(),
+async function forwardSupabaseFunction(
+  functionName: string,
+  accessToken: string,
+  body: unknown,
+) {
+  const response = await fetch(
+    `${getSupabaseUrl()}/functions/v1/${functionName}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        apikey: getSupabasePublicKey(),
+      },
+      body: JSON.stringify(body ?? {}),
     },
-    body: JSON.stringify(body ?? {}),
-  });
+  );
 
   const text = await response.text();
   let payload: unknown = {};
@@ -199,7 +231,7 @@ async function forwardSupabaseFunction(functionName: string, accessToken: string
     throw new HttpError(
       response.status,
       readBackendError(payload, `Falha ao chamar funcao ${functionName}`),
-      payload
+      payload,
     );
   }
 
@@ -226,7 +258,9 @@ const manager = new AgentManager({
     .map((item) => item.trim())
     .filter(Boolean),
   geminiMaxRetries: Number(process.env.GEMINI_MAX_RETRIES ?? 3),
-  geminiRetryBaseDelayMs: Number(process.env.GEMINI_RETRY_BASE_DELAY_MS ?? 1000),
+  geminiRetryBaseDelayMs: Number(
+    process.env.GEMINI_RETRY_BASE_DELAY_MS ?? 1000,
+  ),
   crmAnalysisWorkerModel: process.env.CRM_ANALYSIS_WORKER_MODEL,
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL,
@@ -239,11 +273,13 @@ const manager = new AgentManager({
   metaProviderMode: process.env.META_PROVIDER_MODE,
   metaGraphApiVersion: process.env.META_GRAPH_API_VERSION,
   visagismToolEnabled: process.env.VISAGISM_TOOL_ENABLED === "true",
-  visagismInternalRuntimeEnabled: process.env.VISAGISM_INTERNAL_RUNTIME_ENABLED !== "false",
+  visagismInternalRuntimeEnabled:
+    process.env.VISAGISM_INTERNAL_RUNTIME_ENABLED !== "false",
   visagismAnalysisWorkerModel: process.env.VISAGISM_ANALYSIS_WORKER_MODEL,
   visagismMatchingWorkerModel: process.env.VISAGISM_MATCHING_WORKER_MODEL,
   visagismImageWorkerModel: process.env.VISAGISM_IMAGE_WORKER_MODEL,
-  prescriptionWorkerEnabled: process.env.PRESCRIPTION_WORKER_ENABLED !== "false",
+  prescriptionWorkerEnabled:
+    process.env.PRESCRIPTION_WORKER_ENABLED !== "false",
   prescriptionWorkerModel: process.env.PRESCRIPTION_WORKER_MODEL,
   toolMediaAllowedHosts: (process.env.TOOL_MEDIA_ALLOWED_HOSTS ?? "")
     .split(",")
@@ -260,9 +296,11 @@ const manager = new AgentManager({
     process.env.VITE_CRM_BACKEND_URL ??
     process.env.CRM_BACKEND_URL,
   chatCacheTtlSeconds: Number(process.env.CHAT_CACHE_TTL_SECONDS ?? 60),
-  chatSignedDownloadTtlSeconds: Number(process.env.CHAT_SIGNED_DOWNLOAD_TTL_SECONDS ?? 900),
+  chatSignedDownloadTtlSeconds: Number(
+    process.env.CHAT_SIGNED_DOWNLOAD_TTL_SECONDS ?? 900,
+  ),
   chatAttachmentUploadIntentTtlMinutes: Number(
-    process.env.CHAT_ATTACHMENTS_UPLOAD_INTENT_TTL_MINUTES ?? 120
+    process.env.CHAT_ATTACHMENTS_UPLOAD_INTENT_TTL_MINUTES ?? 120,
   ),
   instancePhoneAllowlists: {
     mamis: ["554199031152"],
@@ -272,14 +310,18 @@ const manager = new AgentManager({
 const metaWebhookProcessor = new MetaWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-  verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? "local-dev-verify-token",
+  verifyToken:
+    process.env.META_WEBHOOK_VERIFY_TOKEN ?? "local-dev-verify-token",
   appSecret: resolveMetaWebhookAppSecret(),
 });
 
 const metaTemplateService = new MetaTemplateService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-  providerMode: process.env.META_PROVIDER_MODE?.trim().toLowerCase() === "live" ? "live" : "mock",
+  providerMode:
+    process.env.META_PROVIDER_MODE?.trim().toLowerCase() === "live"
+      ? "live"
+      : "mock",
   graphApiVersion: process.env.META_GRAPH_API_VERSION ?? "v20.0",
   fixturePath: process.env.META_TEMPLATES_FIXTURE_PATH,
   resolveSecret: (secretRef) => resolveEnvSecretRef(secretRef),
@@ -300,7 +342,8 @@ const rbBillingWorker = new RbBillingWorker({
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-  processInboundMessage: (acesId, message) => manager.processProviderInboundWebhook(acesId, message),
+  processInboundMessage: (acesId, message) =>
+    manager.processProviderInboundWebhook(acesId, message),
 });
 
 const gupshupAdminService = new GupshupAdminService({
@@ -311,16 +354,19 @@ const gupshupAdminService = new GupshupAdminService({
 const app = express();
 app.use(
   express.json({
-    limit: process.env.JSON_BODY_LIMIT ?? process.env.WEBHOOK_JSON_LIMIT ?? "150mb",
+    limit:
+      process.env.JSON_BODY_LIMIT ?? process.env.WEBHOOK_JSON_LIMIT ?? "150mb",
     verify: (req, _res, buf) => {
       if (req.url?.startsWith("/api/webhook/meta")) {
         (req as RawBodyRequest).rawBody = Buffer.from(buf);
       }
     },
-  })
+  }),
 );
 
-const allowedOrigins = (process.env.CORS_ORIGINS ?? "http://localhost:8080,http://127.0.0.1:8080")
+const allowedOrigins = (
+  process.env.CORS_ORIGINS ?? "http://localhost:8080,http://127.0.0.1:8080"
+)
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -334,9 +380,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256"
+    "Content-Type, Authorization, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256",
   );
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+  );
 
   if (req.method === "OPTIONS") {
     res.status(204).send();
@@ -347,17 +396,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 function asyncHandler(
-  handler: (req: Request, res: Response, next: NextFunction) => Promise<void>
+  handler: (req: Request, res: Response, next: NextFunction) => Promise<void>,
 ) {
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req, res, next).catch(next);
   };
 }
 
-const authMiddleware = asyncHandler(async (req: AuthenticatedRequest, _res, next) => {
-  req.authContext = await manager.authenticate(req.headers.authorization);
-  next();
-});
+const authMiddleware = asyncHandler(
+  async (req: AuthenticatedRequest, _res, next) => {
+    req.authContext = await manager.authenticate(req.headers.authorization);
+    next();
+  },
+);
 
 const webhookHandler = asyncHandler(async (req, res) => {
   const startedAt = Date.now();
@@ -372,7 +423,9 @@ const webhookHandler = asyncHandler(async (req, res) => {
   }
 
   try {
-    const result = await manager.processEvolutionWebhook(req.body as WebhookPayload);
+    const result = await manager.processEvolutionWebhook(
+      req.body as WebhookPayload,
+    );
     console.info("[crm-ai-webhook] Evolution webhook processado:", {
       ...summary,
       result,
@@ -391,7 +444,12 @@ const webhookHandler = asyncHandler(async (req, res) => {
 
 const metaWebhookHandler = asyncHandler(async (req, res) => {
   const signature = req.header("x-hub-signature-256");
-  if (!metaWebhookProcessor.verifySignature((req as RawBodyRequest).rawBody, signature)) {
+  if (
+    !metaWebhookProcessor.verifySignature(
+      (req as RawBodyRequest).rawBody,
+      signature,
+    )
+  ) {
     throw new HttpError(401, "Webhook da Meta sem assinatura valida");
   }
 
@@ -449,7 +507,10 @@ const gupshupWebhookHandler = asyncHandler(async (req, res) => {
     };
 
     if (result.ignored > 0) {
-      console.warn("[crm-ai-webhook] Gupshup webhook processado com eventos ignorados:", logPayload);
+      console.warn(
+        "[crm-ai-webhook] Gupshup webhook processado com eventos ignorados:",
+        logPayload,
+      );
     } else {
       console.info("[crm-ai-webhook] Gupshup webhook processado:", logPayload);
     }
@@ -458,7 +519,7 @@ const gupshupWebhookHandler = asyncHandler(async (req, res) => {
     console.error("[crm-ai-webhook] Gupshup webhook falhou:", {
       ...summary,
       error: error instanceof Error ? error.message : String(error),
-      details: error instanceof HttpError ? error.details ?? null : null,
+      details: error instanceof HttpError ? (error.details ?? null) : null,
       elapsedMs: Date.now() - startedAt,
     });
     throw error;
@@ -478,7 +539,9 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/api/webhook/meta", (req, res) => {
-  const challenge = metaWebhookProcessor.verifyChallenge(req.query as Record<string, unknown>);
+  const challenge = metaWebhookProcessor.verifyChallenge(
+    req.query as Record<string, unknown>,
+  );
   if (!challenge) {
     res.status(403).send("Forbidden");
     return;
@@ -500,7 +563,10 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem sincronizar templates Meta");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem sincronizar templates Meta",
+      );
     }
 
     const instanceName = String(req.body.instanceName ?? "").trim();
@@ -508,9 +574,10 @@ app.post(
       throw new HttpError(400, "instanceName e obrigatorio");
     }
 
-    const result = await metaTemplateService.syncTemplatesForInstance(instanceName);
+    const result =
+      await metaTemplateService.syncTemplatesForInstance(instanceName);
     res.json({ success: true, ...result });
-  })
+  }),
 );
 
 app.get(
@@ -519,12 +586,15 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem consultar canais Meta");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem consultar canais Meta",
+      );
     }
 
     const channels = await metaAdminService.listChannels(context.acesId);
     res.json({ success: true, channels });
-  })
+  }),
 );
 
 app.post(
@@ -533,7 +603,10 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem configurar canais Meta");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem configurar canais Meta",
+      );
     }
 
     const instanceName = String(req.body.instanceName ?? "").trim();
@@ -545,22 +618,37 @@ app.post(
       acesId: context.acesId,
       instanceName,
       wabaId: typeof req.body.wabaId === "string" ? req.body.wabaId : null,
-      phoneNumberId: typeof req.body.phoneNumberId === "string" ? req.body.phoneNumberId : null,
-      businessId: typeof req.body.businessId === "string" ? req.body.businessId : null,
+      phoneNumberId:
+        typeof req.body.phoneNumberId === "string"
+          ? req.body.phoneNumberId
+          : null,
+      businessId:
+        typeof req.body.businessId === "string" ? req.body.businessId : null,
       displayPhoneNumber:
-        typeof req.body.displayPhoneNumber === "string" ? req.body.displayPhoneNumber : null,
+        typeof req.body.displayPhoneNumber === "string"
+          ? req.body.displayPhoneNumber
+          : null,
       accessTokenSecretRef:
-        typeof req.body.accessTokenSecretRef === "string" ? req.body.accessTokenSecretRef : null,
-      appSecretRef: typeof req.body.appSecretRef === "string" ? req.body.appSecretRef : null,
+        typeof req.body.accessTokenSecretRef === "string"
+          ? req.body.accessTokenSecretRef
+          : null,
+      appSecretRef:
+        typeof req.body.appSecretRef === "string"
+          ? req.body.appSecretRef
+          : null,
       webhookVerifyToken:
-        typeof req.body.webhookVerifyToken === "string" ? req.body.webhookVerifyToken : null,
-      status: ["draft", "active", "disabled", "error"].includes(String(req.body.status))
+        typeof req.body.webhookVerifyToken === "string"
+          ? req.body.webhookVerifyToken
+          : null,
+      status: ["draft", "active", "disabled", "error"].includes(
+        String(req.body.status),
+      )
         ? req.body.status
         : "draft",
     });
 
     res.json({ success: true, channel });
-  })
+  }),
 );
 
 app.get(
@@ -569,7 +657,10 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem consultar templates Meta");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem consultar templates Meta",
+      );
     }
 
     const instanceName = String(req.query.instanceName ?? "").trim();
@@ -577,9 +668,12 @@ app.get(
       throw new HttpError(400, "instanceName e obrigatorio");
     }
 
-    const result = await metaAdminService.listTemplates(context.acesId, instanceName);
+    const result = await metaAdminService.listTemplates(
+      context.acesId,
+      instanceName,
+    );
     res.json({ success: true, ...result });
-  })
+  }),
 );
 
 app.get(
@@ -588,12 +682,15 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem consultar canais Gupshup");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem consultar canais Gupshup",
+      );
     }
 
     const channels = await gupshupAdminService.listChannels(context.acesId);
     res.json({ success: true, channels });
-  })
+  }),
 );
 
 app.post(
@@ -602,7 +699,10 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem configurar canais Gupshup");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem configurar canais Gupshup",
+      );
     }
 
     const instanceName = asString(req.body.instanceName);
@@ -610,11 +710,16 @@ app.post(
     const apiKey = asString(req.body.apiKey);
     const phoneNumber = asString(req.body.phoneNumber);
     if (!instanceName || !appName || !apiKey || !phoneNumber) {
-      throw new HttpError(400, "instanceName, appName, apiKey e phoneNumber sao obrigatorios");
+      throw new HttpError(
+        400,
+        "instanceName, appName, apiKey e phoneNumber sao obrigatorios",
+      );
     }
 
     const requestedStatus = asString(req.body.status);
-    const status = ["draft", "active", "disabled"].includes(requestedStatus ?? "")
+    const status = ["draft", "active", "disabled"].includes(
+      requestedStatus ?? "",
+    )
       ? (requestedStatus as "draft" | "active" | "disabled")
       : "draft";
     const appId = asString(req.body.appId);
@@ -629,7 +734,7 @@ app.post(
     });
 
     res.json({ success: true, channel });
-  })
+  }),
 );
 
 app.get(
@@ -638,15 +743,21 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem consultar templates Gupshup");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem consultar templates Gupshup",
+      );
     }
 
     const instanceName = asString(req.query.instanceName);
     if (!instanceName) throw new HttpError(400, "instanceName e obrigatorio");
 
-    const result = await gupshupAdminService.listTemplates(context.acesId, instanceName);
+    const result = await gupshupAdminService.listTemplates(
+      context.acesId,
+      instanceName,
+    );
     res.json({ success: true, ...result });
-  })
+  }),
 );
 
 app.post(
@@ -655,27 +766,56 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem criar templates Gupshup");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem criar templates Gupshup",
+      );
     }
 
     const instanceName = asString(req.body.instanceName);
     const elementName = asString(req.body.elementName);
     const content = asString(req.body.content);
     if (!instanceName || !elementName || !content) {
-      throw new HttpError(400, "instanceName, elementName e content sao obrigatorios");
+      throw new HttpError(
+        400,
+        "instanceName, elementName e content sao obrigatorios",
+      );
     }
 
-    const template = await gupshupAdminService.createTemplate(context.acesId, instanceName, {
+    const createTemplateInput: CreateGupshupTemplateInput = {
       elementName,
       content,
       languageCode: asString(req.body.languageCode) ?? undefined,
       category: asString(req.body.category) ?? undefined,
-      templateType: asString(req.body.templateType) ?? undefined,
+      templateType:
+        (asString(req.body.templateType)?.toUpperCase() as
+          | CreateGupshupTemplateInput["templateType"]
+          | undefined) ?? undefined,
       vertical: asString(req.body.vertical) ?? undefined,
       example: asString(req.body.example) ?? undefined,
-    });
+    };
+    const validationError =
+      validateCreateGupshupTemplateInput(createTemplateInput);
+    if (validationError) throw new HttpError(400, validationError);
+
+    let template;
+    try {
+      template = await gupshupAdminService.createTemplate(
+        context.acesId,
+        instanceName,
+        createTemplateInput,
+      );
+    } catch (error) {
+      if (error instanceof GupshupTemplateApiError) {
+        throw new HttpError(422, error.message, {
+          provider: "gupshup",
+          upstreamStatus: error.upstreamStatus,
+        });
+      }
+      throw error;
+    }
     res.status(201).json({ success: true, template });
-  })
+  }),
 );
 
 app.get(
@@ -693,18 +833,23 @@ app.get(
         name: context.name,
       },
     });
-  })
+  }),
 );
 
 app.get(
   "/api/notifications",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    const accessToken = req.headers.authorization
+      ?.replace(/^Bearer\s+/i, "")
+      .trim();
     if (!accessToken) throw new HttpError(401, "Sessao invalida");
 
     const category = req.query.category === "notice" ? "notice" : "internal";
-    const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 50);
+    const limit = Math.min(
+      Math.max(Number(req.query.limit ?? 20) || 20, 1),
+      50,
+    );
     const before = asString(req.query.before);
     const client = createUserScopedSupabaseClient(accessToken);
     const { data, error } = await client.rpc("rpc_list_notifications", {
@@ -712,73 +857,106 @@ app.get(
       p_limit: limit,
       p_before: before,
     });
-    if (error) throw new HttpError(500, "Nao foi possivel carregar as notificacoes", error);
+    if (error)
+      throw new HttpError(
+        500,
+        "Nao foi possivel carregar as notificacoes",
+        error,
+      );
 
     res.json({
       success: true,
       notifications: (data ?? []).map((item: Record<string, unknown>) => {
         const actionPath = asString(item.action_path);
-        const actionUrl = actionPath ? new URL(actionPath, "https://crm.local") : null;
+        const actionUrl = actionPath
+          ? new URL(actionPath, "https://crm.local")
+          : null;
         return {
           key: String(item.notification_id),
           title: String(item.title ?? ""),
           description: String(item.description ?? ""),
           publishedAt: String(item.published_at ?? ""),
           read: Boolean(item.is_read),
-          action: actionUrl?.pathname === "/chat" && actionUrl.searchParams.get("leadId")
-            ? { kind: "openConversation", target: actionUrl.searchParams.get("leadId") }
-            : null,
+          action:
+            actionUrl?.pathname === "/chat" &&
+            actionUrl.searchParams.get("leadId")
+              ? {
+                  kind: "openConversation",
+                  target: actionUrl.searchParams.get("leadId"),
+                }
+              : null,
         };
       }),
     });
-  })
+  }),
 );
 
 app.post(
   "/api/notifications/:key/read",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    const accessToken = req.headers.authorization
+      ?.replace(/^Bearer\s+/i, "")
+      .trim();
     if (!accessToken) throw new HttpError(401, "Sessao invalida");
     const client = createUserScopedSupabaseClient(accessToken);
     const { error } = await client.rpc("rpc_mark_notification_read", {
       p_notification_id: getSingleParam(req.params.key),
     });
-    if (error) throw new HttpError(400, "Nao foi possivel marcar a notificacao", error);
+    if (error)
+      throw new HttpError(400, "Nao foi possivel marcar a notificacao", error);
     res.json({ success: true });
-  })
+  }),
 );
 
 app.get(
   "/api/notifications/unread-counts",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    const accessToken = req.headers.authorization
+      ?.replace(/^Bearer\s+/i, "")
+      .trim();
     if (!accessToken) throw new HttpError(401, "Sessao invalida");
     const client = createUserScopedSupabaseClient(accessToken);
-    const { data, error } = await client.rpc("rpc_get_notification_unread_counts");
-    if (error) throw new HttpError(500, "Nao foi possivel contar as notificacoes", error);
+    const { data, error } = await client.rpc(
+      "rpc_get_notification_unread_counts",
+    );
+    if (error)
+      throw new HttpError(
+        500,
+        "Nao foi possivel contar as notificacoes",
+        error,
+      );
     const counts = Array.isArray(data) ? asRecord(data[0]) : asRecord(data);
     res.json({
       success: true,
       internal: Number(counts.internal_count ?? 0),
       notice: Number(counts.notice_count ?? 0),
     });
-  })
+  }),
 );
 
 app.post(
   "/api/notifications/read-all",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    const accessToken = req.headers.authorization
+      ?.replace(/^Bearer\s+/i, "")
+      .trim();
     if (!accessToken) throw new HttpError(401, "Sessao invalida");
     const category = req.body.category === "notice" ? "notice" : "internal";
     const client = createUserScopedSupabaseClient(accessToken);
-    const { error } = await client.rpc("rpc_mark_all_notifications_read", { p_category: category });
-    if (error) throw new HttpError(400, "Nao foi possivel atualizar as notificacoes", error);
+    const { error } = await client.rpc("rpc_mark_all_notifications_read", {
+      p_category: category,
+    });
+    if (error)
+      throw new HttpError(
+        400,
+        "Nao foi possivel atualizar as notificacoes",
+        error,
+      );
     res.json({ success: true });
-  })
+  }),
 );
 
 app.get(
@@ -795,7 +973,36 @@ app.get(
       .order("instancia");
 
     if (context.role !== "ADMIN") {
-      query = query.eq("created_by", context.crmUserId);
+      const { data: memberships, error: membershipsError } = await supabaseAdmin
+        .from("instance_access_memberships")
+        .select("instance_name")
+        .eq("aces_id", context.acesId)
+        .eq("crm_user_id", context.crmUserId)
+        .eq("is_active", true)
+        .in("access_level", ["viewer", "editor", "admin"]);
+
+      if (membershipsError) {
+        throw new HttpError(
+          500,
+          "Nao foi possivel validar as instancias permitidas",
+          membershipsError,
+        );
+      }
+
+      const allowedInstances = Array.from(
+        new Set(
+          (memberships ?? [])
+            .map((row) => String(row.instance_name))
+            .filter(Boolean),
+        ),
+      );
+
+      if (allowedInstances.length === 0) {
+        res.json({ success: true, instances: [] });
+        return;
+      }
+
+      query = query.in("instancia", allowedInstances);
     }
 
     const { data, error } = await query;
@@ -804,8 +1011,49 @@ app.get(
       throw new HttpError(500, "Nao foi possivel carregar instancias", error);
     }
 
-    res.json({ success: true, instances: data ?? [] });
-  })
+    const instances = data ?? [];
+    const instanceNames = instances
+      .map((instance) => String(instance.instancia))
+      .filter(Boolean);
+    const providerByInstance = new Map<
+      string,
+      "evolution" | "meta" | "gupshup"
+    >();
+
+    if (instanceNames.length > 0) {
+      const metaAdmin = createServiceSupabaseClient("meta");
+      const { data: providerRows, error: providerError } = await metaAdmin
+        .from("instance")
+        .select("instance_name, provider")
+        .eq("aces_id", context.acesId)
+        .in("instance_name", instanceNames);
+
+      if (providerError) {
+        throw new HttpError(
+          500,
+          "Nao foi possivel carregar os provedores das instancias",
+          providerError,
+        );
+      }
+
+      for (const row of providerRows ?? []) {
+        const provider =
+          row.provider === "gupshup" || row.provider === "meta"
+            ? row.provider
+            : "evolution";
+        providerByInstance.set(String(row.instance_name), provider);
+      }
+    }
+
+    res.json({
+      success: true,
+      instances: instances.map((instance) => ({
+        ...instance,
+        provider:
+          providerByInstance.get(String(instance.instancia)) ?? "evolution",
+      })),
+    });
+  }),
 );
 
 app.get(
@@ -813,26 +1061,37 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = asString(req.query.instanceName);
-    const assets = await manager.listAutomationMediaAssets(req.authContext!, instanceName);
+    const assets = await manager.listAutomationMediaAssets(
+      req.authContext!,
+      instanceName,
+    );
     res.json({ success: true, assets });
-  })
+  }),
 );
 
 app.post(
   "/api/automation/media-assets/upload-url",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const mediaKind = req.body.kind === "document" ? "document" : "image";
-    const result = await manager.createAutomationMediaUploadUrl(req.authContext!, {
-      instanceName: String(req.body.instanceName ?? ""),
-      fileName: String(req.body.fileName ?? ""),
-      mimeType: String(req.body.mimeType ?? ""),
-      fileSize: Number(req.body.fileSize ?? 0),
-      kind: mediaKind,
-    });
+    const mediaKind =
+      req.body.kind === "document"
+        ? "document"
+        : req.body.kind === "video"
+          ? "video"
+          : "image";
+    const result = await manager.createAutomationMediaUploadUrl(
+      req.authContext!,
+      {
+        instanceName: String(req.body.instanceName ?? ""),
+        fileName: String(req.body.fileName ?? ""),
+        mimeType: String(req.body.mimeType ?? ""),
+        fileSize: Number(req.body.fileSize ?? 0),
+        kind: mediaKind,
+      },
+    );
 
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -841,10 +1100,10 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const result = await manager.completeAutomationMediaUpload(
       req.authContext!,
-      String(req.body.assetId ?? "")
+      String(req.body.assetId ?? ""),
     );
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -854,10 +1113,10 @@ app.post(
     const payload = await forwardSupabaseFunction(
       "buscar-leads",
       req.authContext!.accessToken,
-      req.body
+      req.body,
     );
     res.json(payload);
-  })
+  }),
 );
 
 app.post(
@@ -867,10 +1126,10 @@ app.post(
     const payload = await forwardSupabaseFunction(
       "import-leads-csv",
       req.authContext!.accessToken,
-      req.body
+      req.body,
     );
     res.json(payload);
-  })
+  }),
 );
 
 app.get(
@@ -894,7 +1153,7 @@ app.get(
     }
 
     res.json({ success: true, users: data ?? [] });
-  })
+  }),
 );
 
 app.patch(
@@ -903,7 +1162,10 @@ app.patch(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem atualizar usuarios");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem atualizar usuarios",
+      );
     }
 
     const role = String(req.body.role ?? "").toUpperCase();
@@ -928,8 +1190,177 @@ app.patch(
       throw new HttpError(404, "Usuario nao encontrado");
     }
 
+    if (role !== "VENDEDOR") {
+      const { error: revokeError } = await supabaseAdmin
+        .from("instance_access_memberships")
+        .update({
+          is_active: false,
+          revoked_at: new Date().toISOString(),
+        })
+        .eq("aces_id", context.acesId)
+        .eq("crm_user_id", getSingleParam(req.params.id))
+        .eq("is_active", true);
+
+      if (revokeError) {
+        throw new HttpError(
+          500,
+          "Role atualizada, mas os acessos de instancia nao foram revogados",
+          revokeError,
+        );
+      }
+    }
+
     res.json({ success: true });
-  })
+  }),
+);
+
+app.get(
+  "/api/admin/instance-access",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(
+        403,
+        "Apenas administradores podem gerenciar acessos de instancia",
+      );
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const [instancesResult, membershipsResult] = await Promise.all([
+      supabaseAdmin
+        .from("instance")
+        .select("instancia, color, setup_status")
+        .eq("aces_id", context.acesId)
+        .or("setup_status.is.null,setup_status.neq.cancelled")
+        .order("instancia"),
+      supabaseAdmin
+        .from("instance_access_memberships")
+        .select("id, instance_name, crm_user_id, access_level, is_active")
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true)
+        .order("instance_name"),
+    ]);
+
+    const accessError = instancesResult.error ?? membershipsResult.error;
+    if (accessError) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel carregar os acessos de instancia",
+        accessError,
+      );
+    }
+
+    res.json({
+      success: true,
+      instances: instancesResult.data ?? [],
+      memberships: membershipsResult.data ?? [],
+    });
+  }),
+);
+
+app.post(
+  "/api/admin/instance-access",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(
+        403,
+        "Apenas administradores podem gerenciar acessos de instancia",
+      );
+    }
+
+    const instanceName = String(req.body.instanceName ?? "").trim();
+    const crmUserId = String(req.body.crmUserId ?? "").trim();
+    const accessLevel = "editor";
+    if (!instanceName || !crmUserId) {
+      throw new HttpError(400, "Instancia e vendedor sao obrigatorios");
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const [{ data: instance }, { data: seller }] = await Promise.all([
+      supabaseAdmin
+        .from("instance")
+        .select("instancia")
+        .eq("aces_id", context.acesId)
+        .eq("instancia", instanceName)
+        .maybeSingle(),
+      supabaseAdmin
+        .from("users")
+        .select("id")
+        .eq("aces_id", context.acesId)
+        .eq("id", crmUserId)
+        .eq("role", "VENDEDOR")
+        .maybeSingle(),
+    ]);
+
+    if (!instance || !seller) {
+      throw new HttpError(404, "Instancia ou vendedor nao encontrado na conta");
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("instance_access_memberships")
+      .upsert(
+        {
+          aces_id: context.acesId,
+          instance_name: instanceName,
+          crm_user_id: crmUserId,
+          access_level: accessLevel,
+          granted_by: context.crmUserId,
+          grant_reason: "Acesso configurado pelo administrador",
+          is_active: true,
+          granted_at: new Date().toISOString(),
+          revoked_at: null,
+        },
+        { onConflict: "instance_name,crm_user_id" },
+      )
+      .select("id, instance_name, crm_user_id, access_level, is_active")
+      .single();
+
+    if (error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel salvar o acesso da instancia",
+        error,
+      );
+    }
+
+    res.json({ success: true, membership: data });
+  }),
+);
+
+app.delete(
+  "/api/admin/instance-access/:instanceName/:userId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(
+        403,
+        "Apenas administradores podem gerenciar acessos de instancia",
+      );
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const { error } = await supabaseAdmin
+      .from("instance_access_memberships")
+      .update({ is_active: false, revoked_at: new Date().toISOString() })
+      .eq("aces_id", context.acesId)
+      .eq("instance_name", getSingleParam(req.params.instanceName))
+      .eq("crm_user_id", getSingleParam(req.params.userId))
+      .eq("is_active", true);
+
+    if (error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel revogar o acesso da instancia",
+        error,
+      );
+    }
+
+    res.json({ success: true });
+  }),
 );
 
 app.get(
@@ -949,7 +1380,7 @@ app.get(
     }
 
     res.json({ success: true, invitations: data ?? [] });
-  })
+  }),
 );
 
 app.post(
@@ -958,7 +1389,10 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem convidar usuarios");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem convidar usuarios",
+      );
     }
 
     const email = String(req.body.email ?? "").trim();
@@ -988,8 +1422,10 @@ app.post(
     if (invitePayload.success === false) {
       throw new HttpError(
         400,
-        typeof invitePayload.error === "string" ? invitePayload.error : "Erro ao criar convite",
-        invitePayload
+        typeof invitePayload.error === "string"
+          ? invitePayload.error
+          : "Erro ao criar convite",
+        invitePayload,
       );
     }
 
@@ -1001,11 +1437,16 @@ app.post(
     const edgePayload = await forwardSupabaseFunction(
       "send-user-invitation",
       context.accessToken,
-      { email, invitationId }
+      { email, invitationId },
     );
 
-    res.json({ success: true, invitationId, invitation: invitePayload, emailResult: edgePayload });
-  })
+    res.json({
+      success: true,
+      invitationId,
+      invitation: invitePayload,
+      emailResult: edgePayload,
+    });
+  }),
 );
 
 app.post(
@@ -1014,7 +1455,10 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
-      throw new HttpError(403, "Apenas administradores podem cancelar convites");
+      throw new HttpError(
+        403,
+        "Apenas administradores podem cancelar convites",
+      );
     }
 
     const supabaseUser = createUserScopedSupabaseClient(context.accessToken);
@@ -1030,31 +1474,38 @@ app.post(
     if (payload.success === false) {
       throw new HttpError(
         400,
-        typeof payload.error === "string" ? payload.error : "Erro ao cancelar convite",
-        payload
+        typeof payload.error === "string"
+          ? payload.error
+          : "Erro ao cancelar convite",
+        payload,
       );
     }
 
     res.json({ success: true });
-  })
+  }),
 );
 
 app.post(
   "/api/chat/attachments/upload-url",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const result = await manager.createChatAttachmentUploadUrl(req.authContext!, {
-      leadId: String(req.body.leadId ?? ""),
-      instanceName:
-        typeof req.body.instanceName === "string" ? req.body.instanceName : null,
-      fileName: String(req.body.fileName ?? ""),
-      mimeType: String(req.body.mimeType ?? ""),
-      fileSize: Number(req.body.fileSize ?? 0),
-      kind: String(req.body.kind ?? "") as "image" | "audio" | "document",
-    });
+    const result = await manager.createChatAttachmentUploadUrl(
+      req.authContext!,
+      {
+        leadId: String(req.body.leadId ?? ""),
+        instanceName:
+          typeof req.body.instanceName === "string"
+            ? req.body.instanceName
+            : null,
+        fileName: String(req.body.fileName ?? ""),
+        mimeType: String(req.body.mimeType ?? ""),
+        fileSize: Number(req.body.fileSize ?? 0),
+        kind: String(req.body.kind ?? "") as "image" | "audio" | "document",
+      },
+    );
 
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -1067,7 +1518,9 @@ app.post(
       leadId: String(req.body.leadId ?? ""),
       content: typeof req.body.content === "string" ? req.body.content : "",
       instanceName:
-        typeof req.body.instanceName === "string" ? req.body.instanceName : null,
+        typeof req.body.instanceName === "string"
+          ? req.body.instanceName
+          : null,
       attachment: req.body.attachment
         ? {
             messageId: String(attachmentInput.messageId ?? ""),
@@ -1076,13 +1529,14 @@ app.post(
             fileName: String(attachmentInput.fileName ?? ""),
             mimeType: String(attachmentInput.mimeType ?? ""),
             fileSize: Number(attachmentInput.fileSize ?? 0),
-            kind: String(attachmentInput.kind ?? "") as "image" | "audio" | "document",
+            kind: String(attachmentInput.kind ?? "") as
+              "image" | "audio" | "document",
           }
         : null,
     });
 
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1091,10 +1545,10 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const result = await manager.listChatMessages(
       req.authContext!,
-      getSingleParam(req.params.leadId)
+      getSingleParam(req.params.leadId),
     );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1104,7 +1558,7 @@ app.get(
     const leadId = getSingleParam(req.params.leadId);
     const result = await manager.getLeadAiState(req.authContext!, leadId);
     res.json(result);
-  })
+  }),
 );
 
 app.put(
@@ -1119,10 +1573,10 @@ app.put(
     const result = await manager.updateLeadAiState(
       req.authContext!,
       leadId,
-      req.body.enabled
+      req.body.enabled,
     );
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -1135,7 +1589,7 @@ app.post(
       stageId: String(req.body.stageId ?? ""),
     });
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -1145,13 +1599,16 @@ app.post(
     const result = await manager.testHandoff(req.authContext!, {
       instanceName: String(req.body.instanceName ?? ""),
       targetPhone: String(req.body.targetPhone ?? ""),
-      agentName: typeof req.body.agentName === "string" ? req.body.agentName : undefined,
+      agentName:
+        typeof req.body.agentName === "string" ? req.body.agentName : undefined,
       handoffPrompt:
-        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+        typeof req.body.handoffPrompt === "string"
+          ? req.body.handoffPrompt
+          : undefined,
     });
 
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -1162,15 +1619,21 @@ app.post(
       instanceName: String(req.body.instanceName ?? ""),
       connectWebhook: req.body.connectWebhook === true,
       remoteEvolutionUrl:
-        typeof req.body.remoteEvolutionUrl === "string" ? req.body.remoteEvolutionUrl : null,
+        typeof req.body.remoteEvolutionUrl === "string"
+          ? req.body.remoteEvolutionUrl
+          : null,
       remoteApiKey:
-        typeof req.body.remoteApiKey === "string" ? req.body.remoteApiKey : null,
+        typeof req.body.remoteApiKey === "string"
+          ? req.body.remoteApiKey
+          : null,
       remoteInstanceName:
-        typeof req.body.remoteInstanceName === "string" ? req.body.remoteInstanceName : null,
+        typeof req.body.remoteInstanceName === "string"
+          ? req.body.remoteInstanceName
+          : null,
     });
 
     res.status(201).json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1179,7 +1642,7 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instances = await manager.listInstances(req.authContext!);
     res.json({ success: true, instances });
-  })
+  }),
 );
 
 app.post(
@@ -1187,9 +1650,12 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = getSingleParam(req.params.name);
-    const result = await manager.reconnectInstance(req.authContext!, instanceName);
+    const result = await manager.reconnectInstance(
+      req.authContext!,
+      instanceName,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1197,9 +1663,12 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = getSingleParam(req.params.name);
-    const result = await manager.getInstanceQrCode(req.authContext!, instanceName);
+    const result = await manager.getInstanceQrCode(
+      req.authContext!,
+      instanceName,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1207,9 +1676,12 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = getSingleParam(req.params.name);
-    const result = await manager.getInstanceStatus(req.authContext!, instanceName);
+    const result = await manager.getInstanceStatus(
+      req.authContext!,
+      instanceName,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -1217,9 +1689,12 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = getSingleParam(req.params.name);
-    const result = await manager.getInstanceStatus(req.authContext!, instanceName);
+    const result = await manager.getInstanceStatus(
+      req.authContext!,
+      instanceName,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.post(
@@ -1227,9 +1702,12 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = getSingleParam(req.params.name);
-    const result = await manager.disconnectInstance(req.authContext!, instanceName);
+    const result = await manager.disconnectInstance(
+      req.authContext!,
+      instanceName,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.delete(
@@ -1238,19 +1716,29 @@ app.delete(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const instanceName = getSingleParam(req.params.name);
     const hardDelete = String(req.query.hard ?? "").toLowerCase() === "true";
-    const result = await manager.deleteInstance(req.authContext!, instanceName, {
-      hardDelete,
-      leadAction:
-        req.body?.leadAction === "transfer" || req.body?.leadAction === "delete" || req.body?.leadAction === "none"
-          ? req.body.leadAction
-          : undefined,
-      transferToInstanceName:
-        typeof req.body?.transferToInstanceName === "string" ? req.body.transferToInstanceName : undefined,
-      confirmationText:
-        typeof req.body?.confirmationText === "string" ? req.body.confirmationText : undefined,
-    });
+    const result = await manager.deleteInstance(
+      req.authContext!,
+      instanceName,
+      {
+        hardDelete,
+        leadAction:
+          req.body?.leadAction === "transfer" ||
+          req.body?.leadAction === "delete" ||
+          req.body?.leadAction === "none"
+            ? req.body.leadAction
+            : undefined,
+        transferToInstanceName:
+          typeof req.body?.transferToInstanceName === "string"
+            ? req.body.transferToInstanceName
+            : undefined,
+        confirmationText:
+          typeof req.body?.confirmationText === "string"
+            ? req.body.confirmationText
+            : undefined,
+      },
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1259,7 +1747,7 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const templates = await manager.listAgentTemplates(req.authContext!);
     res.json({ success: true, templates });
-  })
+  }),
 );
 
 app.get(
@@ -1268,7 +1756,7 @@ app.get(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agents = await manager.listAgents(req.authContext!);
     res.json({ success: true, agents });
-  })
+  }),
 );
 
 app.post(
@@ -1279,14 +1767,21 @@ app.post(
       name: String(req.body.name ?? ""),
       instanceName: String(req.body.instanceName ?? ""),
       systemPrompt:
-        typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : undefined,
+        typeof req.body.systemPrompt === "string"
+          ? req.body.systemPrompt
+          : undefined,
       model: typeof req.body.model === "string" ? req.body.model : undefined,
       provider: req.body.provider === "gemini" ? "gemini" : undefined,
       temperature:
-        typeof req.body.temperature === "number" ? req.body.temperature : undefined,
-      isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
+        typeof req.body.temperature === "number"
+          ? req.body.temperature
+          : undefined,
+      isActive:
+        typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
-        typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
+        typeof req.body.bufferWaitMs === "number"
+          ? req.body.bufferWaitMs
+          : undefined,
       humanPauseMinutes:
         typeof req.body.humanPauseMinutes === "number"
           ? req.body.humanPauseMinutes
@@ -1296,25 +1791,33 @@ app.post(
           ? req.body.autoApplyThreshold
           : undefined,
       handoffEnabled:
-        typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+        typeof req.body.handoffEnabled === "boolean"
+          ? req.body.handoffEnabled
+          : undefined,
       handoffPrompt:
-        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+        typeof req.body.handoffPrompt === "string"
+          ? req.body.handoffPrompt
+          : undefined,
       handoffTargetPhone:
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
           : undefined,
       rbTokenApi:
-        typeof req.body.rbTokenApi === "string" ? req.body.rbTokenApi : undefined,
+        typeof req.body.rbTokenApi === "string"
+          ? req.body.rbTokenApi
+          : undefined,
       unansweredFollowupEnabled:
         typeof req.body.unansweredFollowupEnabled === "boolean"
           ? req.body.unansweredFollowupEnabled
           : undefined,
       templateKey:
-        typeof req.body.templateKey === "string" ? req.body.templateKey : undefined,
+        typeof req.body.templateKey === "string"
+          ? req.body.templateKey
+          : undefined,
     });
 
     res.status(201).json({ success: true, agent });
-  })
+  }),
 );
 
 app.patch(
@@ -1325,16 +1828,25 @@ app.patch(
     const agent = await manager.updateAgent(req.authContext!, agentId, {
       name: typeof req.body.name === "string" ? req.body.name : undefined,
       instanceName:
-        typeof req.body.instanceName === "string" ? req.body.instanceName : undefined,
+        typeof req.body.instanceName === "string"
+          ? req.body.instanceName
+          : undefined,
       systemPrompt:
-        typeof req.body.systemPrompt === "string" ? req.body.systemPrompt : undefined,
+        typeof req.body.systemPrompt === "string"
+          ? req.body.systemPrompt
+          : undefined,
       model: typeof req.body.model === "string" ? req.body.model : undefined,
       provider: req.body.provider === "gemini" ? "gemini" : undefined,
       temperature:
-        typeof req.body.temperature === "number" ? req.body.temperature : undefined,
-      isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
+        typeof req.body.temperature === "number"
+          ? req.body.temperature
+          : undefined,
+      isActive:
+        typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
-        typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
+        typeof req.body.bufferWaitMs === "number"
+          ? req.body.bufferWaitMs
+          : undefined,
       humanPauseMinutes:
         typeof req.body.humanPauseMinutes === "number"
           ? req.body.humanPauseMinutes
@@ -1344,9 +1856,13 @@ app.patch(
           ? req.body.autoApplyThreshold
           : undefined,
       handoffEnabled:
-        typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+        typeof req.body.handoffEnabled === "boolean"
+          ? req.body.handoffEnabled
+          : undefined,
       handoffPrompt:
-        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+        typeof req.body.handoffPrompt === "string"
+          ? req.body.handoffPrompt
+          : undefined,
       handoffTargetPhone:
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
@@ -1358,7 +1874,7 @@ app.patch(
     });
 
     res.json({ success: true, agent });
-  })
+  }),
 );
 
 app.get(
@@ -1368,7 +1884,7 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const rules = await manager.getStageRules(req.authContext!, agentId);
     res.json({ success: true, rules });
-  })
+  }),
 );
 
 app.delete(
@@ -1378,7 +1894,7 @@ app.delete(
     const agentId = getSingleParam(req.params.id);
     const result = await manager.deleteAgent(req.authContext!, agentId);
     res.json(result);
-  })
+  }),
 );
 
 app.put(
@@ -1387,9 +1903,13 @@ app.put(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const rules = Array.isArray(req.body.rules) ? req.body.rules : [];
     const agentId = getSingleParam(req.params.id);
-    const saved = await manager.saveStageRules(req.authContext!, agentId, rules);
+    const saved = await manager.saveStageRules(
+      req.authContext!,
+      agentId,
+      rules,
+    );
     res.json({ success: true, rules: saved });
-  })
+  }),
 );
 
 app.get(
@@ -1401,7 +1921,7 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const runs = await manager.listRuns(req.authContext!, agentId, leadId);
     res.json({ success: true, runs });
-  })
+  }),
 );
 
 app.post(
@@ -1410,56 +1930,73 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const leadId = getSingleParam(req.params.leadId);
-    const result = await manager.resumeLead(
-      req.authContext!,
-      agentId,
-      leadId
-    );
+    const result = await manager.resumeLead(req.authContext!, agentId, leadId);
     res.json(result);
-  })
+  }),
 );
 
-app.get("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const agents = await manager.listAgents(req.authContext!);
-  res.json({ success: true, agents });
-}));
+app.get(
+  "/api/agents",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agents = await manager.listAgents(req.authContext!);
+    res.json({ success: true, agents });
+  }),
+);
 
-app.post("/api/agents", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const agent = await manager.createAgent(req.authContext!, {
-    name: String(req.body.name ?? req.body.agentName ?? ""),
-    instanceName: String(req.body.instanceName ?? ""),
-    systemPrompt:
-      typeof req.body.systemPrompt === "string"
-        ? req.body.systemPrompt
-        : typeof req.body.systemMessage === "string"
-          ? req.body.systemMessage
+app.post(
+  "/api/agents",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agent = await manager.createAgent(req.authContext!, {
+      name: String(req.body.name ?? req.body.agentName ?? ""),
+      instanceName: String(req.body.instanceName ?? ""),
+      systemPrompt:
+        typeof req.body.systemPrompt === "string"
+          ? req.body.systemPrompt
+          : typeof req.body.systemMessage === "string"
+            ? req.body.systemMessage
+            : undefined,
+      model: typeof req.body.model === "string" ? req.body.model : undefined,
+      temperature:
+        typeof req.body.temperature === "number"
+          ? req.body.temperature
           : undefined,
-    model: typeof req.body.model === "string" ? req.body.model : undefined,
-    temperature:
-      typeof req.body.temperature === "number" ? req.body.temperature : undefined,
-    isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
-    bufferWaitMs:
-      typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
-    handoffEnabled:
-      typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
-    handoffPrompt:
-      typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
-    handoffTargetPhone:
-      typeof req.body.handoffTargetPhone === "string"
-        ? req.body.handoffTargetPhone
-        : undefined,
-    rbTokenApi:
-      typeof req.body.rbTokenApi === "string" ? req.body.rbTokenApi : undefined,
-    unansweredFollowupEnabled:
-      typeof req.body.unansweredFollowupEnabled === "boolean"
-        ? req.body.unansweredFollowupEnabled
-        : undefined,
-    templateKey:
-      typeof req.body.templateKey === "string" ? req.body.templateKey : undefined,
-  });
+      isActive:
+        typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
+      bufferWaitMs:
+        typeof req.body.bufferWaitMs === "number"
+          ? req.body.bufferWaitMs
+          : undefined,
+      handoffEnabled:
+        typeof req.body.handoffEnabled === "boolean"
+          ? req.body.handoffEnabled
+          : undefined,
+      handoffPrompt:
+        typeof req.body.handoffPrompt === "string"
+          ? req.body.handoffPrompt
+          : undefined,
+      handoffTargetPhone:
+        typeof req.body.handoffTargetPhone === "string"
+          ? req.body.handoffTargetPhone
+          : undefined,
+      rbTokenApi:
+        typeof req.body.rbTokenApi === "string"
+          ? req.body.rbTokenApi
+          : undefined,
+      unansweredFollowupEnabled:
+        typeof req.body.unansweredFollowupEnabled === "boolean"
+          ? req.body.unansweredFollowupEnabled
+          : undefined,
+      templateKey:
+        typeof req.body.templateKey === "string"
+          ? req.body.templateKey
+          : undefined,
+    });
 
-  res.status(201).json({ success: true, agent });
-}));
+    res.status(201).json({ success: true, agent });
+  }),
+);
 
 app.patch(
   "/api/agents/:id",
@@ -1474,7 +2011,9 @@ app.patch(
             ? req.body.agentName
             : undefined,
       instanceName:
-        typeof req.body.instanceName === "string" ? req.body.instanceName : undefined,
+        typeof req.body.instanceName === "string"
+          ? req.body.instanceName
+          : undefined,
       systemPrompt:
         typeof req.body.systemPrompt === "string"
           ? req.body.systemPrompt
@@ -1483,13 +2022,21 @@ app.patch(
             : undefined,
       model: typeof req.body.model === "string" ? req.body.model : undefined,
       temperature:
-        typeof req.body.temperature === "number" ? req.body.temperature : undefined,
+        typeof req.body.temperature === "number"
+          ? req.body.temperature
+          : undefined,
       bufferWaitMs:
-        typeof req.body.bufferWaitMs === "number" ? req.body.bufferWaitMs : undefined,
+        typeof req.body.bufferWaitMs === "number"
+          ? req.body.bufferWaitMs
+          : undefined,
       handoffEnabled:
-        typeof req.body.handoffEnabled === "boolean" ? req.body.handoffEnabled : undefined,
+        typeof req.body.handoffEnabled === "boolean"
+          ? req.body.handoffEnabled
+          : undefined,
       handoffPrompt:
-        typeof req.body.handoffPrompt === "string" ? req.body.handoffPrompt : undefined,
+        typeof req.body.handoffPrompt === "string"
+          ? req.body.handoffPrompt
+          : undefined,
       handoffTargetPhone:
         typeof req.body.handoffTargetPhone === "string"
           ? req.body.handoffTargetPhone
@@ -1501,7 +2048,7 @@ app.patch(
     });
 
     res.json({ success: true, agent });
-  })
+  }),
 );
 
 app.delete(
@@ -1511,7 +2058,7 @@ app.delete(
     const agentId = getSingleParam(req.params.id);
     const result = await manager.deleteAgent(req.authContext!, agentId);
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1521,7 +2068,7 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const tools = await manager.listAgentTools(req.authContext!, agentId);
     res.json({ success: true, tools });
-  })
+  }),
 );
 
 app.get(
@@ -1529,13 +2076,17 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const result = await manager.listElevenLabsVoices(req.authContext!, agentId, {
-      search: asString(req.query.search),
-      nextPageToken: asString(req.query.nextPageToken),
-      pageSize: Number(req.query.pageSize ?? 20),
-    });
+    const result = await manager.listElevenLabsVoices(
+      req.authContext!,
+      agentId,
+      {
+        search: asString(req.query.search),
+        nextPageToken: asString(req.query.nextPageToken),
+        pageSize: Number(req.query.pageSize ?? 20),
+      },
+    );
     res.json({ success: true, ...result });
-  })
+  }),
 );
 
 app.patch(
@@ -1544,15 +2095,25 @@ app.patch(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const toolKey = getSingleParam(req.params.toolKey);
-    const tool = await manager.updateAgentTool(req.authContext!, agentId, toolKey, {
-      isEnabled: typeof req.body.isEnabled === "boolean" ? req.body.isEnabled : undefined,
-      config:
-        req.body.config && typeof req.body.config === "object" && !Array.isArray(req.body.config)
-          ? req.body.config
-          : undefined,
-    });
+    const tool = await manager.updateAgentTool(
+      req.authContext!,
+      agentId,
+      toolKey,
+      {
+        isEnabled:
+          typeof req.body.isEnabled === "boolean"
+            ? req.body.isEnabled
+            : undefined,
+        config:
+          req.body.config &&
+          typeof req.body.config === "object" &&
+          !Array.isArray(req.body.config)
+            ? req.body.config
+            : undefined,
+      },
+    );
     res.json({ success: true, tool });
-  })
+  }),
 );
 
 app.post(
@@ -1561,9 +2122,13 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const mode = req.body.mode === "dr_oculos" ? "dr_oculos" : "generic";
-    const result = await manager.bootstrapRbBilling(req.authContext!, agentId, mode);
+    const result = await manager.bootstrapRbBilling(
+      req.authContext!,
+      agentId,
+      mode,
+    );
     res.status(201).json({ success: true, ...result });
-  })
+  }),
 );
 
 app.post(
@@ -1571,9 +2136,12 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const result = await rbBillingWorker.runNowForAgent(req.authContext!.acesId, agentId);
+    const result = await rbBillingWorker.runNowForAgent(
+      req.authContext!.acesId,
+      agentId,
+    );
     res.status(202).json({ success: true, result });
-  })
+  }),
 );
 
 app.get(
@@ -1583,7 +2151,7 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const assets = await manager.listToolMediaAssets(req.authContext!, agentId);
     res.json({ success: true, assets });
-  })
+  }),
 );
 
 app.post(
@@ -1592,20 +2160,32 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const mediaKind = req.body.mediaKind === "document" ? "document" : "image";
-    const asset = await manager.upsertToolMediaAsset(req.authContext!, agentId, {
-      assetKey: String(req.body.assetKey ?? ""),
-      displayName: String(req.body.displayName ?? ""),
-      description: typeof req.body.description === "string" ? req.body.description : undefined,
-      usageInstruction:
-        typeof req.body.usageInstruction === "string" ? req.body.usageInstruction : undefined,
-      sourceUrl: String(req.body.sourceUrl ?? ""),
-      mediaKind,
-      fileName: typeof req.body.fileName === "string" ? req.body.fileName : null,
-      defaultCaption:
-        typeof req.body.defaultCaption === "string" ? req.body.defaultCaption : null,
-    });
+    const asset = await manager.upsertToolMediaAsset(
+      req.authContext!,
+      agentId,
+      {
+        assetKey: String(req.body.assetKey ?? ""),
+        displayName: String(req.body.displayName ?? ""),
+        description:
+          typeof req.body.description === "string"
+            ? req.body.description
+            : undefined,
+        usageInstruction:
+          typeof req.body.usageInstruction === "string"
+            ? req.body.usageInstruction
+            : undefined,
+        sourceUrl: String(req.body.sourceUrl ?? ""),
+        mediaKind,
+        fileName:
+          typeof req.body.fileName === "string" ? req.body.fileName : null,
+        defaultCaption:
+          typeof req.body.defaultCaption === "string"
+            ? req.body.defaultCaption
+            : null,
+      },
+    );
     res.status(201).json({ success: true, asset });
-  })
+  }),
 );
 
 app.delete(
@@ -1614,9 +2194,13 @@ app.delete(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const assetId = getSingleParam(req.params.assetId);
-    const result = await manager.deactivateToolMediaAsset(req.authContext!, agentId, assetId);
+    const result = await manager.deactivateToolMediaAsset(
+      req.authContext!,
+      agentId,
+      assetId,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1626,7 +2210,7 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const rules = await manager.listLensPriceRules(req.authContext!, agentId);
     res.json({ success: true, rules });
-  })
+  }),
 );
 
 app.post(
@@ -1634,7 +2218,8 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const lensCategory = req.body.lensCategory === "multifocal" ? "multifocal" : "single_vision";
+    const lensCategory =
+      req.body.lensCategory === "multifocal" ? "multifocal" : "single_vision";
     const rule = await manager.upsertLensPriceRule(req.authContext!, agentId, {
       id: typeof req.body.id === "string" ? req.body.id : null,
       displayName: String(req.body.displayName ?? ""),
@@ -1642,14 +2227,20 @@ app.post(
       minSphere: Number(req.body.minSphere),
       maxSphere: Number(req.body.maxSphere),
       maxAbsCylinder: Number(req.body.maxAbsCylinder),
-      minAddition: req.body.minAddition === null || req.body.minAddition === undefined ? null : Number(req.body.minAddition),
-      maxAddition: req.body.maxAddition === null || req.body.maxAddition === undefined ? null : Number(req.body.maxAddition),
+      minAddition:
+        req.body.minAddition === null || req.body.minAddition === undefined
+          ? null
+          : Number(req.body.minAddition),
+      maxAddition:
+        req.body.maxAddition === null || req.body.maxAddition === undefined
+          ? null
+          : Number(req.body.maxAddition),
       priceCents: Number(req.body.priceCents),
       priority: Number(req.body.priority ?? 100),
       isActive: req.body.isActive !== false,
     });
     res.status(201).json({ success: true, rule });
-  })
+  }),
 );
 
 app.delete(
@@ -1659,10 +2250,10 @@ app.delete(
     const result = await manager.deactivateLensPriceRule(
       req.authContext!,
       getSingleParam(req.params.id),
-      getSingleParam(req.params.ruleId)
+      getSingleParam(req.params.ruleId),
     );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1670,9 +2261,12 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const catalog = await manager.listVisagismCatalog(req.authContext!, agentId);
+    const catalog = await manager.listVisagismCatalog(
+      req.authContext!,
+      agentId,
+    );
     res.json({ success: true, catalog });
-  })
+  }),
 );
 
 app.post(
@@ -1680,20 +2274,34 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const item = await manager.upsertVisagismCatalogItem(req.authContext!, agentId, {
-      id: typeof req.body.id === "string" ? req.body.id : null,
-      productCode: String(req.body.productCode ?? ""),
-      recommendationDescription: String(req.body.recommendationDescription ?? ""),
-      attributes:
-        req.body.attributes && typeof req.body.attributes === "object" && !Array.isArray(req.body.attributes)
-          ? req.body.attributes
-          : undefined,
-      sourceUrl: String(req.body.sourceUrl ?? ""),
-      displayOrder: typeof req.body.displayOrder === "number" ? req.body.displayOrder : undefined,
-      isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
-    });
+    const item = await manager.upsertVisagismCatalogItem(
+      req.authContext!,
+      agentId,
+      {
+        id: typeof req.body.id === "string" ? req.body.id : null,
+        productCode: String(req.body.productCode ?? ""),
+        recommendationDescription: String(
+          req.body.recommendationDescription ?? "",
+        ),
+        attributes:
+          req.body.attributes &&
+          typeof req.body.attributes === "object" &&
+          !Array.isArray(req.body.attributes)
+            ? req.body.attributes
+            : undefined,
+        sourceUrl: String(req.body.sourceUrl ?? ""),
+        displayOrder:
+          typeof req.body.displayOrder === "number"
+            ? req.body.displayOrder
+            : undefined,
+        isActive:
+          typeof req.body.isActive === "boolean"
+            ? req.body.isActive
+            : undefined,
+      },
+    );
     res.status(201).json({ success: true, item });
-  })
+  }),
 );
 
 app.delete(
@@ -1702,9 +2310,13 @@ app.delete(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const itemId = getSingleParam(req.params.itemId);
-    const result = await manager.deactivateVisagismCatalogItem(req.authContext!, agentId, itemId);
+    const result = await manager.deactivateVisagismCatalogItem(
+      req.authContext!,
+      agentId,
+      itemId,
+    );
     res.json(result);
-  })
+  }),
 );
 
 app.get(
@@ -1714,7 +2326,7 @@ app.get(
     const agentId = getSingleParam(req.params.id);
     const runs = await manager.listVisagismRuns(req.authContext!, agentId);
     res.json({ success: true, runs });
-  })
+  }),
 );
 
 app.get(
@@ -1725,7 +2337,7 @@ app.get(
     const runId = getSingleParam(req.params.runId);
     const run = await manager.getVisagismRun(req.authContext!, agentId, runId);
     res.json({ success: true, run });
-  })
+  }),
 );
 
 app.post(
@@ -1735,11 +2347,19 @@ app.post(
     const agentId = getSingleParam(req.params.id);
     const result = await manager.startVisagismRun(req.authContext!, agentId, {
       leadId: String(req.body.leadId ?? ""),
-      sourceMessageId: typeof req.body.sourceMessageId === "string" ? req.body.sourceMessageId : null,
-      excludedItemId: typeof req.body.excludedItemId === "string" ? req.body.excludedItemId : null,
+      sourceMessageId:
+        typeof req.body.sourceMessageId === "string"
+          ? req.body.sourceMessageId
+          : null,
+      excludedItemId:
+        typeof req.body.excludedItemId === "string"
+          ? req.body.excludedItemId
+          : null,
     });
-    res.status(result.status === "succeeded" ? 201 : 202).json({ success: true, ...result });
-  })
+    res
+      .status(result.status === "succeeded" ? 201 : 202)
+      .json({ success: true, ...result });
+  }),
 );
 
 app.get(
@@ -1747,9 +2367,12 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const destinations = await manager.listForwardingDestinations(req.authContext!, agentId);
+    const destinations = await manager.listForwardingDestinations(
+      req.authContext!,
+      agentId,
+    );
     res.json({ success: true, destinations });
-  })
+  }),
 );
 
 app.post(
@@ -1757,19 +2380,32 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    if (req.body.mode !== "external_notification" && req.body.mode !== "agent") {
+    if (
+      req.body.mode !== "external_notification" &&
+      req.body.mode !== "agent"
+    ) {
       throw new HttpError(400, "Modo de encaminhamento invalido");
     }
-    const destination = await manager.upsertForwardingDestination(req.authContext!, agentId, {
-      destinationKey: String(req.body.destinationKey ?? ""),
-      displayName: String(req.body.displayName ?? ""),
-      mode: req.body.mode,
-      targetPhone: typeof req.body.targetPhone === "string" ? req.body.targetPhone : null,
-      targetAgentId: typeof req.body.targetAgentId === "string" ? req.body.targetAgentId : null,
-      contextInstruction: String(req.body.contextInstruction ?? ""),
-    });
+    const destination = await manager.upsertForwardingDestination(
+      req.authContext!,
+      agentId,
+      {
+        destinationKey: String(req.body.destinationKey ?? ""),
+        displayName: String(req.body.displayName ?? ""),
+        mode: req.body.mode,
+        targetPhone:
+          typeof req.body.targetPhone === "string"
+            ? req.body.targetPhone
+            : null,
+        targetAgentId:
+          typeof req.body.targetAgentId === "string"
+            ? req.body.targetAgentId
+            : null,
+        contextInstruction: String(req.body.contextInstruction ?? ""),
+      },
+    );
     res.status(201).json({ success: true, destination });
-  })
+  }),
 );
 
 app.delete(
@@ -1781,10 +2417,10 @@ app.delete(
     const result = await manager.deactivateForwardingDestination(
       req.authContext!,
       agentId,
-      destinationId
+      destinationId,
     );
     res.json(result);
-  })
+  }),
 );
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
@@ -1795,7 +2431,12 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     });
   }
 
-  const payloadError = error as { type?: string; status?: number; limit?: number; length?: number };
+  const payloadError = error as {
+    type?: string;
+    status?: number;
+    limit?: number;
+    length?: number;
+  };
   if (payloadError.type === "entity.too.large") {
     console.warn("[crm-ai-backend] Payload JSON acima do limite:", {
       path: req.path,
@@ -1814,6 +2455,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 });
 
 const port = Number(process.env.PORT ?? 3000);
+let stopPipelineWorker: (() => void) | null = null;
 async function bootstrap() {
   await assertRuntimeSchemaCompatibility({
     supabaseUrl: requireEnv("SUPABASE_URL"),
@@ -1831,29 +2473,38 @@ async function bootstrap() {
   if (process.env.RB_BILLING_WORKER_ENABLED === "true") {
     rbBillingWorker.start();
   }
+
+  if (process.env.PIPELINE_WORKER_ENABLED === "true") {
+    stopPipelineWorker = startPipelineWorker();
+  }
 }
 
 bootstrap().catch(async (error) => {
   console.error(
     error instanceof Error
       ? error.message
-      : "[crm-ai-backend] Falha desconhecida ao inicializar o backend"
+      : "[crm-ai-backend] Falha desconhecida ao inicializar o backend",
   );
   try {
     await manager.dispose();
   } catch (disposeError) {
-    console.error("[crm-ai-backend] Falha ao liberar recursos na inicializacao:", disposeError);
+    console.error(
+      "[crm-ai-backend] Falha ao liberar recursos na inicializacao:",
+      disposeError,
+    );
   }
   process.exit(1);
 });
 
 process.on("SIGINT", async () => {
+  stopPipelineWorker?.();
   rbBillingWorker.stop();
   await manager.dispose();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
+  stopPipelineWorker?.();
   rbBillingWorker.stop();
   await manager.dispose();
   process.exit(0);

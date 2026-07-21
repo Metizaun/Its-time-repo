@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import { useLeads } from "@/hooks/useLeads";
 import { useInstances } from "@/hooks/useInstances";
 import { usePipelines } from "@/hooks/usePipelines";
@@ -7,14 +6,17 @@ import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { PipelineToolbar } from "@/components/kanban/PipelineToolbar";
 import { useApp } from "@/context/AppContext";
+import { PipelineModal } from "@/components/kanban/PipelineModal";
 
 export default function Pipeline() {
   const { leads, loading, refetch } = useLeads({ enableRealtime: false });
   const { instances, loading: instancesLoading } = useInstances();
-  const { pipelines, loading: pipelinesLoading, createPipeline } = usePipelines();
+  const { pipelines, loading: pipelinesLoading, createPipeline, updatePipelineClassification } = usePipelines();
   const { ui, openModal } = useApp();
   const [selectedInstance, setSelectedInstance] = useState<string>("all");
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
+  const [pipelineModalOpen, setPipelineModalOpen] = useState(false);
+  const [classificationLoading, setClassificationLoading] = useState(false);
 
   const effectivePipelineId =
     selectedPipelineId || pipelines.find((pipeline) => pipeline.is_default)?.id || pipelines[0]?.id || "";
@@ -35,15 +37,22 @@ export default function Pipeline() {
     return matchesSearch && matchesInstance && matchesPipeline;
   });
 
-  const handleCreatePipeline = async () => {
-    const name = window.prompt("Nome do novo pipeline");
-    if (!name?.trim()) return;
-
-    const { data, error } = await createPipeline({ name });
-    if (error || !data) return;
+  const handleCreatePipeline = async (input: { name: string; description: string }) => {
+    const { data, error } = await createPipeline(input);
+    if (error || !data) return false;
 
     setSelectedPipelineId(data.id);
-    toast.success("Agora crie as etapas deste pipeline.");
+    return true;
+  };
+
+  const handleToggleClassification = async (enabled: boolean) => {
+    if (!effectivePipelineId) return;
+    setClassificationLoading(true);
+    try {
+      await updatePipelineClassification(effectivePipelineId, enabled);
+    } finally {
+      setClassificationLoading(false);
+    }
   };
 
   if (loading || pipelinesLoading) {
@@ -55,7 +64,7 @@ export default function Pipeline() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="pipeline-page">
       {/* Header */}
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Pipeline</h1>
@@ -72,8 +81,14 @@ export default function Pipeline() {
         instancesLoading={instancesLoading}
         selectedPipelineId={effectivePipelineId}
         onPipelineChange={setSelectedPipelineId}
-        onCreatePipeline={handleCreatePipeline}
-        pipelineOptions={pipelines.map((pipeline) => ({ id: pipeline.id, name: pipeline.name }))}
+        onCreatePipeline={() => setPipelineModalOpen(true)}
+        onToggleClassification={handleToggleClassification}
+        classificationLoading={classificationLoading}
+        pipelineOptions={pipelines.map((pipeline) => ({
+          id: pipeline.id,
+          name: pipeline.name,
+          aiClassificationEnabled: pipeline.ai_classification_enabled,
+        }))}
         pipelinesLoading={pipelinesLoading}
       />
 
@@ -81,6 +96,11 @@ export default function Pipeline() {
         leads={filteredLeads}
         pipelineId={effectivePipelineId}
         onLeadsChanged={() => refetch({ showLoading: false })}
+      />
+      <PipelineModal
+        open={pipelineModalOpen}
+        onOpenChange={setPipelineModalOpen}
+        onCreate={handleCreatePipeline}
       />
     </div>
   );

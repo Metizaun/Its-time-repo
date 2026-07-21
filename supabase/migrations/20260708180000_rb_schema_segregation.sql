@@ -175,6 +175,14 @@ AS $function$
   LIMIT 1;
 $function$;
 
+-- Keep the private billing schema available to the service-role PostgREST client.
+-- This mirrors the production role configuration and makes clean local resets reproducible.
+ALTER ROLE authenticator SET pgrst.db_schemas =
+  'public,storage,graphql_public,crm,meta,calendar,agents,gupshup,rb';
+
+NOTIFY pgrst, 'reload config';
+NOTIFY pgrst, 'reload schema';
+
 -- 8. Recriação da procedure rpc_claim_due_automation_executions_v2
 CREATE OR REPLACE FUNCTION crm.rpc_claim_due_automation_executions_v2(p_limit integer DEFAULT 50)
 RETURNS TABLE (

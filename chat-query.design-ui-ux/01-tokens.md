@@ -58,8 +58,8 @@
 
 **Regras:**
 - `--color-primary-500` é a **única** cor de ação para CTAs principais
-- Nunca primária e secundária no mesmo componente (exceto gradiente autorizado)
-- `linear-gradient(135deg, #E8511A 0%, #E83560 100%)` — apenas para ilustrações e empty states
+- Nunca primária e secundária no mesmo componente funcional; gradientes editoriais são limitados aos usos documentados abaixo
+- Nunca crie gradientes ad hoc fora dos quatro tokens autorizados
 
 ---
 
@@ -75,6 +75,26 @@
 ```
 
 **Uso exclusivo:** badges de destaque, indicadores de progresso avançado, tooltips de urgência.
+
+### Gradientes editoriais
+
+```css
+--gradient-orange-coral: linear-gradient(135deg, #FF5A1F 0%, #FF6848 50%, #F0525D 100%);
+--gradient-coral-pink: linear-gradient(135deg, #F45B42 0%, #F45362 52%, #EB3F78 100%);
+--gradient-orange-pink-electric: linear-gradient(90deg, #FF4B16 0%, #FF534D 45%, #F52D73 100%);
+--gradient-coral-pink-soft: linear-gradient(135deg, #FF8A6C 0%, #F68F89 48%, #F3A1B2 100%);
+```
+
+**Uso permitido:** ilustrações, arte de hero/empty state, barra de acento e suportes visuais de ícones editoriais. Os gradientes podem substituir badges decorativos de categoria quando o ícone e o contexto já comunicam a informação.
+
+**Uso proibido:** botões, texto corrido, campos, formulários, cards completos, fundos de superfícies operacionais e qualquer elemento cujo contraste dependa de texto sobre o degradê.
+
+| Token | Papel visual |
+|---|---|
+| `--gradient-orange-coral` | início, ação, velocidade ou transformação |
+| `--gradient-coral-pink` | tecnologia humana, intensidade e modernidade |
+| `--gradient-orange-pink-electric` | indicador editorial de maior impacto |
+| `--gradient-coral-pink-soft` | profundidade visual secundária e destaques suaves |
 
 ---
 

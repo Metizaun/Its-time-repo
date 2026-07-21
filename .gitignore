@@ -50,5 +50,9 @@ chat-query.design-ui-ux/
 design-refatoracao/
 exemples/
 
+# Local visual QA output and API reference samples (may contain PII).
+/artifacts/
+/referencias/Cobrança API/
+
 # Local VPS diagnostics may contain machine-specific access details.
 /scripts/*vps*.js

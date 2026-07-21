@@ -3,6 +3,17 @@ import { supabase } from "@/integrations/supabase/client";
 const CRM_BACKEND_URL =
   (import.meta.env.VITE_CRM_BACKEND_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
+export class CrmBackendError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly details: unknown = null
+  ) {
+    super(message);
+    this.name = "CrmBackendError";
+  }
+}
+
 function buildBackendUrl(path: string) {
   if (!CRM_BACKEND_URL) {
     throw new Error("Configuracao do backend CRM ausente no frontend");
@@ -36,7 +47,11 @@ async function parseBackendResponse<T>(response: Response): Promise<T> {
           ? data.message
           : null;
 
-    throw new Error(backendMessage ?? `Falha ao comunicar com o backend CRM (${response.status})`);
+    throw new CrmBackendError(
+      backendMessage ?? `Falha ao comunicar com o backend CRM (${response.status})`,
+      response.status,
+      data?.details ?? null
+    );
   }
 
   return (data ?? {}) as T;

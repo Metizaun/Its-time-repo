@@ -79,6 +79,8 @@ export function MessageList({ messages, loading }: MessageListProps) {
     );
   }
 
+  const messagesById = new Map(messages.map((message) => [message.id, message]));
+
   return (
     <div className="relative min-h-0 flex-1">
     <ScrollArea ref={scrollRootRef} onScrollCapture={updateStickiness} className="h-full">
@@ -104,6 +106,12 @@ export function MessageList({ messages, loading }: MessageListProps) {
                 sourceType={message.source_type}
                 systemKind={message.system_kind}
                 attachments={message.attachments}
+                quickReply={message.quick_reply}
+                replyToMessage={
+                  message.quick_reply?.kind === "selection" && message.quick_reply.replyToMessageId
+                    ? messagesById.get(message.quick_reply.replyToMessageId) ?? null
+                    : null
+                }
               />
             </Fragment>
           );

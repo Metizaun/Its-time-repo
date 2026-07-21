@@ -15,8 +15,12 @@ interface DeleteStageModalProps {
   stage?: PipelineStage;
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Erro inesperado";
+}
+
 export function DeleteStageModal({ isOpen, onClose, stage }: DeleteStageModalProps) {
-  const { stages, deleteStage } = usePipelineStages();
+  const { stages, deleteStage } = usePipelineStages(stage?.pipeline_id ?? null);
   const [loading, setLoading] = useState(false);
   const [checkingCount, setCheckingCount] = useState(false);
   const [stageLeadsCount, setStageLeadsCount] = useState(0);
@@ -42,9 +46,9 @@ export function DeleteStageModal({ isOpen, onClose, stage }: DeleteStageModalPro
       const nextCount = count || 0;
       setStageLeadsCount(nextCount);
       return nextCount;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao contar leads da etapa:", error);
-      toast.error("Erro ao verificar leads da etapa", { description: error.message });
+      toast.error("Erro ao verificar leads da etapa", { description: getErrorMessage(error) });
       setStageLeadsCount(0);
       return 0;
     } finally {
@@ -65,6 +69,7 @@ export function DeleteStageModal({ isOpen, onClose, stage }: DeleteStageModalPro
 
   const isLocked = useMemo(() => {
     if (!stage) return false;
+    if (stage.isAttendanceStage) return true;
     if (stage.category === "Aberto") return false;
 
     const countOfThisCategory = stages.filter((s) => s.category === stage.category).length;
@@ -108,14 +113,24 @@ export function DeleteStageModal({ isOpen, onClose, stage }: DeleteStageModalPro
             Excluir Etapa: {stage.name}
           </DialogTitle>
           <DialogDescription>
-            {isLocked && stage.category !== "Aberto"
+            {stage.isAttendanceStage
+              ? "Transfira a funcao de Atendimento para outra etapa antes de excluir esta coluna."
+              : isLocked && stage.category !== "Aberto"
               ? "Esta acao esta bloqueada."
               : "Atencao: a exclusao de etapas pode afetar metricas e historico."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
-          {isLocked && stage.category !== "Aberto" ? (
+          {stage.isAttendanceStage ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Etapa operacional protegida</AlertTitle>
+              <AlertDescription>
+                Edite outra etapa e marque “Receber novas mensagens nesta etapa” para transferir a funcao antes da exclusao.
+              </AlertDescription>
+            </Alert>
+          ) : isLocked && stage.category !== "Aberto" ? (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Nao e possivel excluir</AlertTitle>

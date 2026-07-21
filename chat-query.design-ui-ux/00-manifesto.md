@@ -18,7 +18,7 @@ O CRM Its Time é uma plataforma de gestão comercial para agências e equipes d
 Títulos ultra-pesados (800–900) coexistem com whitespace generoso. A tensão entre peso tipográfico e espaço vazio **cria hierarquia sem decoração**. Nenhum elemento visual extra é necessário quando a tipografia já comunica.
 
 ### 2. Acento Cirúrgico
-Uma cor quente (**laranja `#E8511A`**) e uma cor de tensão (**pink/magenta `#E83560`**) são os únicos cromáticos permitidos. Tudo o mais é neutro — escalas de cinza quente e fundo cream. Usar as duas cores ao mesmo tempo no mesmo componente é proibido (exceto gradiente controlado em ilustrações).
+Uma cor quente (**laranja `#E8511A`**) e uma cor de tensão (**pink/magenta `#E83560`**) são os únicos cromáticos permitidos. Tudo o mais é neutro — escalas de cinza quente e fundo cream. Usar as duas cores ao mesmo tempo no mesmo componente é proibido, exceto nos gradientes editoriais controlados para ilustrações, barras de acento e suportes visuais de ícones.
 
 ### 3. Profundidade Suave (Soft UI)
 Sombras não demarcam fronteiras — elas **elevam**. O sistema usa sombras Soft UI bilaterais: uma escura (embaixo/direita) e uma clara (acima/esquerda), criando a ilusão de que os componentes emergem organicamente da superfície. Interfaces Soft UI **flutuam**, não dividem.
@@ -47,6 +47,14 @@ Regras:
 - Estados neutros e ausencias de dado devem parecer informacao, nao erro.
 - Acentos laranja indicam foco, serie principal ou estado atual; nunca decoracao abundante.
 - Densidade analitica e permitida quando reduz espaco vazio improdutivo: grades, heatmaps e tabelas compactas devem comunicar padrao e ritmo, nao decorar.
+
+### Quiet luxury em fluxos de trabalho
+
+- Cada superfície deve apresentar uma decisão principal e um único editor ativo.
+- Opções mutuamente exclusivas usam abas ou controles segmentados e substituem o conteúdo abaixo.
+- A interface deve orientar por ordem, proximidade e estado; caixas de texto explicativas não podem compensar uma arquitetura confusa.
+- Progressive disclosure revela detalhes somente quando necessários, sem duplicar campos ou manter formulários concorrentes visíveis.
+- Superfícies coloridas não envolvem formulários. O laranja permanece cirúrgico: CTA, foco, seleção ou feedback transitório.
 
 ---
 
@@ -79,14 +87,13 @@ Regras:
 
 ---
 
-## Gradiente Autorizado
+## Gradientes Autorizados
 
-```css
-/* USO RESTRITO: apenas ilustrações, banners hero, empty states visuais */
-background: linear-gradient(135deg, #E8511A 0%, #E83560 100%);
-```
+O sistema possui quatro gradientes editoriais documentados em `01-tokens.md`. Eles servem para ilustrações, hero/empty states, barras de acento e suportes visuais de ícones grandes. Essa linguagem pode substituir badges decorativos como “Novidade”, “Melhoria”, “Correção” e equivalentes.
 
-> ⛔ **Nunca** em botões, textos ou backgrounds de componentes funcionais.
+> ⛔ **Nunca** em botões, textos, campos, formulários, cards completos ou backgrounds de componentes funcionais.
+
+Ícones editoriais podem ter presença maior que ícones de ação: use suporte de 40px em modais e 64px em listas de release. Ícones de controles continuam entre 16px e 20px.
 
 ---
 

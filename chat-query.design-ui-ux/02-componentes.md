@@ -134,6 +134,16 @@
 - Estados do campo devem dar feedback visual suficiente para que a seleção seja percebida sem texto redundante.
 - Em formulários densos, priorize `label + campo + estado` antes de qualquer descrição.
 - Nunca exponha regra interna, código, enum, ID, apelido técnico ou lista operacional no texto da interface.
+- Não crie caixas explicativas ao lado de selects, radios ou toggles autoexplicativos.
+- Helpers devem ter no máximo uma linha curta e comunicar somente restrição ou consequência operacional.
+
+### Fluxos Mutuamente Exclusivos
+
+- Use abas ou controle segmentado para modos que não podem coexistir.
+- A troca de modo substitui o editor; nunca anexa um segundo formulário abaixo do primeiro.
+- Preserve rascunhos quando isso evitar perda acidental, mas serialize apenas o modo ativo.
+- Um formulário não deve ser envolvido por superfície laranja, `primary-50` ou outro tint decorativo.
+- Detalhes técnicos e IDs manuais ficam fora do fluxo principal e só aparecem em ferramentas administrativas específicas.
 
 ### Controles Auxiliares
 
@@ -494,7 +504,7 @@ Em telas densas como Dashboard, Calendar, Pipeline e Admin, a sofisticacao vem d
   left:          0;
   right:         0;
   height:        3px;
-  background:    linear-gradient(90deg, #E8511A 0%, #E83560 100%);
+  background:    var(--gradient-coral-pink);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
 }
 ```
@@ -583,6 +593,10 @@ Em telas densas como Dashboard, Calendar, Pipeline e Admin, a sofisticacao vem d
 ---
 
 ## 5.5 Badges e Tags
+
+> **Regra de uso:** badges são proibidos por padrão. Só podem ser adicionados quando o usuário solicitar explicitamente um badge naquela interface. Um badge existente não cria precedente para novos usos; prefira texto simples, ícone, toggle ou estado do próprio controle.
+
+Badges editoriais de taxonomia — como “Novidade”, “Melhoria”, “Correção” e “Hotfix” — não devem acompanhar cada item. Em timelines, changelogs e modais de novidades, use um ícone editorial maior com um dos gradientes autorizados. Preserve o nome da categoria apenas como texto acessível quando ele não for necessário para a leitura visual.
 
 ```css
 .badge {

@@ -24,7 +24,7 @@ O fundo da aplicação é **cream quente `#F7F6F4`**. Branco puro causa fadiga v
 ❌ btn com gradient laranja→pink no texto principal
 ❌ badge primary + ícone em secondary no mesmo elemento
 ```
-A única exceção autorizada é o **gradiente em ilustrações e empty states**: `linear-gradient(135deg, #E8511A 0%, #E83560 100%)`.
+A única exceção autorizada são os quatro **gradientes editoriais tokenizados** em ilustrações, hero/empty states, barras de acento e suportes visuais de ícones.
 
 ### 3. Gradiente Decorativo em Componentes Funcionais
 ```
@@ -32,7 +32,7 @@ A única exceção autorizada é o **gradiente em ilustrações e empty states**
 ❌ color: linear-gradient(...);  /* em texto */
 ❌ border-image: linear-gradient(...);  /* em containers de UI */
 ```
-O gradiente laranja→pink existe **apenas** em: ilustrações, banners de hero, empty states visuais, e a barra de 3px do `card-accent`.
+Os gradientes editoriais existem **apenas** em: ilustrações, banners de hero, empty states visuais, barra de 3px do `card-accent` e suportes visuais de ícones grandes. Use somente os quatro tokens documentados em `01-tokens.md`.
 
 ### 4. Valores Hardcoded Fora do `index.css`
 ```
@@ -100,6 +100,54 @@ Se a regra não pode ser dita em linguagem simples de produto, ela não deve apa
 ```
 Controles auxiliares devem ser discretos, compactos e silenciosos. Quiet luxury em SaaS operacional pede hierarquia: campo principal primeiro, ajuste secundário depois.
 
+### 12. Badge sem Solicitação Explícita
+```
+❌ Criar badge para explicar uma etapa, estado ou controle por iniciativa própria
+❌ Substituir texto simples por uma etiqueta visual sem solicitação do usuário
+❌ Usar badges existentes como justificativa para adicionar novos badges
+```
+Badges são proibidos por padrão. Só podem ser usados quando o usuário solicitar explicitamente esse componente para a interface em questão.
+
+### 13. Caixa Explicativa de Preenchimento
+```
+❌ Box ao lado de um select repetindo o significado da opção
+❌ Texto criado para ocupar uma coluna vazia do formulário
+❌ Frase genérica listando variáveis ou capacidades óbvias
+```
+Se o controle precisa de uma explicação longa, reveja o label, a ordem ou a arquitetura do fluxo.
+
+### 14. Superfície Laranja com Texto ou Formulário
+```
+❌ Container primary-50 envolvendo campos
+❌ Box laranja com parágrafo antes do formulário
+❌ Accent color usado para separar uma seção estática
+```
+Laranja é reservado para CTA, foco, seleção e feedback transitório. Formulários vivem em superfícies neutras.
+
+### 15. Editores Concorrentes
+```
+❌ Manter o editor atual e abrir outro abaixo
+❌ Duplicar o campo principal em seções diferentes do mesmo modal
+❌ Empilhar fluxos mutuamente exclusivos
+```
+Use abas ou controle segmentado e substitua o conteúdo. Uma superfície apresenta somente um editor principal por vez.
+
+### 16. Grid Órfão ou Assimétrico
+```
+❌ Três campos na primeira linha e um campo solto abaixo
+❌ Coluna vazia usada como espaçador
+❌ Controles de uma mesma tarefa separados em blocos sem relação visual
+```
+Agrupe por tarefa e preserve continuidade de leitura em desktop e mobile.
+
+### 17. Badge editorial de novidade
+```
+❌ Badge “Novidade”, “Melhoria”, “Correção” ou “Hotfix” repetido em cada item
+❌ Cor semântica usada para decorar categorias de release
+❌ Ícone minúsculo acompanhado de uma etiqueta que repete seu papel
+```
+Em superfícies editoriais, remova a etiqueta e use um ícone de 40px a 64px com um dos gradientes autorizados como suporte visual. Badges funcionais de status continuam seguindo sua semântica própria.
+
 ---
 
 ## ✅ OBRIGATÓRIO — Paradigmas de Consistência
@@ -153,8 +201,8 @@ Todos os KPI cards devem:
 4. Delta em `text-sm`, semibold, success-600 ou error-600
 5. `shadow-sm` em repouso
 
-### Badges — Regra de Fundo
-Todos os badges usam **fundo tinto** (versão 50 da cor) com texto **escuro correspondente** (versão 600/700). Nunca:
+### Badges — Uso Excepcional
+Badges só são permitidos mediante solicitação explícita do usuário. Quando solicitados, usam **fundo tinto** (versão 50 da cor) com texto **escuro correspondente** (versão 600/700). Nunca:
 - Fundo sólido opaco
 - Texto branco sobre fundo colorido (exceto em `bg-inverse` dark)
 - Borda sem preenchimento (exceto status outline especial)

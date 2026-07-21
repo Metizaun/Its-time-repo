@@ -16,6 +16,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const isChatPage = location.pathname === "/chat";
   const isCalendarPage = location.pathname === "/calendar";
+  const isPipelinePage = location.pathname === "/pipeline";
 
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < TABLET_BP);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -90,9 +91,18 @@ export function MainLayout({ children }: { children: ReactNode }) {
           !isMobile && sidebarCollapsed && "app-content--collapsed"
         )}
       >
-        <Topbar onOpenMobileSidebar={() => setMobileOpen(true)} isMobile={isMobile} />
+        <Topbar
+          onOpenMobileSidebar={() => setMobileOpen(true)}
+          isMobile={isMobile}
+          hideSearch={isChatPage}
+        />
 
-        <main className={cn("app-main", isChatPage && "app-main--chat", isCalendarPage && "app-main--calendar")}>
+        <main className={cn(
+          "app-main",
+          isChatPage && "app-main--chat",
+          isCalendarPage && "app-main--calendar",
+          isPipelinePage && "app-main--pipeline"
+        )}>
           {children}
         </main>
       </div>

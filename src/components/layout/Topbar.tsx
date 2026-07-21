@@ -18,15 +18,18 @@ import { NotificationCenter } from "@/components/notifications/NotificationCente
 interface TopbarProps {
   onOpenMobileSidebar?: () => void;
   isMobile?: boolean;
+  hideSearch?: boolean;
 }
 
-export function Topbar({ onOpenMobileSidebar, isMobile }: TopbarProps) {
+export function Topbar({ onOpenMobileSidebar, isMobile, hideSearch = false }: TopbarProps) {
   const { setSearchQuery, ui } = useApp();
   const { user, signOut } = useAuth();
 
   const userInitial = user?.email?.charAt(0).toUpperCase() || "U";
 
   useEffect(() => {
+    if (hideSearch) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault();
@@ -41,7 +44,7 @@ export function Topbar({ onOpenMobileSidebar, isMobile }: TopbarProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [hideSearch]);
 
   return (
     <header className="topbar">
@@ -57,19 +60,21 @@ export function Topbar({ onOpenMobileSidebar, isMobile }: TopbarProps) {
         </Button>
       )}
 
-      <div className="topbar-search">
-        <div className="topbar-search__inner">
-          <Search className="topbar-search__icon" />
-          <Input
-            id="global-search"
-            type="text"
-            placeholder={isMobile ? "Buscar..." : "Buscar leads... (Ctrl+K)"}
-            className="pl-10"
-            value={ui.searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+      {!hideSearch && (
+        <div className="topbar-search">
+          <div className="topbar-search__inner">
+            <Search className="topbar-search__icon" />
+            <Input
+              id="global-search"
+              type="text"
+              placeholder={isMobile ? "Buscar..." : "Buscar leads... (Ctrl+K)"}
+              className="pl-10"
+              value={ui.searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="topbar-actions">
         <NotificationCenter />

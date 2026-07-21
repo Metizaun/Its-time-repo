@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Bot, CalendarPlus, CheckCheck, Info } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type ChatAiControl = {
@@ -143,15 +144,16 @@ export function ChatHeader({
         )}
 
         {showFinalizeButton && onFinalize && (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             aria-label="Finalizar atendimento humano"
             onClick={onFinalize}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--color-primary-200)] bg-[var(--color-primary-50)] px-3 text-xs font-semibold text-[var(--color-primary-700)] shadow-sm transition-all duration-200 hover:border-[var(--color-primary-300)] hover:bg-[var(--color-surface-1)] hover:shadow-md focus-ring"
+            className="text-xs"
           >
             <CheckCheck className="h-4 w-4" />
             Finalizar
-          </button>
+          </Button>
         )}
 
         {aiControl && (

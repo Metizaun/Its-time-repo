@@ -6,7 +6,7 @@ export type AutomationMediaAsset = {
   instance_name: string;
   display_name: string;
   source_url: string;
-  media_kind: "image" | "document";
+  media_kind: "image" | "video" | "document";
   mime_type: string | null;
   file_name: string | null;
   file_size: number | null;
@@ -26,7 +26,7 @@ type AutomationMediaUploadIntent = {
   uploadToken: string;
   maxFileSize: number;
   mimeType: string;
-  kind: "image" | "document";
+  kind: "image" | "video" | "document";
 };
 
 type CompleteAutomationMediaUploadResponse = {
@@ -44,6 +44,10 @@ function normalizeMediaMimeType(file: File) {
     return "application/pdf";
   }
 
+  if (file.name.toLowerCase().endsWith(".mp4")) {
+    return "video/mp4";
+  }
+
   return "";
 }
 
@@ -55,6 +59,10 @@ function resolveAutomationMediaKind(file: File) {
 
   if (mimeType.startsWith("image/")) {
     return { kind: "image" as const, mimeType };
+  }
+
+  if (mimeType === "video/mp4") {
+    return { kind: "video" as const, mimeType };
   }
 
   return null;
@@ -72,7 +80,18 @@ export async function uploadAutomationMediaAsset(params: {
 }) {
   const resolved = resolveAutomationMediaKind(params.file);
   if (!resolved) {
-    throw new Error("Use apenas imagem ou PDF na automacao");
+    throw new Error("Use apenas imagem, video MP4 ou PDF na automacao");
+  }
+
+  const maxFileSize =
+    resolved.kind === "image"
+      ? 5 * 1024 * 1024
+      : resolved.kind === "video"
+        ? 16 * 1024 * 1024
+        : 100 * 1024 * 1024;
+  if (params.file.size > maxFileSize) {
+    const limit = resolved.kind === "image" ? "5 MB" : resolved.kind === "video" ? "16 MB" : "100 MB";
+    throw new Error(`O arquivo excede o limite de ${limit}`);
   }
 
   const uploadIntent = await postCrmBackend<AutomationMediaUploadIntent>("/api/automation/media-assets/upload-url", {

@@ -138,13 +138,14 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
           to={path}
           end={end}
           title={collapsed && !isMobile ? name : ""}
+          aria-label={badge ? `${name}, ${badge > 99 ? "99 ou mais" : badge} mensagens não lidas` : name}
           className={({ isActive }) =>
             cn("nav-item focus-ring", isActive && "nav-item--active")
           }
         >
           <Icon className="nav-item__icon" />
           <span className="nav-item__label">{name}</span>
-          {badge ? <span className="nav-item__badge">{badge > 99 ? "99+" : badge}</span> : null}
+          {badge ? <span aria-hidden="true" className="nav-item__badge">{badge > 99 ? "99+" : badge}</span> : null}
         </NavLink>
       </li>
     );

@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
 
 import { registerOutboundEcho } from "./outbound-echo-registry.js";
+import { buildChatSendPolicy } from "./chat-send-policy.js";
 import { GupshupTemplateService } from "./gupshup-template-service.js";
 import {
   type SendResult,
@@ -29,7 +30,7 @@ type ClaimedExecution = {
   attempt_count: number;
   content_mode?: "text" | "media" | null;
   media_asset_id?: string | null;
-  media_kind?: "image" | "document" | null;
+  media_kind?: "image" | "video" | "document" | null;
   media_caption?: string | null;
   media_source_url?: string | null;
   media_mime_type?: string | null;
@@ -124,6 +125,8 @@ const RB_GUPSHUP_TEMPLATE_FALLBACKS: Record<string, string> = {
     "Oi {{1}}, tudo bem? 😊\n\nSabemos que imprevistos acontecem e, por isso, estamos entrando em contato para lembrar que há em aberto a parcela com vencimento em {{2}}. \n\nPara sua comodidade, o pagamento ser realizado através da chave pix: {{3}}, e nos envie aqui o comprovante para a baixa ou em uma de nossas unidades.\n\nCaso já tenha realizado o pagamento, por favor, nos envie o comprovante para a baixa.  \n\nAguardamos seu retorno. \n\nEquipe Óticas Dr. Óculos",
   "c77f81d7-660b-488c-ba66-8312d1a69784":
     "Prezado(a) {{1}},\n\nIdentificamos boleto(s) que se encontra em aberto(s). Contamos com sua prontidão em regularizar o quanto antes.\n\nMe informe como posso auxiliar",
+  "2e7440ac-6133-4a7c-9bb0-5be887839435":
+    "Prezado(a) {{1}},\n\nMesmo após tentativas de renegociar o(s) débito(s) não identificamos o(s) pagamento(s) boleto(s) que se encontra em aberto(s) e reforçamos que a ausência do pagamento será passível o envio do seu cadastro aos órgãos de proteção ao crédito e protesto.\n\nParcelas em aberto:\n\nVencimento: {{1}} Valor: {{2}}\n\nMe informe como posso auxiliar\n\nEquipe Óticas Dr. Óculos agradece sua atenção e permanecemos à disposição",
   "2f37cb6d-ae16-4861-80c6-156b7624e9f5":
     "AVISO URGENTE\nParcelas em aberto: {{1}}\n\nMesmo após novas tentativas de renegociar o(s) débito(s) não identificamos o(s) pagamento(s) boleto(s) que se encontra em aberto(s) e informamos que a partir de agora seu cadastro será incluído aos órgãos de proteção ao crédito e protesto. \n\nVencimento {{2}} Valor {{3}}\n\nMe informe como posso auxiliar",
 };
@@ -350,7 +353,7 @@ function renderExecutionCaption(execution: ClaimedExecution) {
   return renderedCaption;
 }
 
-function renderExecutionTemplateParameters(execution: ClaimedExecution) {
+export function renderExecutionTemplateParameters(execution: ClaimedExecution) {
   if (!Array.isArray(execution.gupshup_template_params)) {
     return [];
   }
@@ -372,7 +375,8 @@ function renderExecutionTemplateParameters(execution: ClaimedExecution) {
     const normalizedParam = normalizeTemplateKey(rawParam);
     const aliasedParam = templateParamAliases[normalizedParam] ?? normalizedParam;
     if (vars[aliasedParam]) {
-      return vars[aliasedParam];
+      const value = vars[aliasedParam];
+      return aliasedParam === "vl_liquido" ? `R$ ${value}` : value;
     }
 
     const renderedParam = renderTemplate(rawParam, vars);
@@ -398,15 +402,65 @@ function getLocalGupshupTemplateFallback(execution: ClaimedExecution) {
   return RB_GUPSHUP_TEMPLATE_FALLBACKS[templateId] ?? null;
 }
 
-function applyGupshupTemplateParameters(templateBody: string, params: string[]) {
-  let rendered = templateBody;
-
-  params.forEach((param, index) => {
-    const tokenPattern = new RegExp(`\\{\\{\\s*${index + 1}\\s*\\}\\}`, "g");
-    rendered = rendered.replace(tokenPattern, param);
+export function applyGupshupTemplateParameters(templateBody: string, params: string[]) {
+  let paramIndex = 0;
+  const rendered = templateBody.replace(/\{\{\s*\d+\s*\}\}/g, (placeholder) => {
+    const value = params[paramIndex];
+    paramIndex += 1;
+    return value ?? placeholder;
   });
 
   return rendered.replace(/\s+\n/g, "\n").trim();
+}
+
+export function requiresGupshupTemplateForAutomation(
+  providerName: WhatsAppProviderName,
+  hasTemplate: boolean,
+  lastInboundAt: string | null | undefined,
+  evaluatedAt = new Date(),
+) {
+  if (providerName !== "gupshup" || hasTemplate) {
+    return false;
+  }
+
+  return buildChatSendPolicy(providerName, lastInboundAt, evaluatedAt).mode === "template_required";
+}
+
+async function assertAutomationConversationWindow(
+  crmClient: { from: (table: string) => any },
+  providerName: WhatsAppProviderName,
+  execution: ClaimedExecution,
+) {
+  const hasTemplate = Boolean(
+    execution.gupshup_template_id?.trim() || execution.gupshup_template_name?.trim(),
+  );
+  if (providerName !== "gupshup" || hasTemplate) {
+    return;
+  }
+
+  const { data, error } = await crmClient
+    .from("leads")
+    .select("last_lead_inbound_at")
+    .eq("id", execution.lead_id)
+    .eq("aces_id", execution.aces_id)
+    .maybeSingle();
+
+  if (error) {
+    throw new AutomationDispatchError("Nao foi possivel validar a janela de 24 h", {
+      kind: "transient",
+      errorCode: "GUPSHUP_WINDOW_LOOKUP_FAILED",
+    });
+  }
+
+  const lead = data as { last_lead_inbound_at?: unknown } | null;
+  const lastInboundAt =
+    typeof lead?.last_lead_inbound_at === "string" ? lead.last_lead_inbound_at : null;
+  if (requiresGupshupTemplateForAutomation(providerName, false, lastInboundAt)) {
+    throw new AutomationDispatchError("Janela de 24 h encerrada", {
+      kind: "permanent",
+      errorCode: "GUPSHUP_WINDOW_CLOSED",
+    });
+  }
 }
 
 async function buildOutboundHistoryContent(
@@ -896,12 +950,6 @@ async function sendWhatsAppMedia(
     });
   }
 
-  if (providerName === "gupshup" && !execution.gupshup_template_id && !execution.gupshup_template_name) {
-    throw new AutomationDispatchError("Template Gupshup nao definido para disparo de midia", {
-      kind: "permanent",
-    });
-  }
-
   try {
     const response = await provider.sendMedia({
       instanceName: execution.instance_name,
@@ -909,10 +957,18 @@ async function sendWhatsAppMedia(
       mediaUrl: execution.media_source_url,
       mimeType:
         execution.media_mime_type ??
-        (execution.media_kind === "image" ? "image/jpeg" : "application/pdf"),
+        (execution.media_kind === "image"
+          ? "image/jpeg"
+          : execution.media_kind === "video"
+            ? "video/mp4"
+            : "application/pdf"),
       fileName:
         execution.media_file_name ??
-        (execution.media_kind === "image" ? "imagem.jpg" : "documento.pdf"),
+        (execution.media_kind === "image"
+          ? "imagem.jpg"
+          : execution.media_kind === "video"
+            ? "video.mp4"
+            : "documento.pdf"),
       kind: execution.media_kind,
       caption: caption || null,
       templateName:
@@ -1462,6 +1518,19 @@ export function startAutomationWorker() {
     const providerName = await whatsAppProviders.resolveInstanceProvider(followup.instance_name);
     const provider = whatsAppProviders.getProvider(providerName);
 
+    if (
+      requiresGupshupTemplateForAutomation(
+        providerName,
+        false,
+        followup.last_lead_inbound_at,
+      )
+    ) {
+      throw new AutomationDispatchError("Janela de 24 h encerrada", {
+        kind: "permanent",
+        errorCode: "GUPSHUP_WINDOW_CLOSED",
+      });
+    }
+
     if (providerName === "meta" && isOutsideMetaConversationWindow(followup.last_lead_inbound_at)) {
       if (!agentFollowupMetaTemplateName) {
         throw new AutomationDispatchError(
@@ -1781,6 +1850,7 @@ export function startAutomationWorker() {
             const sentAt = new Date().toISOString();
             const providerName = await whatsAppProviders.resolveInstanceProvider(execution.instance_name);
             const provider = whatsAppProviders.getProvider(providerName);
+            await assertAutomationConversationWindow(supabase, providerName, execution);
             const sendResult =
               contentMode === "media"
                 ? await sendWhatsAppMedia(provider, providerName, execution, renderExecutionCaption(execution))

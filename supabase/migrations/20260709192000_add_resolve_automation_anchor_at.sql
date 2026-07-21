@@ -10,5 +10,3 @@ BEGIN
   RETURN NULLIF(v_anchor->>'anchor_at', '')::timestamptz;
 END;
 $$;
-
-INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('20260709192000') ON CONFLICT DO NOTHING;

@@ -9,6 +9,21 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
+import { tokenLineItems, tryRecordAiUsage } from "./ai-costs.js";
+import { buildChatSendPolicy } from "./chat-send-policy.js";
+import {
+  extractProviderQuickReplySelection,
+  normalizeQuickReplyMessages,
+  toStoredQuickReplyInteraction,
+  type ChatQuickReplyInteraction,
+} from "./chat-quick-replies.js";
+import {
+  allowsEvolutionMediaFallback,
+  downloadGupshupMedia,
+  GupshupMediaDownloadError,
+  prefetchGupshupInboundMedia,
+  type ResolvedInboundMedia,
+} from "./gupshup-media-downloader.js";
 import { createWhatsAppProviderRegistry, type WhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 import {
   matchOutboundEcho,
@@ -71,6 +86,8 @@ const DOCUMENT_MIME_TYPES = new Set([
 
 const AUTOMATION_MEDIA_BUCKET = "automation-media";
 const AUTOMATION_MEDIA_MAX_FILE_SIZE = 104857600;
+const AUTOMATION_IMAGE_MAX_FILE_SIZE = 5 * 1024 * 1024;
+const AUTOMATION_VIDEO_MAX_FILE_SIZE = 16 * 1024 * 1024;
 const AUTOMATION_ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -78,6 +95,7 @@ const AUTOMATION_ALLOWED_MIME_TYPES = new Set([
   "image/gif",
   "image/heic",
   "image/heif",
+  "video/mp4",
   "application/pdf",
 ]);
 
@@ -279,6 +297,7 @@ type StageRuleRow = {
 type StageRow = {
   id: string;
   aces_id: number;
+  pipeline_id: string;
   name: string;
   category: string;
   position: number;
@@ -449,6 +468,7 @@ type LeadRow = {
   como_quer_ser_percebido: string | null;
   qual_imagem_passar: string | null;
   last_message_at: string | null;
+  last_lead_inbound_at: string | null;
   updated_at: string | null;
 };
 
@@ -519,6 +539,7 @@ type ChatMessageResponse = {
   sourceType: string;
   systemKind: ChatSystemKind | null;
   providerStatus?: string | null;
+  quickReply: ChatQuickReplyInteraction | null;
   attachments: ChatMessageAttachmentResponse[];
 };
 
@@ -615,6 +636,7 @@ export type ParsedWebhookMessage = {
   mediaMimeType: string | null;
   mediaBase64: string | null;
   mediaUrl: string | null;
+  mediaUrlExpiresAt?: string | null;
   messageType: string | null;
   fileName?: string | null;
   provider: WhatsAppProviderName;
@@ -1599,12 +1621,14 @@ function resolveAttachmentKind(mimeType: string): ChatAttachmentKind | null {
   return null;
 }
 
-function resolveAutomationMediaKind(mimeType: string): "document" | "image" | null {
+function resolveAutomationMediaKind(mimeType: string): "document" | "video" | "image" | null {
   const normalized = normalizeMimeType(mimeType);
   if (!AUTOMATION_ALLOWED_MIME_TYPES.has(normalized)) {
     return null;
   }
-  return normalized === "application/pdf" ? "document" : "image";
+  if (normalized === "application/pdf") return "document";
+  if (normalized === "video/mp4") return "video";
+  return "image";
 }
 
 function buildAutomationMediaStoragePath(params: {
@@ -2860,7 +2884,6 @@ export class AgentManager {
 
     if (
       ownerId &&
-      existing.created_by !== ownerId &&
       !isAdminRole(role) &&
       !(await this.hasActiveInstanceAccessMembership(acesId, instanceName, ownerId))
     ) {
@@ -2892,33 +2915,19 @@ export class AgentManager {
       return new Set((data ?? []).map((row) => String((row as { instancia: string }).instancia)));
     }
 
-    const [{ data: ownedInstances, error: ownedError }, { data: sharedMemberships, error: sharedError }] =
-      await Promise.all([
-        this.serviceClient
-          .from("instance")
-          .select("instancia")
-          .eq("aces_id", acesId)
-          .eq("created_by", crmUserId),
-        this.serviceClient
-          .from("instance_access_memberships")
-          .select("instance_name")
-          .eq("aces_id", acesId)
-          .eq("crm_user_id", crmUserId)
-          .eq("is_active", true),
-      ]);
-
-    if (ownedError) {
-      throw new HttpError(500, "Nao foi possivel listar as instancias do usuario", ownedError);
-    }
+    const { data: sharedMemberships, error: sharedError } = await this.serviceClient
+      .from("instance_access_memberships")
+      .select("instance_name")
+      .eq("aces_id", acesId)
+      .eq("crm_user_id", crmUserId)
+      .eq("is_active", true)
+      .in("access_level", ["viewer", "editor", "admin"]);
 
     if (sharedError) {
       throw new HttpError(500, "Nao foi possivel listar os compartilhamentos de instancia", sharedError);
     }
 
     const accessibleInstances = new Set<string>();
-    for (const row of (ownedInstances ?? []) as Array<{ instancia: string }>) {
-      accessibleInstances.add(String(row.instancia));
-    }
     for (const row of (sharedMemberships ?? []) as Array<{ instance_name: string }>) {
       accessibleInstances.add(String(row.instance_name));
     }
@@ -3038,12 +3047,18 @@ export class AgentManager {
     return agent;
   }
 
-  private async getStagesForAccount(acesId: number) {
-    const { data, error } = await this.serviceClient
+  private async getStagesForAccount(acesId: number, pipelineId?: string | null) {
+    let query = this.serviceClient
       .from("pipeline_stages")
-      .select("id, aces_id, name, category, position")
+      .select("id, aces_id, pipeline_id, name, category, position")
       .eq("aces_id", acesId)
       .order("position", { ascending: true });
+
+    if (pipelineId) {
+      query = query.eq("pipeline_id", pipelineId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel carregar as etapas do funil", error);
@@ -3052,14 +3067,99 @@ export class AgentManager {
     return ((data ?? []) as StageRow[]).sort((a, b) => a.position - b.position);
   }
 
-  private async getAttendanceStageForAccount(acesId: number) {
-    const stages = await this.getStagesForAccount(acesId);
+  private async getDefaultPipelineId(acesId: number) {
+    const { data, error } = await this.serviceClient
+      .from("pipelines")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("is_default", true)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar o pipeline padrao", error);
+    }
+
+    if (data?.id) {
+      return String(data.id);
+    }
+
+    const { data: fallback, error: fallbackError } = await this.serviceClient
+      .from("pipelines")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (fallbackError) {
+      throw new HttpError(500, "Nao foi possivel carregar um pipeline ativo", fallbackError);
+    }
+
+    return fallback?.id ? String(fallback.id) : null;
+  }
+
+  private async getPipelineIdForStage(acesId: number, stageId: string | null) {
+    if (!stageId) return null;
+    const { data, error } = await this.serviceClient
+      .from("pipeline_stages")
+      .select("pipeline_id")
+      .eq("aces_id", acesId)
+      .eq("id", stageId)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar o pipeline da etapa", error);
+    }
+
+    return data?.pipeline_id ? String(data.pipeline_id) : null;
+  }
+
+  private async getAttendanceStageForAccount(acesId: number, pipelineId?: string | null) {
+    const resolvedPipelineId = pipelineId ?? await this.getDefaultPipelineId(acesId);
+    if (!resolvedPipelineId) return null;
+    const stages = await this.getStagesForAccount(acesId, resolvedPipelineId);
     return (
       stages.find((stage) => {
         const normalizedName = String(stage.name ?? "").trim().toLowerCase();
         return normalizedName === "em atendimento" || normalizedName === "atendimento";
       }) ?? null
     );
+  }
+
+  private async getLeadPipelineAiSettings(lead: LeadRow) {
+    const pipelineId =
+      await this.getPipelineIdForStage(lead.aces_id, lead.stage_id)
+      ?? await this.getDefaultPipelineId(lead.aces_id);
+    if (!pipelineId) {
+      return {
+        pipelineId: null,
+        replyEnabled: true,
+        classificationEnabled: false,
+      };
+    }
+
+    const { data: pipeline, error: pipelineError } = await this.serviceClient
+      .from("pipelines")
+      .select("ai_reply_enabled, ai_classification_enabled")
+      .eq("id", pipelineId)
+      .eq("aces_id", lead.aces_id)
+      .maybeSingle();
+
+    if (pipelineError) {
+      throw new HttpError(500, "Nao foi possivel consultar a classificacao do pipeline", pipelineError);
+    }
+
+    return {
+      pipelineId,
+      replyEnabled: pipeline?.ai_reply_enabled !== false,
+      classificationEnabled: pipeline?.ai_classification_enabled === true,
+    };
+  }
+
+  private async usesAutonomousPipelineClassification(lead: LeadRow) {
+    return (await this.getLeadPipelineAiSettings(lead)).classificationEnabled;
   }
 
   private async getTagsForAccount(acesId: number) {
@@ -3619,6 +3719,25 @@ export class AgentManager {
     });
   }
 
+  private isPortugueseVoice(rawVoice: unknown): boolean {
+    const voice = asRecord(rawVoice);
+    // Vozes clonadas pelo proprio usuario sao sempre incluidas independente de idioma
+    if (String(voice.category ?? "") === "cloned") return true;
+    // Verificar verified_languages (campo oficial mais preciso da API)
+    const verifiedLanguages = Array.isArray(voice.verified_languages) ? voice.verified_languages : [];
+    const hasPortugueseVerified = verifiedLanguages.some((entry) => {
+      const lang = asRecord(entry);
+      const language = String(lang.language ?? "").toLowerCase();
+      const locale = String(lang.locale ?? "").toLowerCase();
+      return language === "pt" || locale.startsWith("pt");
+    });
+    if (hasPortugueseVerified) return true;
+    // Fallback: verificar labels.accent para vozes sem verified_languages
+    const labels = asRecord(voice.labels);
+    const accent = String(labels.accent ?? "").toLowerCase();
+    return accent.includes("brazilian") || accent.includes("portuguese") || accent.startsWith("pt");
+  }
+
   async listElevenLabsVoices(
     context: AuthContext,
     agentId: string,
@@ -3643,17 +3762,19 @@ export class AgentManager {
       const payload = asRecord(response.data);
       const voices = Array.isArray(payload.voices) ? payload.voices : [];
       return {
-        voices: voices.map((value) => {
-          const voice = asRecord(value);
-          return {
-            id: String(voice.voice_id ?? ""),
-            name: String(voice.name ?? "Voz sem nome"),
-            description: asString(voice.description),
-            category: asString(voice.category),
-            previewUrl: asString(voice.preview_url),
-            attributes: asRecord(voice.labels),
-          };
-        }).filter((voice) => Boolean(voice.id)),
+        voices: voices
+          .filter((value) => this.isPortugueseVoice(value))
+          .map((value) => {
+            const voice = asRecord(value);
+            return {
+              id: String(voice.voice_id ?? ""),
+              name: String(voice.name ?? "Voz sem nome"),
+              description: asString(voice.description),
+              category: asString(voice.category),
+              previewUrl: asString(voice.preview_url),
+              attributes: asRecord(voice.labels),
+            };
+          }).filter((voice) => Boolean(voice.id)),
         hasMore: payload.has_more === true,
         nextPageToken: asString(payload.next_page_token),
       };
@@ -4462,7 +4583,12 @@ export class AgentManager {
         instance_name: String(asset.instance_name ?? ""),
         display_name: String(asset.display_name ?? ""),
         source_url: String(asset.source_url ?? ""),
-        media_kind: asset.media_kind === "document" ? ("document" as const) : ("image" as const),
+        media_kind:
+          asset.media_kind === "document"
+            ? ("document" as const)
+            : asset.media_kind === "video"
+              ? ("video" as const)
+              : ("image" as const),
         mime_type: typeof asset.mime_type === "string" ? asset.mime_type : null,
         file_name: typeof asset.file_name === "string" ? asset.file_name : null,
         file_size: typeof asset.file_size === "number" ? asset.file_size : Number(asset.file_size ?? 0) || null,
@@ -4477,7 +4603,7 @@ export class AgentManager {
       fileName: string;
       mimeType: string;
       fileSize: number;
-      kind: "document" | "image";
+      kind: "document" | "video" | "image";
     }
   ) {
     this.ensureAdmin(context);
@@ -4498,8 +4624,23 @@ export class AgentManager {
     if (input.kind !== resolvedKind) {
       throw new HttpError(400, "kind nao corresponde ao MIME type informado");
     }
+    const providerName = await this.resolveInstanceTextProvider(instanceName, context.acesId);
+    if (
+      providerName === "gupshup" &&
+      resolvedKind === "image" &&
+      mimeType !== "image/jpeg" &&
+      mimeType !== "image/png"
+    ) {
+      throw new HttpError(400, "A Gupshup aceita apenas imagens JPEG ou PNG na automacao");
+    }
     const fileSize = Number(input.fileSize);
-    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > AUTOMATION_MEDIA_MAX_FILE_SIZE) {
+    const maxFileSize =
+      resolvedKind === "image"
+        ? AUTOMATION_IMAGE_MAX_FILE_SIZE
+        : resolvedKind === "video"
+          ? AUTOMATION_VIDEO_MAX_FILE_SIZE
+          : AUTOMATION_MEDIA_MAX_FILE_SIZE;
+    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > maxFileSize) {
       throw new HttpError(400, "Tamanho do arquivo invalido para midia da automacao");
     }
     const assetId = randomUUID();
@@ -4546,7 +4687,7 @@ export class AgentManager {
       storagePath,
       uploadUrl: data.signedUrl,
       uploadToken: data.token,
-      maxFileSize: AUTOMATION_MEDIA_MAX_FILE_SIZE,
+      maxFileSize,
       mimeType,
       kind: resolvedKind,
     };
@@ -4583,7 +4724,7 @@ export class AgentManager {
           instance_name: String(asset.instance_name),
           display_name: String(asset.display_name),
           source_url: String(asset.source_url),
-          media_kind: asset.media_kind as "document" | "image",
+          media_kind: asset.media_kind as "document" | "video" | "image",
           mime_type: asset.mime_type as string | null,
           file_name: asset.file_name as string | null,
           file_size: asset.file_size as number | null,
@@ -4615,7 +4756,12 @@ export class AgentManager {
         instance_name: String(updatedAsset.instance_name ?? ""),
         display_name: String(updatedAsset.display_name ?? ""),
         source_url: String(updatedAsset.source_url ?? ""),
-        media_kind: updatedAsset.media_kind === "document" ? ("document" as const) : ("image" as const),
+        media_kind:
+          updatedAsset.media_kind === "document"
+            ? ("document" as const)
+            : updatedAsset.media_kind === "video"
+              ? ("video" as const)
+              : ("image" as const),
         mime_type: typeof updatedAsset.mime_type === "string" ? updatedAsset.mime_type : null,
         file_name: typeof updatedAsset.file_name === "string" ? updatedAsset.file_name : null,
         file_size: typeof updatedAsset.file_size === "number" ? updatedAsset.file_size : Number(updatedAsset.file_size ?? 0) || null,
@@ -4958,9 +5104,9 @@ export class AgentManager {
     return this.getStageRules(context, agentId);
   }
 
-  private async getStageRulesForAgent(agent: AgentRow) {
+  private async getStageRulesForAgent(agent: AgentRow, pipelineId?: string | null) {
     await this.syncMissingStageRules(agent);
-    const stages = await this.getStagesForAccount(agent.aces_id);
+    const stages = await this.getStagesForAccount(agent.aces_id, pipelineId);
     const { data, error } = await this.agentsClient
       .from("ai_stage_rules")
       .select("*")
@@ -6042,7 +6188,7 @@ export class AgentManager {
   }
 
   private chatMessagesCacheKey(acesId: number, leadId: string) {
-    return `crm-chat:messages:v2:${acesId}:${leadId}`;
+    return `crm-chat:messages:v3:${acesId}:${leadId}`;
   }
 
   private async invalidateChatMessagesCache(acesId: number, leadId: string) {
@@ -6307,7 +6453,7 @@ export class AgentManager {
   ) {
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, como_quer_ser_percebido, qual_imagem_passar, last_message_at, last_lead_inbound_at, updated_at")
       .eq("id", leadId)
       .eq("aces_id", acesId)
       .maybeSingle();
@@ -6331,7 +6477,7 @@ export class AgentManager {
     const variants = phoneVariants(phone);
     const { data, error } = await this.serviceClient
       .from("leads")
-      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, last_message_at, updated_at")
+      .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, last_message_at, last_lead_inbound_at, updated_at")
       .eq("aces_id", acesId)
       .in("contact_phone", variants)
       .order("updated_at", { ascending: false })
@@ -6395,21 +6541,61 @@ export class AgentManager {
     return lead;
   }
 
-  private async getDefaultLeadOwnerId(acesId: number) {
-    const { data, error } = await this.serviceClient
+  private async getDefaultLeadOwnerId(acesId: number, instanceName: string) {
+    const { data: memberships, error: membershipsError } = await this.serviceClient
+      .from("instance_access_memberships")
+      .select("crm_user_id")
+      .eq("aces_id", acesId)
+      .eq("instance_name", instanceName)
+      .eq("is_active", true)
+      .in("access_level", ["editor", "admin"]);
+
+    if (membershipsError) {
+      throw new HttpError(500, "Nao foi possivel definir o responsavel da instancia", membershipsError);
+    }
+
+    const eligibleSellerIds = Array.from(
+      new Set((memberships ?? []).map((row) => String(row.crm_user_id)).filter(Boolean))
+    );
+
+    let sellerQuery = this.serviceClient
       .from("users")
       .select("id")
       .eq("aces_id", acesId)
-      .neq("role", "NENHUM")
+      .eq("role", "VENDEDOR")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (eligibleSellerIds.length > 0) {
+      sellerQuery = sellerQuery.in("id", eligibleSellerIds);
+    } else {
+      sellerQuery = sellerQuery.in("id", ["00000000-0000-0000-0000-000000000000"]);
+    }
+
+    const { data: seller, error: sellerError } = await sellerQuery.maybeSingle();
+
+    if (sellerError) {
+      throw new HttpError(500, "Nao foi possivel definir o vendedor responsavel", sellerError);
+    }
+
+    if (seller?.id) {
+      return String(seller.id);
+    }
+
+    const { data: admin, error: adminError } = await this.serviceClient
+      .from("users")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("role", "ADMIN")
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 
-    if (error) {
-      throw new HttpError(500, "Nao foi possivel definir o responsavel padrao do lead", error);
+    if (adminError) {
+      throw new HttpError(500, "Nao foi possivel definir o responsavel padrao do lead", adminError);
     }
 
-    return data?.id ? String(data.id) : null;
+    return admin?.id ? String(admin.id) : null;
   }
 
   private async validateLeadOwnerForAccount(acesId: number, ownerId: string) {
@@ -6477,13 +6663,16 @@ export class AgentManager {
       return found;
     }
 
-    const stages = await this.getStagesForAccount(acesId);
+    const defaultPipelineId = await this.getDefaultPipelineId(acesId);
+    const stages = await this.getStagesForAccount(acesId, defaultPipelineId);
     const fallbackStage = stages.find((stage) => stage.category === "Aberto") ?? stages[0] ?? null;
-    const attendanceStage = options?.preferAttendanceStage ? await this.getAttendanceStageForAccount(acesId) : null;
+    const attendanceStage = options?.preferAttendanceStage
+      ? await this.getAttendanceStageForAccount(acesId, defaultPipelineId)
+      : null;
     const selectedStage = attendanceStage ?? fallbackStage;
     const preferredPhone = normalizePhone(phone);
     const name = payloadName || `Lead ${preferredPhone}`;
-    const resolvedOwnerId = validatedOwnerId ?? await this.getDefaultLeadOwnerId(acesId);
+    const resolvedOwnerId = validatedOwnerId ?? await this.getDefaultLeadOwnerId(acesId, instanceName);
 
     const { data, error } = await this.serviceClient
       .from("leads")
@@ -6807,7 +6996,10 @@ export class AgentManager {
     return parseEvolutionWebhookPayload(payload);
   }
 
-  private async normalizeInboundContent(message: ParsedWebhookMessage) {
+  private async normalizeInboundContent(
+    message: ParsedWebhookMessage,
+    resolvedMedia?: ResolvedInboundMedia | null,
+  ) {
     try {
       if (message.content.trim()) {
         return message.content.trim();
@@ -6819,7 +7011,7 @@ export class AgentManager {
 
       if (this.openai) {
         try {
-          const normalized = await this.normalizeMediaWithOpenAi(message);
+          const normalized = await this.normalizeMediaWithOpenAi(message, resolvedMedia);
           if (normalized) {
             return normalized;
           }
@@ -6836,7 +7028,7 @@ export class AgentManager {
             : "[imagem recebida]";
       }
 
-      const mediaPart = await this.buildMediaPart(message);
+      const mediaPart = await this.buildMediaPart(message, resolvedMedia);
       if (!mediaPart) {
         return message.mediaKind === "audio"
           ? "[audio recebido]"
@@ -6874,13 +7066,16 @@ export class AgentManager {
     }
   }
 
-  private async normalizeMediaWithOpenAi(message: ParsedWebhookMessage) {
+  private async normalizeMediaWithOpenAi(
+    message: ParsedWebhookMessage,
+    resolvedMedia?: ResolvedInboundMedia | null,
+  ) {
     if (!this.openai) {
       return null;
     }
 
     if (message.mediaKind === "audio") {
-      const media = await this.resolveMediaBytes(message);
+      const media = resolvedMedia === undefined ? await this.resolveMediaBytes(message) : resolvedMedia;
       if (!media) {
         return null;
       }
@@ -6899,7 +7094,7 @@ export class AgentManager {
     }
 
     if (message.mediaKind === "image") {
-      const media = await this.resolveMediaBytes(message);
+      const media = resolvedMedia === undefined ? await this.resolveMediaBytes(message) : resolvedMedia;
       if (!media) {
         return null;
       }
@@ -6930,8 +7125,11 @@ export class AgentManager {
     return null;
   }
 
-  private async buildMediaPart(message: ParsedWebhookMessage) {
-    const media = await this.resolveMediaBytes(message);
+  private async buildMediaPart(
+    message: ParsedWebhookMessage,
+    resolvedMedia?: ResolvedInboundMedia | null,
+  ) {
+    const media = resolvedMedia === undefined ? await this.resolveMediaBytes(message) : resolvedMedia;
     if (!media) {
       return null;
     }
@@ -6988,6 +7186,10 @@ export class AgentManager {
       }
     }
 
+    if (!allowsEvolutionMediaFallback(message.provider)) {
+      return null;
+    }
+
     const evolutionMedia = await this.fetchMediaFromEvolution(message, mimeType);
     if (evolutionMedia) {
       return evolutionMedia;
@@ -6998,6 +7200,29 @@ export class AgentManager {
 
   private async tryDownloadMediaUrl(message: ParsedWebhookMessage, mimeType: string) {
     const mediaUrl = requireValue(message.mediaUrl, "URL de midia ausente");
+    if (message.provider === "gupshup") {
+      try {
+        return await downloadGupshupMedia({
+          mediaUrl,
+          mediaUrlExpiresAt: message.mediaUrlExpiresAt,
+          expectedMimeType: mimeType,
+          maxBytes: CHAT_ATTACHMENT_MAX_FILE_SIZE,
+        });
+      } catch (error) {
+        const failure = error instanceof GupshupMediaDownloadError ? error : null;
+        console.warn("[crm-ai] Falha ao baixar midia Gupshup", {
+          provider: message.provider,
+          instanceName: message.instanceName,
+          messageId: message.messageId,
+          failureKind: failure?.kind ?? "network",
+          status: failure?.status ?? null,
+          responseBody: failure?.responseBody ?? null,
+          message: error instanceof Error ? error.message : "Falha desconhecida",
+        });
+        return null;
+      }
+    }
+
     const attempts: Array<{ headers?: Record<string, string> }> = [{}];
     const transport = await this.resolveEvolutionTransport(message.instanceName);
     if (this.isSameUrlOrigin(mediaUrl, transport.apiUrl)) {
@@ -7148,17 +7373,25 @@ export class AgentManager {
     return fallback;
   }
 
-  private async resolveInstanceTextProvider(instanceName: string): Promise<WhatsAppProviderName> {
+  private async resolveInstanceTextProvider(
+    instanceName: string,
+    acesId?: number
+  ): Promise<WhatsAppProviderName> {
     const metaClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
       db: { schema: "meta" },
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const { data, error } = await metaClient
+    let query = metaClient
       .from("instance")
       .select("provider")
-      .eq("instance_name", instanceName)
-      .maybeSingle();
+      .eq("instance_name", instanceName);
+
+    if (acesId !== undefined) {
+      query = query.eq("aces_id", acesId);
+    }
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel resolver o provider da instancia", error);
@@ -7167,6 +7400,42 @@ export class AgentManager {
     if (data?.provider === "gupshup") return "gupshup";
     if (data?.provider === "meta") return "meta";
     return "evolution";
+  }
+
+  private async resolveLatestLeadInboundAt(lead: LeadRow) {
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("sent_at")
+      .eq("aces_id", lead.aces_id)
+      .eq("lead_id", lead.id)
+      .eq("direction", "inbound")
+      .eq("source_type", "lead")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel calcular a janela de atendimento", error);
+    }
+
+    const candidates = [lead.last_lead_inbound_at, data?.sent_at]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .map((value) => ({ value, timestamp: Date.parse(value) }))
+      .filter((candidate) => candidate.value && Number.isFinite(candidate.timestamp))
+      .sort((left, right) => right.timestamp - left.timestamp);
+
+    return candidates[0]?.value ?? null;
+  }
+
+  private async resolveChatSendPolicy(lead: LeadRow, instanceName: string) {
+    const provider = await this.resolveInstanceTextProvider(instanceName, lead.aces_id);
+
+    if (provider !== "gupshup") {
+      return buildChatSendPolicy(provider, lead.last_lead_inbound_at);
+    }
+
+    const lastInboundAt = await this.resolveLatestLeadInboundAt(lead);
+    return buildChatSendPolicy(provider, lastInboundAt);
   }
 
   private async resolveGupshupTextProvider(instanceName: string) {
@@ -7212,7 +7481,7 @@ export class AgentManager {
     }
   ) {
     const recipient = resolveWhatsappRecipient(phone);
-    const providerName = await this.resolveInstanceTextProvider(instanceName);
+    const providerName = await this.resolveInstanceTextProvider(instanceName, context?.acesId);
 
     if (providerName === "gupshup") {
       const provider = await this.resolveGupshupTextProvider(instanceName);
@@ -8640,8 +8909,15 @@ export class AgentManager {
     validStageIds: Set<string>;
   }): Promise<CrmDecisionApplication> {
     const { agent, lead, response, tags, validStageIds } = params;
-    const checkedAt = new Date().toISOString();
-    const stageResult = await this.applyStageDecision(agent, lead, response, validStageIds);
+    const autonomousClassificationEnabled = await this.usesAutonomousPipelineClassification(lead);
+    const checkedAt = autonomousClassificationEnabled ? null : new Date().toISOString();
+    const stageResult = autonomousClassificationEnabled
+      ? {
+          appliedStageId: null,
+          changed: false,
+          skippedReason: "deferred_to_pipeline_worker",
+        }
+      : await this.applyStageDecision(agent, lead, response, validStageIds);
     const tagById = new Map(tags.map((tag) => [tag.id, tag]));
     const selectedTagIds = new Set<string>();
     const rejectedTagIds = new Set<string>();
@@ -8702,34 +8978,37 @@ export class AgentManager {
       }
     }
 
-    const nextNotes = upsertAiSummaryBlock(
-      lead.notes,
-      response.attendance_summary.text,
-      checkedAt
-    );
-    const summaryUpdated = nextNotes !== (lead.notes ?? null);
-
-    const leadUpdate: JsonRecord = {
-      check: checkedAt,
-      updated_at: checkedAt,
-    };
-
-    if (summaryUpdated) {
-      leadUpdate.notes = nextNotes;
-    }
-
-    const { error: leadUpdateError } = await this.serviceClient
-      .from("leads")
-      .update(leadUpdate)
-      .eq("id", lead.id)
-      .eq("aces_id", lead.aces_id);
-
-    if (leadUpdateError) {
-      throw new HttpError(
-        500,
-        "Nao foi possivel atualizar resumo/verificacao do lead pela IA",
-        leadUpdateError
+    let summaryUpdated = false;
+    if (!autonomousClassificationEnabled && checkedAt) {
+      const nextNotes = upsertAiSummaryBlock(
+        lead.notes,
+        response.attendance_summary.text,
+        checkedAt
       );
+      summaryUpdated = nextNotes !== (lead.notes ?? null);
+
+      const leadUpdate: JsonRecord = {
+        check: checkedAt,
+        updated_at: checkedAt,
+      };
+
+      if (summaryUpdated) {
+        leadUpdate.notes = nextNotes;
+      }
+
+      const { error: leadUpdateError } = await this.serviceClient
+        .from("leads")
+        .update(leadUpdate)
+        .eq("id", lead.id)
+        .eq("aces_id", lead.aces_id);
+
+      if (leadUpdateError) {
+        throw new HttpError(
+          500,
+          "Nao foi possivel atualizar resumo/verificacao do lead pela IA",
+          leadUpdateError
+        );
+      }
     }
 
     const audit = {
@@ -8748,6 +9027,7 @@ export class AgentManager {
       },
       attendance_summary: {
         updated: summaryUpdated,
+        deferred_to_pipeline_worker: autonomousClassificationEnabled,
         reason: response.attendance_summary.reason,
         confidence: response.attendance_summary.confidence,
       },
@@ -8764,7 +9044,7 @@ export class AgentManager {
       rejectedTagIds: Array.from(rejectedTagIds),
       summaryUpdated,
       leadCheckedAt: checkedAt,
-      changed: stageResult.changed || appliedTagIds.length > 0 || summaryUpdated || Boolean(checkedAt),
+      changed: stageResult.changed || appliedTagIds.length > 0 || summaryUpdated,
       audit,
     };
   }
@@ -9391,6 +9671,11 @@ export class AgentManager {
       return;
     }
 
+    const pipelineAiSettings = await this.getLeadPipelineAiSettings(lead);
+    if (!pipelineAiSettings.replyEnabled) {
+      return;
+    }
+
     const opticsImageAnalyses = await this.processBufferedOpticsImages(agent, lead, bufferedEntries);
 
     const leadState = await this.getLeadState(agent.id, lead.id);
@@ -9412,7 +9697,7 @@ export class AgentManager {
       return;
     }
 
-    const rules = await this.getStageRulesForAgent(agent);
+    const rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
     const tags = await this.getTagsForAccount(agent.aces_id);
     const conversation = await this.fetchRecentConversation(lead.id);
     const temporalContext = buildNativeTemporalContext();
@@ -9426,6 +9711,22 @@ export class AgentManager {
 
     try {
       const result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+      await tryRecordAiUsage(this.serviceClient, {
+        idempotencyKey: `ai_run:${runId}:crm_analysis:${result.modelName}:${result.attempt}`,
+        acesId: agent.aces_id,
+        featureKey: "sdr_analysis",
+        provider: "google_gemini",
+        model: result.modelName,
+        lineItems: tokenLineItems(result.tokensIn, result.tokensOut),
+        agentId: agent.id,
+        leadId: lead.id,
+        instanceName: agent.instance_name,
+        metadata: {
+          run_id: runId,
+          used_fallback_model: result.usedFallback,
+          generation_attempt: result.attempt,
+        },
+      });
       const validStageIds = new Set(rules.map(({ stage }) => stage.id));
       const suggestedStageId =
         result.parsed.stage_decision.stage_id && validStageIds.has(result.parsed.stage_decision.stage_id)
@@ -9444,6 +9745,22 @@ export class AgentManager {
         nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
         handoffTriggered: result.parsed.should_handoff,
         visagism: asRecord(visagismApplication),
+      });
+      await tryRecordAiUsage(this.serviceClient, {
+        idempotencyKey: `ai_run:${runId}:customer_reply:${replyResult.modelName}:${replyResult.attempt}`,
+        acesId: agent.aces_id,
+        featureKey: "sdr_reply",
+        provider: "google_gemini",
+        model: replyResult.modelName,
+        lineItems: tokenLineItems(replyResult.tokensIn, replyResult.tokensOut),
+        agentId: agent.id,
+        leadId: lead.id,
+        instanceName: agent.instance_name,
+        metadata: {
+          run_id: runId,
+          used_fallback_model: replyResult.usedFallback,
+          generation_attempt: replyResult.attempt,
+        },
       });
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const visagismRecord = asRecord(visagismApplication);
@@ -9745,7 +10062,7 @@ export class AgentManager {
         : false;
     const instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
     const agent = instanceAuthorized ? candidateAgent : null;
-    const ownerIdForLead = hasAdditionalMembership ? null : agent?.created_by ?? null;
+    const ownerIdForLead = null;
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
       ? "[imagem recebida para analise optica]"
       : await this.normalizeInboundContent(message);
@@ -9941,8 +10258,12 @@ export class AgentManager {
       message.instanceName,
       lead.interaction_mode
     );
+    const pipelineReplyEnabled =
+      !agent || !aiState.enabled
+        ? true
+        : (await this.getLeadPipelineAiSettings(lead)).replyEnabled;
 
-    if (!agent || !aiState.enabled) {
+    if (!agent || !aiState.enabled || !pipelineReplyEnabled) {
       return {
         success: true,
         leadId: lead.id,
@@ -9950,7 +10271,9 @@ export class AgentManager {
         agentId: agent?.id ?? null,
         capturedOnly: true,
         reason:
-          aiState.reason === "manual_off"
+          !pipelineReplyEnabled
+            ? "Mensagem registrada com respostas da IA desligadas neste pipeline"
+            : aiState.reason === "manual_off"
             ? "Mensagem registrada com IA desligada para este lead"
             : aiState.reason === "human_handoff"
               ? "Mensagem registrada com handoff humano ativo"
@@ -10024,10 +10347,15 @@ export class AgentManager {
         : false;
     const instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
     const agent = instanceAuthorized ? candidateAgent : null;
-    const ownerIdForLead = hasAdditionalMembership ? null : agent?.created_by ?? null;
+    const ownerIdForLead = null;
+    const resolvedGupshupMedia = await prefetchGupshupInboundMedia(
+      message.provider,
+      Boolean(message.mediaKind),
+      () => this.resolveMediaBytes(message),
+    );
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
       ? "[imagem recebida para analise optica]"
-      : await this.normalizeInboundContent(message);
+      : await this.normalizeInboundContent(message, resolvedGupshupMedia);
 
     const lead = await this.findOrCreateLead(
       acesId,
@@ -10037,6 +10365,8 @@ export class AgentManager {
       ownerIdForLead,
       { preferAttendanceStage: true }
     );
+    const providerPayloadSummary = summarizeProviderPayload(message.raw);
+    const quickReplySelection = extractProviderQuickReplySelection(message.raw);
     const savedMessage = await this.saveMessage({
       leadId: lead.id,
       acesId,
@@ -10049,13 +10379,19 @@ export class AgentManager {
       provider: message.provider,
       providerMessageId: message.messageId,
       providerStatus: "accepted",
-      providerPayloadSummary: summarizeProviderPayload(message.raw),
+      providerPayloadSummary: quickReplySelection
+        ? {
+            raw: providerPayloadSummary,
+            chatInteraction: toStoredQuickReplyInteraction(quickReplySelection),
+          }
+        : providerPayloadSummary,
     });
     await this.tryPersistWebhookMediaAttachment({
       acesId,
       leadId: lead.id,
       messageId: savedMessage.id,
       message,
+      resolvedMedia: resolvedGupshupMedia,
     });
 
     const aiState = await this.resolveLeadAiState(
@@ -10064,7 +10400,11 @@ export class AgentManager {
       message.instanceName,
       lead.interaction_mode
     );
-    if (!agent || !aiState.enabled) {
+    const pipelineReplyEnabled =
+      !agent || !aiState.enabled
+        ? true
+        : (await this.getLeadPipelineAiSettings(lead)).replyEnabled;
+    if (!agent || !aiState.enabled || !pipelineReplyEnabled) {
       return {
         success: true,
         leadId: lead.id,
@@ -10072,7 +10412,9 @@ export class AgentManager {
         agentId: agent?.id ?? null,
         capturedOnly: true,
         reason:
-          aiState.reason === "manual_off"
+          !pipelineReplyEnabled
+            ? "Mensagem registrada com respostas da IA desligadas neste pipeline"
+            : aiState.reason === "manual_off"
             ? "Mensagem registrada com IA desligada para este lead"
             : aiState.reason === "human_handoff"
               ? "Mensagem registrada com handoff humano ativo"
@@ -10204,6 +10546,10 @@ export class AgentManager {
     }
 
     const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    const instanceName = lead.instancia?.trim();
+    const sendPolicy = instanceName
+      ? await this.resolveChatSendPolicy(lead, instanceName)
+      : buildChatSendPolicy("evolution", lead.last_lead_inbound_at);
     const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id);
 
     if (this.redis) {
@@ -10211,7 +10557,11 @@ export class AgentManager {
         const cached = await this.redis.get(cacheKey);
         if (cached) {
           try {
-            return { success: true, messages: JSON.parse(cached) as ChatMessageResponse[] };
+            return {
+              success: true,
+              messages: JSON.parse(cached) as ChatMessageResponse[],
+              sendPolicy,
+            };
           } catch {
             await this.redis.del(cacheKey);
           }
@@ -10228,7 +10578,7 @@ export class AgentManager {
     const { data: messagesData, error: messagesError } = await this.serviceClient
       .from("message_history")
       .select(
-        "id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, provider_status"
+        "id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, provider, provider_message_id, provider_status, provider_payload_summary"
       )
       .eq("lead_id", lead.id)
       .eq("aces_id", context.acesId)
@@ -10307,20 +10657,25 @@ export class AgentManager {
       }
     }
 
-    const responseMessages: ChatMessageResponse[] = messages.map((message) => ({
-      id: message.id,
-      leadId: message.lead_id,
-      content: message.content,
-      direction: message.direction,
-      directionCode: message.direction.toLowerCase() === "outbound" ? 2 : 1,
-      sentAt: message.sent_at,
-      leadName: lead.name ?? "",
-      senderName: message.created_by ? userNames.get(message.created_by) ?? null : null,
-      sourceType: message.source_type,
-      systemKind: deriveChatSystemKind(message),
-      providerStatus: message.provider_status ?? null,
-      attachments: attachmentsByMessageId.get(message.id) ?? [],
-    }));
+    const normalizedQuickReplies = normalizeQuickReplyMessages(messages);
+    const responseMessages: ChatMessageResponse[] = messages.map((message) => {
+      const normalized = normalizedQuickReplies.get(message.id);
+      return {
+        id: message.id,
+        leadId: message.lead_id,
+        content: normalized?.content ?? message.content,
+        direction: message.direction,
+        directionCode: message.direction.toLowerCase() === "outbound" ? 2 : 1,
+        sentAt: message.sent_at,
+        leadName: lead.name ?? "",
+        senderName: message.created_by ? userNames.get(message.created_by) ?? null : null,
+        sourceType: message.source_type,
+        systemKind: deriveChatSystemKind(message),
+        providerStatus: message.provider_status ?? null,
+        quickReply: normalized?.quickReply ?? null,
+        attachments: attachmentsByMessageId.get(message.id) ?? [],
+      };
+    });
 
     const latestMessageSentAtMs = messages.reduce((latest, message) => {
       const sentAtMs = Date.parse(message.sent_at);
@@ -10342,7 +10697,7 @@ export class AgentManager {
       }
     }
 
-    return { success: true, messages: responseMessages };
+    return { success: true, messages: responseMessages, sendPolicy };
   }
 
   private async loadIssuedUploadIntent(params: {
@@ -10492,6 +10847,7 @@ export class AgentManager {
     leadId: string;
     messageId: string;
     message: ParsedWebhookMessage;
+    resolvedMedia?: ResolvedInboundMedia | null;
   }) {
     const mediaKind = params.message.mediaKind;
     if (!mediaKind) {
@@ -10503,7 +10859,10 @@ export class AgentManager {
       return null;
     }
 
-    const media = await this.resolveMediaBytes(params.message);
+    const media =
+      params.resolvedMedia === undefined
+        ? await this.resolveMediaBytes(params.message)
+        : params.resolvedMedia;
     if (!media) {
       return null;
     }
@@ -10570,6 +10929,7 @@ export class AgentManager {
     leadId: string | null;
     messageId: string | null;
     message: ParsedWebhookMessage;
+    resolvedMedia?: ResolvedInboundMedia | null;
   }) {
     if (!params.leadId || !params.messageId || !params.message.mediaKind) {
       return null;
@@ -10581,6 +10941,7 @@ export class AgentManager {
         leadId: params.leadId,
         messageId: params.messageId,
         message: params.message,
+        resolvedMedia: params.resolvedMedia,
       });
     } catch (error) {
       console.warn("[crm-ai] Falha ao persistir midia do webhook no chat:", {
@@ -10863,6 +11224,18 @@ export class AgentManager {
     }
 
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
+
+    const sendPolicy = await this.resolveChatSendPolicy(lead, instanceName);
+    if (sendPolicy.mode === "template_required") {
+      throw new HttpError(
+        409,
+        "A janela de atendimento foi encerrada. Envie um template aprovado pela area de Automacoes.",
+        {
+          code: "GUPSHUP_TEMPLATE_REQUIRED",
+          sendPolicy,
+        }
+      );
+    }
 
     const configuredAgent = await this.getAnyAgentByInstance(
       instanceName,

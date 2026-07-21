@@ -1,9 +1,9 @@
 import { Lead } from "@/hooks/useLeads";
 import { PipelineStage } from "@/types";
 import { LeadCard } from "./LeadCard";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { MoreVertical, Edit2, Trash2, GripVertical } from "lucide-react";
+import { MoreVertical, Edit2, Trash2, GripVertical, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
@@ -41,6 +41,13 @@ export function KanbanColumn({
   const isAdmin = userRole === "ADMIN";
   const [isLeadDragOver, setIsLeadDragOver] = useState(false);
   const [isColumnDragOver, setIsColumnDragOver] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(6);
+  const visibleLeads = useMemo(() => leads.slice(0, visibleCount), [leads, visibleCount]);
+  const remainingLeads = Math.max(0, leads.length - visibleLeads.length);
+
+  useEffect(() => {
+    setVisibleCount(6);
+  }, [column.id]);
 
   const handleLeadDragOver = (e: React.DragEvent) => {
     if (activeDragType !== "lead") return;
@@ -88,7 +95,7 @@ export function KanbanColumn({
   return (
     <div
       className={cn(
-        "flex-1 min-w-[280px] w-[280px] bg-[var(--color-bg-surface)] rounded-xl transition-all relative flex flex-col shrink-0 overflow-hidden border border-[var(--color-border-subtle)] border-t-2",
+        "pipeline-column",
         isLeadDragOver && "bg-[var(--color-border-subtle)]",
         isDraggingColumn && "opacity-50"
       )}
@@ -137,12 +144,13 @@ export function KanbanColumn({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-[var(--color-bg-elevated)] border-[var(--color-border-subtle)] text-foreground rounded-xl">
-              <DropdownMenuItem onClick={() => openModal("STAGE_FORM", { stage: column })} className="focus:bg-[var(--color-bg-surface)] focus:text-foreground cursor-pointer rounded-lg">
+              <DropdownMenuItem onClick={() => openModal("STAGE_FORM", { stage: column, pipelineId: column.pipeline_id })} className="focus:bg-[var(--color-bg-surface)] focus:text-foreground cursor-pointer rounded-lg">
                 <Edit2 className="w-4 h-4 mr-2 opacity-70" />
                 Editar Etapa
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => openModal("DELETE_STAGE", { stage: column })}
+                disabled={column.isAttendanceStage}
                 className="text-[var(--color-destructive)] focus:bg-[var(--color-destructive)]/10 focus:text-[var(--color-destructive)] cursor-pointer rounded-lg"
               >
                 <Trash2 className="w-4 h-4 mr-2" />
@@ -153,11 +161,11 @@ export function KanbanColumn({
         )}
       </div>
 
-      <div className={cn("p-2 space-y-2 flex-1 overflow-y-auto min-h-[100px]", isLeadDragOver && "opacity-70")}>
+      <div className={cn("pipeline-column__leads", isLeadDragOver && "opacity-70")}>
         {leads.length === 0 ? (
           <div className="text-center py-12 text-[var(--color-text-muted)] text-xs tracking-wider uppercase font-medium">Nenhum lead nesta etapa</div>
         ) : (
-          leads.map((lead) => (
+          visibleLeads.map((lead) => (
             <LeadCard
               key={lead.id}
               lead={lead}
@@ -165,6 +173,18 @@ export function KanbanColumn({
               onDragEnd={onLeadDragEnd}
             />
           ))
+        )}
+        {remainingLeads > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="pipeline-show-more"
+            onClick={() => setVisibleCount((count) => count + 10)}
+          >
+            <ChevronDown className="h-4 w-4" />
+            Ver mais {Math.min(10, remainingLeads)}
+            <span className="pipeline-show-more__remaining">{remainingLeads} restantes</span>
+          </Button>
         )}
       </div>
     </div>

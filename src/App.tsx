@@ -21,6 +21,7 @@ const Chat = lazy(() => import("./pages/Chat"));
 const Calendar = lazy(() => import("./pages/Calendar"));
 const Agentes = lazy(() => import("./pages/Agentes"));
 const Auth = lazy(() => import("./pages/Auth"));
+const Updates = lazy(() => import("./pages/Updates"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
@@ -45,6 +46,7 @@ const App = () => (
             >
               <Routes>
                 <Route path="/auth" element={<Auth />} />
+                <Route path="/updates" element={<Updates />} />
                 <Route path="/" element={<ProtectedRoute><MainLayout><Dashboard /></MainLayout></ProtectedRoute>} />
                 <Route path="/pipeline" element={<ProtectedRoute><MainLayout><Pipeline /></MainLayout></ProtectedRoute>} />
                 <Route path="/chat" element={<ProtectedRoute><MainLayout><Chat /></MainLayout></ProtectedRoute>} />

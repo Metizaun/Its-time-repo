@@ -307,6 +307,7 @@ function parseV2InboundEvent(root: Record<string, unknown>): ParsedInboundEvent 
         defaultMimeType(mediaKind),
       mediaBase64: asString(media.base64),
       mediaUrl: asString(media.url) ?? (mediaKind ? asString(media.text) : null),
+      mediaUrlExpiresAt: optionalTimestampToIso(media.urlExpiry),
       fileName:
         asString(media.name) ?? asString(media.fileName) ?? asString(media.filename),
       messageType,
@@ -504,6 +505,23 @@ function timestampToIso(timestamp: unknown) {
   }
 
   return new Date().toISOString();
+}
+
+function optionalTimestampToIso(timestamp: unknown) {
+  if (timestamp === null || timestamp === undefined || timestamp === "") return null;
+  const numeric = typeof timestamp === "number" ? timestamp : Number(timestamp);
+  if (Number.isFinite(numeric)) {
+    const milliseconds = numeric >= 1_000_000_000_000 ? numeric : numeric * 1000;
+    const parsed = new Date(milliseconds);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  if (typeof timestamp === "string") {
+    const parsed = new Date(timestamp);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+
+  return null;
 }
 
 function normalizeGupshupStatus(status: string): string | null {

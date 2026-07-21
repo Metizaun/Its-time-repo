@@ -24,7 +24,7 @@ export type SendMediaInput = {
   mediaUrl: string;
   mimeType: string;
   fileName: string;
-  kind: "image" | "audio" | "document";
+  kind: "image" | "video" | "audio" | "document";
   caption?: string | null;
   templateName?: string | null;
   languageCode?: string | null;

@@ -15,11 +15,16 @@ type CrmProfileResponse = {
   };
 };
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Erro inesperado";
+}
+
 function normalizeStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function normalizeStage(row: Record<string, unknown>): PipelineStage {
+  const semanticKey = row.classifier_semantic_key ? String(row.classifier_semantic_key) : null;
   return {
     ...(row as Omit<
       PipelineStage,
@@ -30,6 +35,9 @@ function normalizeStage(row: Record<string, unknown>): PipelineStage {
     classifier_positive_signals: normalizeStringArray(row.classifier_positive_signals),
     classifier_negative_signals: normalizeStringArray(row.classifier_negative_signals),
     classifier_examples: normalizeStringArray(row.classifier_examples),
+    classifier_semantic_key: semanticKey,
+    classifier_is_destination: row.classifier_is_destination !== false,
+    isAttendanceStage: semanticKey === "active_service",
   };
 }
 
@@ -79,7 +87,7 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
 
       if (error) throw error;
       setStages((data || []).map((row) => normalizeStage(row as Record<string, unknown>)));
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao carregar etapas do pipeline:", error);
       toast.error("Erro ao carregar etapas do pipeline");
     } finally {
@@ -182,9 +190,9 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
       notifyStagesUpdated();
       toast.success("Etapa criada com sucesso!");
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao criar etapa:", error);
-      toast.error("Erro ao criar etapa", { description: error.message });
+      toast.error("Erro ao criar etapa", { description: getErrorMessage(error) });
       return { data: null, error };
     }
   };
@@ -209,17 +217,23 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
       notifyStagesUpdated();
       toast.success("Etapa atualizada!");
       return { data, error: null };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao atualizar etapa:", error);
-      toast.error("Erro ao atualizar etapa", { description: error.message });
+      toast.error("Erro ao atualizar etapa", { description: getErrorMessage(error) });
       return { data: null, error };
     }
   };
 
   const deleteStage = async (id: string, migrateToStageId?: string) => {
     try {
+      if (stages.find((stage) => stage.id === id)?.isAttendanceStage) {
+        throw new Error("Transfira a funcao de Atendimento para outra etapa antes de excluir esta coluna.");
+      }
       if (migrateToStageId === id) {
         throw new Error("A etapa de destino deve ser diferente da etapa excluida.");
+      }
+      if (migrateToStageId && !stages.some((stage) => stage.id === migrateToStageId)) {
+        throw new Error("A etapa de destino deve pertencer ao mesmo pipeline.");
       }
 
       const { count: leadsInStageCount, error: countError } = await supabase
@@ -252,10 +266,27 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
       notifyStagesUpdated();
       toast.success("Etapa excluida com sucesso!");
       return { error: null };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao excluir etapa:", error);
-      toast.error("Erro ao excluir etapa", { description: error.message });
+      toast.error("Erro ao excluir etapa", { description: getErrorMessage(error) });
       return { error };
+    }
+  };
+
+  const designateAttendanceStage = async (targetPipelineId: string, stageId: string) => {
+    try {
+      const { data, error } = await supabase.rpc("rpc_designate_attendance_stage", {
+        p_pipeline_id: targetPipelineId,
+        p_stage_id: stageId,
+      });
+      if (error) throw error;
+      await fetchStages();
+      notifyStagesUpdated();
+      toast.success("Etapa de Atendimento atualizada");
+      return { data, error: null };
+    } catch (error: unknown) {
+      toast.error("Nao foi possivel transferir o Atendimento", { description: getErrorMessage(error) });
+      return { data: null, error };
     }
   };
 
@@ -274,7 +305,7 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
       await fetchStages();
       notifyStagesUpdated();
       return { error: null };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao reordenar etapas:", error);
       toast.error("Erro ao reordenar etapas");
       fetchStages();
@@ -327,9 +358,8 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
 
       notifyStagesUpdated();
       return { data, error: null, limitReached: false };
-    } catch (error: any) {
-      const message =
-        typeof error?.message === "string" ? error.message : "Erro ao atualizar selecao do funil.";
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
       const limitReached = message.toLowerCase().includes("maximum of 5 funnel stages");
 
       if (limitReached) {
@@ -351,5 +381,6 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
     deleteStage,
     reorderStages,
     toggleFunnelStage,
+    designateAttendanceStage,
   };
 }

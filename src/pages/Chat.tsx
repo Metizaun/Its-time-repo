@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { ChatHeader } from "@/components/chat/ChatHeader";
 import { ChatInput } from "@/components/chat/ChatInput";
+import { ChatWindowNotice } from "@/components/chat/ChatWindowNotice";
 import { MessageList } from "@/components/chat/MessageList";
 import { LeadSidebar } from "@/components/leads/LeadSidebar";
 import EditLeadModal from "@/components/modals/EditLeadModal";
@@ -18,10 +19,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/hooks/useChat";
 import { useLeadAiControl } from "@/hooks/useLeadAiControl";
+import { useInstances } from "@/hooks/useInstances";
 import { type Lead, useLeads } from "@/hooks/useLeads";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
@@ -35,7 +38,8 @@ import type { ChatComposerPayload } from "@/types/chat";
 export default function Chat() {
   const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
   const { pipelines, loading: pipelinesLoading } = usePipelines();
-  const { ui } = useApp();
+  const { instances, loading: instancesLoading } = useInstances();
+  const { setSearchQuery, ui } = useApp();
   const { userRole } = useAuth();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
@@ -43,44 +47,67 @@ export default function Chat() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
-  const [activeFilter, setActiveFilter] = useState<"all" | "manual">("all");
+  const [activeFilter, setActiveFilter] = useState<"all" | "unread" | "manual">("all");
+  const [selectedInstance, setSelectedInstance] = useState("all");
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
   const [finalizeStageId, setFinalizeStageId] = useState("");
   const [finalizePipelineId, setFinalizePipelineId] = useState("");
   const [finalizingHandoff, setFinalizingHandoff] = useState(false);
 
-  const { messages, loading: messagesLoading, sendMessage } = useChat(selectedLeadId);
+  const { messages, sendPolicy, loading: messagesLoading, sendMessage } = useChat(selectedLeadId);
   const { byLead: unreadByLead, markRead } = useChatUnread();
   const { stages, loading: stagesLoading } = usePipelineStages(
     finalizePipelineId || null,
     finalizeDialogOpen && Boolean(finalizePipelineId)
   );
 
-  const filteredLeads = useMemo(() => {
-    if (!ui.searchQuery) return leads;
+  const searchFilteredLeads = useMemo(() => {
+    const query = ui.searchQuery.trim().toLocaleLowerCase("pt-BR");
+    if (!query) return leads;
 
-    const query = ui.searchQuery.toLowerCase();
     return leads.filter((lead) =>
-      lead.lead_name.toLowerCase().includes(query) ||
-      lead.email?.toLowerCase().includes(query) ||
-      lead.contact_phone?.toLowerCase().includes(query) ||
-      lead.source?.toLowerCase().includes(query) ||
-      lead.instance_name?.toLowerCase().includes(query)
+      lead.lead_name.toLocaleLowerCase("pt-BR").includes(query) ||
+      lead.email?.toLocaleLowerCase("pt-BR").includes(query) ||
+      lead.contact_phone?.toLocaleLowerCase("pt-BR").includes(query) ||
+      lead.source?.toLocaleLowerCase("pt-BR").includes(query) ||
+      lead.instance_name?.toLocaleLowerCase("pt-BR").includes(query)
     );
   }, [leads, ui.searchQuery]);
 
+  const instanceFilteredLeads = useMemo(
+    () => searchFilteredLeads.filter(
+      (lead) => selectedInstance === "all" || lead.instance_name === selectedInstance
+    ),
+    [searchFilteredLeads, selectedInstance]
+  );
+
   const manualCount = useMemo(
-    () => filteredLeads.filter((lead) => lead.interaction_mode === "human").length,
-    [filteredLeads]
+    () => instanceFilteredLeads.filter((lead) => lead.interaction_mode === "human").length,
+    [instanceFilteredLeads]
+  );
+
+  const unreadConversationCount = useMemo(
+    () => instanceFilteredLeads.filter((lead) => (unreadByLead[lead.id] ?? 0) > 0).length,
+    [instanceFilteredLeads, unreadByLead]
   );
 
   const sidebarLeads = useMemo(() => {
-    if (activeFilter === "manual") {
-      return filteredLeads.filter((lead) => lead.interaction_mode === "human");
+    if (activeFilter === "unread") {
+      return instanceFilteredLeads.filter((lead) => (unreadByLead[lead.id] ?? 0) > 0);
     }
 
-    return filteredLeads;
-  }, [activeFilter, filteredLeads]);
+    if (activeFilter === "manual") {
+      return instanceFilteredLeads.filter((lead) => lead.interaction_mode === "human");
+    }
+
+    return instanceFilteredLeads;
+  }, [activeFilter, instanceFilteredLeads, unreadByLead]);
+
+  useEffect(() => {
+    if (selectedInstance === "all") return;
+    if (instances.some((instance) => instance.instancia === selectedInstance)) return;
+    setSelectedInstance("all");
+  }, [instances, selectedInstance]);
 
   useEffect(() => {
     const leadIdFromQuery = searchParams.get("leadId");
@@ -130,6 +157,8 @@ export default function Chat() {
   }, [markRead, selectedLeadId]);
 
   const isAdmin = userRole === "ADMIN";
+  const gupshupWindowClosed =
+    sendPolicy?.provider === "gupshup" && sendPolicy.mode === "template_required";
   const leadAiControl = useLeadAiControl(
     selectedLead?.id ?? null,
     selectedLead?.instance_name ?? null,
@@ -203,16 +232,31 @@ export default function Chat() {
   return (
     <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
       {showSidebar && (
-        <div className={cn("h-full min-w-0 shrink-0", isMobile ? "w-full" : "w-[var(--chat-sidebar-width)]")}>
+        <div
+          className={cn(
+            "h-full shrink-0",
+            isMobile
+              ? "w-full min-w-0"
+              : "w-[var(--chat-sidebar-width)] min-w-[var(--chat-sidebar-width)] basis-[var(--chat-sidebar-width)]"
+          )}
+        >
           <LeadSidebar
             leads={sidebarLeads}
+            totalCount={instanceFilteredLeads.length}
             selectedLeadId={selectedLeadId}
             onSelectLead={handleSelectLead}
             loading={leadsLoading}
             activeFilter={activeFilter}
             onFilterChange={setActiveFilter}
             manualCount={manualCount}
+            unreadConversationCount={unreadConversationCount}
             unreadByLead={unreadByLead}
+            searchQuery={ui.searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            instances={instances}
+            instancesLoading={instancesLoading}
+            selectedInstance={selectedInstance}
+            onInstanceChange={setSelectedInstance}
           />
         </div>
       )}
@@ -248,7 +292,18 @@ export default function Chat() {
 
               <MessageList messages={messages} loading={messagesLoading} />
 
-              <ChatInput onSend={handleSendMessage} />
+              {messagesLoading && !sendPolicy ? (
+                <div className="border-t border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-3 sm:px-4">
+                  <Skeleton className="h-[68px] w-full rounded-[var(--radius-xl)]" />
+                </div>
+              ) : gupshupWindowClosed ? (
+                <ChatWindowNotice
+                  canManageAutomations={isAdmin}
+                  onOpenAutomations={() => navigate("/automacao")}
+                />
+              ) : (
+                <ChatInput onSend={handleSendMessage} disabled={!sendPolicy} />
+              )}
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center">

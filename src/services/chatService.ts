@@ -1,8 +1,10 @@
-import { getCrmBackend, postCrmBackend } from "@/services/crmBackend";
+import { CrmBackendError, getCrmBackend, postCrmBackend } from "@/services/crmBackend";
 import type {
   ChatAttachment,
   ChatAttachmentKind,
   ChatMessage,
+  ChatQuickReply,
+  ChatSendPolicy,
   ChatSendPayload,
   ChatSystemKind,
   ChatUploadIntent,
@@ -100,12 +102,14 @@ type BackendChatMessage = {
   sourceType?: string | null;
   systemKind?: ChatSystemKind | null;
   providerStatus?: string | null;
+  quickReply?: ChatQuickReply | null;
   attachments?: BackendChatAttachment[];
 };
 
 type ListChatMessagesResponse = {
   success: boolean;
   messages?: BackendChatMessage[];
+  sendPolicy?: ChatSendPolicy;
 };
 
 type CreateAttachmentUploadUrlParams = {
@@ -198,7 +202,30 @@ function normalizeMessage(message: BackendChatMessage): ChatMessage {
     source_type: message.sourceType ?? "human",
     system_kind: message.systemKind ?? null,
     provider_status: message.providerStatus ?? null,
+    quick_reply: message.quickReply ?? null,
     attachments: (message.attachments ?? []).map(normalizeAttachment),
+  };
+}
+
+function normalizeSendPolicy(policy: ChatSendPolicy | null | undefined): ChatSendPolicy | null {
+  if (!policy) return null;
+  if (policy.provider !== "evolution" && policy.provider !== "meta" && policy.provider !== "gupshup") {
+    return null;
+  }
+  if (policy.mode !== "freeform" && policy.mode !== "template_required") {
+    return null;
+  }
+
+  return {
+    provider: policy.provider,
+    mode: policy.mode,
+    lastInboundAt: policy.lastInboundAt ?? null,
+    windowExpiresAt: policy.windowExpiresAt ?? null,
+    evaluatedAt: policy.evaluatedAt,
+    remainingMs:
+      typeof policy.remainingMs === "number" && Number.isFinite(policy.remainingMs)
+        ? Math.max(0, policy.remainingMs)
+        : null,
   };
 }
 
@@ -207,7 +234,22 @@ export async function listChatMessages(leadId: string) {
     `/api/chat/leads/${encodeURIComponent(leadId)}/messages`
   );
 
-  return (response.messages ?? []).map(normalizeMessage);
+  return {
+    messages: (response.messages ?? []).map(normalizeMessage),
+    sendPolicy: normalizeSendPolicy(response.sendPolicy),
+  };
+}
+
+export function getTemplateRequiredPolicyFromError(error: unknown) {
+  if (!(error instanceof CrmBackendError)) return null;
+
+  const details =
+    error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? (error.details as Record<string, unknown>)
+      : null;
+  if (details?.code !== "GUPSHUP_TEMPLATE_REQUIRED") return null;
+
+  return normalizeSendPolicy(details.sendPolicy as ChatSendPolicy | null | undefined);
 }
 
 export async function createAttachmentUploadUrl(params: CreateAttachmentUploadUrlParams) {

@@ -183,6 +183,14 @@ O funil deve estar **centralizado horizontalmente** em sua seção, com métrica
 
 ## Adaptações Responsivas por Componente
 
+### Formulários Compostos
+
+- Agrupe campos pela tarefa percebida, como `Nome` e `Agendamento`, em vez de distribuir controles independentes pela grade.
+- Controles que formam uma frase operacional permanecem juntos no mesmo grupo visual.
+- Não use colunas vazias, placeholders de layout ou grids assimétricos apenas para preencher a linha.
+- Em desktop, grupos podem dividir a linha; abaixo de 768px, cada grupo empilha mantendo sua ordem interna.
+- Textareas ocupam a largura útil do editor ativo, mas sua altura inicial deve ser proporcional ao conteúdo esperado.
+
 ### Funil (Mobile < 768px)
 - Larguras decrescentes mantidas proporcionalmente até 768px
 - Abaixo de 768px: stages ocupam **100% da largura**, empilhados

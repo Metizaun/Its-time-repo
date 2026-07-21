@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderExecutionMessage } from "../automation-worker.js";
+import {
+  applyGupshupTemplateParameters,
+  renderExecutionMessage,
+  renderExecutionTemplateParameters,
+  requiresGupshupTemplateForAutomation,
+} from "../automation-worker.js";
 
 function executionWith(template: string) {
   return {
@@ -35,5 +40,58 @@ test("continua rejeitando variaveis realmente desconhecidas", () => {
   assert.throws(
     () => renderExecutionMessage(executionWith("Valor: {variavel_inexistente}.")),
     /Mensagem contem variavel nao resolvida/
+  );
+});
+
+test("monta os parametros de cobranca na ordem e com valor monetario", () => {
+  const params = renderExecutionTemplateParameters({
+    ...executionWith("Mensagem de cobranca"),
+    gupshup_template_params: ["nome", "DtVencimento", "Vl_liquido"],
+  });
+
+  assert.deepEqual(params, ["Rubens", "04/07/2026", "R$ 66,67"]);
+});
+
+test("renderiza o historico da Gupshup por ocorrencia entre cabecalho e corpo", () => {
+  const rendered = applyGupshupTemplateParameters(
+    "Prezado(a) {{1}}\nVencimento: {{1}} Valor: {{2}}",
+    ["Rubens", "04/07/2026", "R$ 66,67"]
+  );
+
+  assert.equal(rendered, "Prezado(a) Rubens\nVencimento: 04/07/2026 Valor: R$ 66,67");
+});
+
+test("bloqueia follow-up Gupshup no limite de 24 horas e libera template", () => {
+  const evaluatedAt = new Date("2026-07-20T18:00:00.000Z");
+
+  assert.equal(
+    requiresGupshupTemplateForAutomation(
+      "gupshup",
+      false,
+      "2026-07-19T18:00:00.001Z",
+      evaluatedAt,
+    ),
+    false,
+  );
+  assert.equal(
+    requiresGupshupTemplateForAutomation(
+      "gupshup",
+      false,
+      "2026-07-19T18:00:00.000Z",
+      evaluatedAt,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresGupshupTemplateForAutomation("gupshup", false, null, evaluatedAt),
+    true,
+  );
+  assert.equal(
+    requiresGupshupTemplateForAutomation("gupshup", true, null, evaluatedAt),
+    false,
+  );
+  assert.equal(
+    requiresGupshupTemplateForAutomation("evolution", false, null, evaluatedAt),
+    false,
   );
 });

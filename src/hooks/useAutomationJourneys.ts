@@ -82,7 +82,12 @@ function normalizeJourney(row: Record<string, unknown>) {
 
 function normalizeStep(row: Record<string, unknown>) {
   const contentMode = row.content_mode === "media" ? "media" : "text";
-  const mediaKind = row.media_kind === "image" || row.media_kind === "document" ? row.media_kind : null;
+  const mediaKind =
+    row.media_kind === "image" ||
+    row.media_kind === "video" ||
+    row.media_kind === "document"
+      ? row.media_kind
+      : null;
   const params = Array.isArray(row.gupshup_template_params)
     ? row.gupshup_template_params.filter((item): item is string => typeof item === "string")
     : [];
