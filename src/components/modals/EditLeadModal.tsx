@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Lead } from "@/hooks/useLeads";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
+import { usePipelines } from "@/hooks/usePipelines";
 import { Trash2 } from "lucide-react"; 
 import { notifyLeadsUpdated } from "@/hooks/useLeads";
 
@@ -44,7 +45,14 @@ function getErrorMessage(error: unknown) {
 export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLeadModalProps) {
   const { user } = useAuth();
   const { users } = useCrmUsers();
-  const { stages } = usePipelineStages();
+  const { pipelines, loading: pipelinesLoading } = usePipelines();
+  const { stages: allStages } = usePipelineStages();
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
+  const { stages: pipelineStages, loading: stagesLoading } = usePipelineStages(
+    selectedPipelineId || null,
+    Boolean(selectedPipelineId)
+  );
+
   const currentCrmUser = users.find((crmUser) => crmUser.auth_user_id === user?.id) ?? null;
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -63,6 +71,10 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
 
   useEffect(() => {
     if (lead) {
+      const currentStage = allStages.find((s) => s.id === lead.stage_id);
+      const initialPipelineId = currentStage?.pipeline_id || pipelines[0]?.id || "";
+      setSelectedPipelineId(initialPipelineId);
+
       setFormData({
         name: lead.lead_name || "",
         last_city: lead.last_city || "",
@@ -77,7 +89,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
         notes: lead.notes || "",
       });
     }
-  }, [lead]);
+  }, [lead, allStages, pipelines]);
 
   // NOVA FUNÇÃO: Soft Delete
   const handleDelete = async () => {
@@ -114,7 +126,7 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
     if (!lead) return;
 
     setLoading(true);
-    const selectedStage = stages.find((s) => s.id === formData.stage_id);
+    const selectedStage = pipelineStages.find((s) => s.id === formData.stage_id) || allStages.find((s) => s.id === formData.stage_id);
     const derivedStatus = selectedStage?.category || "Aberto";
 
     try {
@@ -228,18 +240,42 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="pipeline_id">Pipeline</Label>
+              <Select
+                value={selectedPipelineId}
+                onValueChange={(value) => {
+                  setSelectedPipelineId(value);
+                  setFormData((prev) => ({ ...prev, stage_id: "" }));
+                }}
+                disabled={pipelinesLoading}
+              >
+                <SelectTrigger id="pipeline_id">
+                  <SelectValue placeholder={pipelinesLoading ? "Carregando pipelines..." : "Selecione o pipeline"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {pipelines.map((pipeline) => (
+                    <SelectItem key={pipeline.id} value={pipeline.id}>
+                      {pipeline.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="stage_id">Etapa do Funil</Label>
               <Select
                 value={formData.stage_id}
                 onValueChange={(value) => {
-                  setFormData({ ...formData, stage_id: value });
+                  setFormData((prev) => ({ ...prev, stage_id: value }));
                 }}
+                disabled={stagesLoading || !selectedPipelineId}
               >
                 <SelectTrigger id="stage_id">
-                  <SelectValue placeholder="Selecione a etapa" />
+                  <SelectValue placeholder={stagesLoading ? "Carregando etapas..." : "Selecione a etapa"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {stages.map((stage) => (
+                  {pipelineStages.map((stage) => (
                     <SelectItem key={stage.id} value={stage.id}>
                       {stage.name}
                     </SelectItem>
@@ -282,16 +318,6 @@ export default function EditLeadModal({ lead, open, onClose, onSuccess }: EditLe
             <div className="space-y-2">
               <Label htmlFor="owner">Responsável</Label>
               <Input id="owner" value={currentCrmUser?.name || currentCrmUser?.email || lead?.owner_name || ""} disabled />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="created_at">Data de Criação</Label>
-              <Input
-                id="created_at"
-                value={lead?.created_at ? new Date(lead.created_at).toLocaleDateString('pt-BR') : ''}
-                disabled
-                className="bg-muted"
-              />
             </div>
           </div>
 

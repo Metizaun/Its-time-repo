@@ -605,6 +605,8 @@ type LeadAiStateRow = {
   last_confidence: number | null;
   status: "active" | "paused" | "error";
   manual_ai_enabled: boolean | null;
+  optical_profile?: JsonRecord | null;
+  memory_summary?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -3626,7 +3628,7 @@ export class AgentManager {
       model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: input.isActive ?? true,
       temperature: input.temperature ?? 0.4,
-      buffer_wait_ms: input.bufferWaitMs ?? 15000,
+      buffer_wait_ms: input.bufferWaitMs ?? 45000,
       human_pause_minutes: input.humanPauseMinutes ?? 60,
       auto_apply_threshold: input.autoApplyThreshold ?? 0.85,
       handoff_enabled: input.handoffEnabled ?? false,
@@ -6702,13 +6704,36 @@ export class AgentManager {
       .select("id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id")
       .eq("lead_id", leadId)
       .order("sent_at", { ascending: false })
-      .limit(20);
+      .limit(15);
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel carregar o historico da conversa", error);
     }
 
     return ((data ?? []) as MessageRow[]).reverse();
+  }
+
+  private async searchVectorKnowledge(acesId: number, agentId: string, query: string, limit = 3) {
+    try {
+      if (!this.gemini || !query.trim()) return [];
+      const embeddingModel = this.gemini.getGenerativeModel({ model: "text-embedding-004" });
+      const embeddingResult = await embeddingModel.embedContent(query.trim());
+      const vector = embeddingResult.embedding.values;
+
+      const { data, error } = await this.serviceClient.rpc("match_knowledge_embeddings", {
+        p_aces_id: acesId,
+        p_agent_id: agentId,
+        query_embedding: JSON.stringify(vector),
+        match_threshold: 0.60,
+        match_count: limit,
+      });
+
+      if (error || !data) return [];
+      return data as Array<{ content: string; similarity: number }>;
+    } catch (err) {
+      console.warn("[rag] Busca vetorial indisponivel:", err);
+      return [];
+    }
   }
 
   private async fetchLatestLeadInboundMessage(leadId: string) {
@@ -8150,14 +8175,17 @@ export class AgentManager {
         params.agent.instance_name || params.lead.instancia,
         "Instancia de envio nao definida"
       );
-      const transport = await this.resolveEvolutionTransport(instanceName, params.agent.aces_id);
-      const provider = new EvolutionWhatsAppProvider({
-        evolutionApiUrl: transport.apiUrl,
-        evolutionApiKey: transport.apiKey,
-      });
+      const providerName = await this.whatsAppProviders.resolveInstanceProvider(instanceName);
+      const provider = this.whatsAppProviders.getProvider(providerName);
+      if (!provider.sendMedia) {
+        throw new WhatsAppProviderError(`Provider ${providerName} sem suporte a midia`, {
+          provider: providerName,
+          kind: "permanent",
+        });
+      }
       const caption = asString(asset.default_caption);
       const providerResult = await provider.sendMedia({
-        instanceName: transport.instanceName,
+        instanceName,
         to: phone,
         mediaUrl,
         mimeType: downloaded.mimeType,
@@ -8776,16 +8804,36 @@ export class AgentManager {
   ): Promise<GeminiExecutionResult<ReplyModelResponse>> {
     const mediaAssets = await this.listAvailableMediaAssets(agent);
     const conversation = messages
-      .map((message) => `${message.source_type === "lead" ? "Lead" : "Operacao"}: ${truncateText(message.content, 600)}`)
+      .map((message) => {
+        const role =
+          message.source_type === "lead"
+            ? "Cliente (Lead)"
+            : message.source_type === "human"
+            ? "Atendente Humano"
+            : "Você (Consultor IA)";
+        return `${role}: ${truncateText(message.content, 2000)}`;
+      })
       .join("\n");
     const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
+
+    const leadState = await this.getLeadState(agent.id, lead.id);
+    const opticalProfile = leadState?.optical_profile ?? {};
+    const memorySummary = leadState?.memory_summary ?? null;
+
+    const lastLeadMsg = messages.filter((m) => m.source_type === "lead").pop()?.content ?? "";
+    const ragKnowledge = lastLeadMsg ? await this.searchVectorKnowledge(agent.aces_id, agent.id, lastLeadMsg, 3) : [];
+    const ragContext = ragKnowledge.length > 0
+      ? `Conhecimento Relevante (RAG Vetorial):\n${ragKnowledge.map((k) => `- ${k.content}`).join("\n")}`
+      : null;
 
     const prompt = [
       agent.system_prompt,
       billingContext,
       "",
       "Voce e o agente de atendimento que responde ao lead pelo WhatsApp.",
-      "A analise operacional do CRM ja foi feita por um worker interno. Nao altere etapa, tags, resumo, check ou follow-up.",
+      "ATENCAO A MEMORIA E AS REGRAS DE SAUDACAO:",
+      "- Verifique atentamente o Historico recente. Se Voce (Consultor IA) ou um Atendente Humano JA deu boas-vindas ou cumprimentou o cliente nesta conversa, E ESTRITAMENTE PROIBIDO repetir saudações (ex: Nao diga 'Ola', 'Tudo bem?', 'Como posso te ajudar?' novamente). Responda diretamente ao cliente.",
+      "- A analise operacional do CRM ja foi feita por um worker interno. Nao altere etapa, tags, resumo, check ou follow-up.",
       "Retorne JSON puro apenas com as chaves reply_blocks e media_asset_key.",
       "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas, naturais e prontas para envio no WhatsApp.",
       "media_asset_key deve ser null ou uma chave exata da lista de materiais disponiveis.",
@@ -8801,6 +8849,10 @@ export class AgentManager {
         status_atual: lead.status,
         cidade: lead.last_city,
       })}`,
+      "",
+      `Perfil Optico do Lead (Memoria de Longo Prazo): ${JSON.stringify(opticalProfile)}`,
+      memorySummary ? `Resumo do Historico Antigo (Memoria de Longo Prazo): ${memorySummary}` : null,
+      ragContext,
       "",
       `Analise operacional ja aplicada/avaliada: ${JSON.stringify({
         confidence: analysis.confidence,
@@ -8820,8 +8872,8 @@ export class AgentManager {
       "",
       `Materiais disponiveis: ${JSON.stringify(mediaAssets)}`,
       "",
-      `Historico recente:\n${conversation}`,
-    ].join("\n");
+      `Historico recente (Memoria de Curto Prazo):\n${conversation}`,
+    ].filter(Boolean).join("\n");
 
     const responseModel = agent.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL;
     const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(responseModel, prompt);
@@ -9283,12 +9335,8 @@ export class AgentManager {
   }
 
   private async shouldAnalyzeOpticsImage(agent: AgentRow | null, message: ParsedWebhookMessage) {
-    if (!agent || message.mediaKind !== "image" || agent.template_key !== "optics-consultant") return false;
-    const [prescription, visagism] = await Promise.all([
-      this.prescriptionWorkerEnabled ? this.getEnabledAgentTool(agent, "prescription_analyst") : null,
-      this.visagismToolEnabled ? this.getEnabledAgentTool(agent, "visagism") : null,
-    ]);
-    return Boolean(prescription || visagism);
+    if (!agent || message.mediaKind !== "image") return false;
+    return this.prescriptionWorkerEnabled || agent.template_key === "optics-consultant";
   }
 
   private formatPrescriptionContext(
@@ -9343,8 +9391,12 @@ export class AgentManager {
   ) {
     if (!message.messageId || !(await this.shouldAnalyzeOpticsImage(agent, message))) return null;
 
-    const binding = await this.getEnabledAgentTool(agent, "prescription_analyst");
-    if (!binding) return null;
+    const binding = (await this.getEnabledAgentTool(agent, "prescription_analyst")) ?? {
+      id: "default_prescription_tool_binding",
+      agent_id: agent.id,
+      tool_key: "prescription_analyst",
+      is_active: true,
+    };
     const occurrenceKey = `message:${message.messageId}`;
     const idempotencyKey = `prescription:${lead.id}:${occurrenceKey}`;
     const { data: existing } = await this.agentsClient
@@ -9491,6 +9543,24 @@ export class AgentManager {
         quoted_price_cents: matchedRule?.priceCents ?? null,
       });
       if (prescriptionError) throw new HttpError(500, "Nao foi possivel salvar o receituario", prescriptionError);
+
+      const opticalProfileData = {
+        has_prescription: true,
+        od_sphere: extraction.odSphere,
+        od_cylinder: extraction.odCylinder,
+        od_axis: extraction.odAxis,
+        oe_sphere: extraction.oeSphere,
+        oe_cylinder: extraction.oeCylinder,
+        oe_axis: extraction.oeAxis,
+        addition: extraction.addition,
+        lens_type: (extraction.addition ?? 0) > 0 ? "multifocal" : "monofocal",
+        patient_name: extraction.patientName,
+        prescription_date: extraction.prescriptionDate,
+      };
+      await this.upsertLeadState(agent.id, lead.id, {
+        optical_profile: opticalProfileData,
+        memory_summary: `Cliente possui receita óptica cadastrada. Lente: ${(extraction.addition ?? 0) > 0 ? "Multifocal" : "Visao Simples"}. Grau OD: Esf ${extraction.odSphere ?? "?"} Cil ${extraction.odCylinder ?? "?"} Eixo ${extraction.odAxis ?? "?"} / OE: Esf ${extraction.oeSphere ?? "?"} Cil ${extraction.oeCylinder ?? "?"} Eixo ${extraction.oeAxis ?? "?"} Adição: ${extraction.addition ?? "?"}`,
+      });
       await this.serviceClient.from("message_history").update({ content: agentContext })
         .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
       await this.agentsClient.from("agent_tool_runs").update({
@@ -9973,6 +10043,13 @@ export class AgentManager {
     const instance = await this.resolveInstanceForEvolutionWebhook(parsedMessage.instanceName);
     if (!instance) {
       return { ignored: true, reason: "Instancia nao cadastrada no CRM" };
+    }
+
+    if (instance.aces_id === 3 && parsedMessage.phone) {
+      const cleanPhone = parsedMessage.phone.replace(/\D/g, "");
+      if (!cleanPhone.includes("5499837128") && !cleanPhone.includes("549837128")) {
+        return { ignored: true, reason: "Modo de teste Lavie ativo: respondendo apenas ao numero de teste autorizado (+55 54 9983-7128)" };
+      }
     }
 
     const allowedPhones = this.instancePhoneAllowlists[instance.instancia];
@@ -10997,7 +11074,7 @@ export class AgentManager {
       model: AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: false,
       temperature: 0.4,
-      buffer_wait_ms: 15000,
+      buffer_wait_ms: 45000,
       human_pause_minutes: 60,
       auto_apply_threshold: 0.85,
       handoff_enabled: false,
@@ -11128,16 +11205,16 @@ export class AgentManager {
     };
 
     let providerResult: SendResult;
+    const providerName = await this.whatsAppProviders.resolveInstanceProvider(params.instanceName);
     try {
-      const transport = await this.resolveEvolutionTransport(params.instanceName, params.context.acesId);
-      const provider = new EvolutionWhatsAppProvider({
-        evolutionApiUrl: transport.apiUrl,
-        evolutionApiKey: transport.apiKey,
-      });
-      providerResult = await provider.sendMedia({
-        ...providerInput,
-        instanceName: transport.instanceName,
-      });
+      const provider = this.whatsAppProviders.getProvider(providerName);
+      if (!provider.sendMedia) {
+        throw new WhatsAppProviderError(`Provider ${providerName} sem suporte a midia`, {
+          provider: providerName,
+          kind: "permanent",
+        });
+      }
+      providerResult = await provider.sendMedia(providerInput);
     } catch (error) {
       const providerFailure = summarizeWhatsAppProviderFailure(error);
       await this.saveMessage({
@@ -11151,7 +11228,7 @@ export class AgentManager {
         createdBy: params.context.crmUserId,
         conversationId,
         sentAt,
-        provider: "evolution",
+        provider: providerName,
         providerMessageId: null,
         providerStatus: "failed",
         providerErrorCode: providerFailure.errorCode,
@@ -11169,7 +11246,7 @@ export class AgentManager {
       await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id);
       throw new HttpError(
         providerFailure.statusCode,
-        `Falha ao enviar midia na Evolution: ${providerFailure.errorMessage}`,
+        `Falha ao enviar midia no WhatsApp (${providerName}): ${providerFailure.errorMessage}`,
         providerFailure.payloadSummary
       );
     }
@@ -11800,14 +11877,17 @@ export class AgentManager {
         params.agent.instance_name || params.lead.instancia,
         "Instancia de envio nao definida"
       );
-      const transport = await this.resolveEvolutionTransport(instanceName, params.agent.aces_id);
-      const provider = new EvolutionWhatsAppProvider({
-        evolutionApiUrl: transport.apiUrl,
-        evolutionApiKey: transport.apiKey,
-      });
+      const providerName = await this.whatsAppProviders.resolveInstanceProvider(instanceName);
+      const provider = this.whatsAppProviders.getProvider(providerName);
+      if (!provider.sendMedia) {
+        throw new WhatsAppProviderError(`Provider ${providerName} sem suporte a midia`, {
+          provider: providerName,
+          kind: "permanent",
+        });
+      }
       const caption = "Aqui esta a armacao que mais combina com voce!";
       const sendInput: SendMediaInput = {
-        instanceName: transport.instanceName,
+        instanceName,
         to: phone,
         mediaUrl,
         mimeType: "image/png",

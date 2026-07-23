@@ -215,7 +215,7 @@ export function AgentConfigModal({
         model,
         is_active: true,
         temperature: personality.temperature,
-        buffer_wait_ms: 15000,
+        buffer_wait_ms: 45000,
         human_pause_minutes: 60,
         handoff_enabled: handoffEnabled,
         handoff_prompt: handoffPrompt.trim() || null,

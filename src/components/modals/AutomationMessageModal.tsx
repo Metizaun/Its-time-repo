@@ -1831,11 +1831,13 @@ export function AutomationMessageModal({
       preselectedStageId ?? "",
       preselectedInstanceName ?? "",
       stages.map((stage) => stage.id).join(","),
+      steps.map((step) => `${step.id}:${step.rb_days_offset}:${step.rb_message_kind}:${step.rb_payment_type_ids.join(",")}`).join("|"),
     ].join("|");
     if (initializedJourneyKeyRef.current === initializationKey) return;
     initializedJourneyKeyRef.current = initializationKey;
 
     const nextRecipeId = inferRecipeIdFromJourney(journey);
+    const firstStep = steps[0] ?? null;
 
     setJourneyForm(
       buildInitialJourneyForm({
@@ -1846,11 +1848,48 @@ export function AutomationMessageModal({
       }),
     );
     setSelectedRecipeId(nextRecipeId);
-    setStepForm(createInitialStepForm(nextRecipeId));
+
+    const initialStepForm = createInitialStepForm(nextRecipeId);
+    if (firstStep) {
+      const delay = minutesToTimeUnit(
+        firstStep.delay_minutes === 0 ? 60 : firstStep.delay_minutes,
+      );
+      initialStepForm.id = firstStep.id;
+      initialStepForm.label = firstStep.label;
+      initialStepForm.timing_mode = firstStep.delay_minutes === 0 ? "now" : "after";
+      initialStepForm.delay_value = String(delay.value);
+      initialStepForm.delay_unit = delay.unit;
+      initialStepForm.content_mode = firstStep.content_mode ?? "text";
+      initialStepForm.message_template = firstStep.message_template ?? "";
+      initialStepForm.media_asset_id = firstStep.media_asset_id ?? "";
+      initialStepForm.media_kind = firstStep.media_kind ?? "image";
+      initialStepForm.media_caption = firstStep.media_caption ?? "";
+      initialStepForm.gupshup_mode =
+        firstStep.gupshup_template_id || firstStep.gupshup_template_name
+          ? "template"
+          : "followup";
+      initialStepForm.gupshup_template_id = firstStep.gupshup_template_id ?? "";
+      initialStepForm.gupshup_template_name = firstStep.gupshup_template_name ?? "";
+      initialStepForm.gupshup_template_language =
+        firstStep.gupshup_template_language ?? "pt_BR";
+      initialStepForm.gupshup_template_params_text = formatTemplateParams(
+        firstStep.gupshup_template_params,
+      );
+      initialStepForm.rb_message_kind = firstStep.rb_message_kind ?? "reminder";
+      initialStepForm.rb_days_offset = String(firstStep.rb_days_offset ?? 2);
+      initialStepForm.rb_payment_type_ids = firstStep.rb_payment_type_ids ?? [];
+      initialStepForm.is_active = firstStep.is_active;
+      initialStepForm.step_rule = firstStep.step_rule
+        ? normalizeRuleNode(firstStep.step_rule)
+        : createRuleGroup("all", []);
+      initialStepForm.step_rule_enabled = !!firstStep.step_rule;
+    }
+
+    setStepForm(initialStepForm);
     setStepEditorOpen(false);
     setPendingMediaFile(null);
     setActiveTab("entry");
-  }, [journey, open, preselectedInstanceName, preselectedStageId, stages]);
+  }, [journey, open, preselectedInstanceName, preselectedStageId, stages, steps]);
 
   useEffect(() => {
     if (previewLeads.length === 0) {
@@ -2129,6 +2168,21 @@ export function AutomationMessageModal({
       const savedJourney = journeyForm.id
         ? await updateJourney(journeyForm.id, payload)
         : await createJourney(payload, initialStepPayload);
+
+      if (journeyForm.id && journeyForm.entry_source === "rb" && orderedSteps[0]) {
+        const firstStep = orderedSteps[0];
+        const resolvedMediaAssetId = await uploadPendingMediaIfNeeded();
+        const stepPayload = buildStepPayload(
+          {
+            ...stepForm,
+            media_asset_id: resolvedMediaAssetId || stepForm.media_asset_id,
+          },
+          journeyForm.anchor_event,
+          journeyForm.entry_source,
+          firstStep.delay_minutes,
+        );
+        await updateStep(firstStep.id, savedJourney.id, stepPayload);
+      }
 
       onSelectJourney(savedJourney.id);
       setJourneyForm(
