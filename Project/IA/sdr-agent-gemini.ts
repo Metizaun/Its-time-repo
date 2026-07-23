@@ -7,7 +7,6 @@ import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai"
 import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
 import { tokenLineItems, tryRecordAiUsage } from "./ai-costs.js";
 import { buildChatSendPolicy } from "./chat-send-policy.js";
