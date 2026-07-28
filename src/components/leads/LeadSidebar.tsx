@@ -6,12 +6,19 @@ import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { getUrgencyStyle, getInstanceTextColor } from "@/lib/colors";
 import { Building2, Check, ListFilter, Search } from "lucide-react";
+import { formatCnpj } from "@/lib/cnpj";
 import type { Instance } from "@/hooks/useInstances";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffect, useState } from "react";
 
 type LeadSidebarFilter = "all" | "unread" | "manual";
+
+type CompanyFilterOption = {
+  id: string;
+  name: string;
+  cnpj: string;
+};
 
 interface LeadSidebarProps {
   leads: Lead[];
@@ -30,6 +37,9 @@ interface LeadSidebarProps {
   instancesLoading: boolean;
   selectedInstance: string;
   onInstanceChange: (instanceName: string) => void;
+  companies: CompanyFilterOption[];
+  selectedCompany: string;
+  onCompanyChange: (companyId: string) => void;
 }
 
 function PendingDot({ state }: { state: Lead["manual_pending_state"] }) {
@@ -98,8 +108,12 @@ export function LeadSidebar({
   instancesLoading,
   selectedInstance,
   onInstanceChange,
+  companies,
+  selectedCompany,
+  onCompanyChange,
 }: LeadSidebarProps) {
   const [instanceFilterOpen, setInstanceFilterOpen] = useState(false);
+  const [companyFilterOpen, setCompanyFilterOpen] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -131,6 +145,83 @@ export function LeadSidebar({
               {totalCount} conversa{totalCount !== 1 ? "s" : ""}
             </p>
           </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+          {companies.length > 0 ? (
+          <Popover open={companyFilterOpen} onOpenChange={setCompanyFilterOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Filtrar conversas por empresa"
+                    aria-pressed={selectedCompany !== "all"}
+                    className={cn(
+                      "chat-tool-button h-9 w-9 focus-ring",
+                      selectedCompany !== "all" && "chat-tool-button--active text-[var(--color-primary-600)]"
+                    )}
+                  >
+                    <Building2 className="h-[18px] w-[18px]" />
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Filtrar por empresa</TooltipContent>
+            </Tooltip>
+            <PopoverContent
+              align="end"
+              className="w-72 overflow-hidden rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)] p-0 shadow-md"
+            >
+              <div className="border-b border-[var(--color-border-subtle)] px-4 py-3">
+                <p className="text-sm font-semibold text-foreground">Empresa</p>
+                <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">Filtre as conversas da empresa</p>
+              </div>
+              <div className="max-h-72 space-y-1 overflow-y-auto p-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCompanyChange("all");
+                    setCompanyFilterOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors focus-ring",
+                    selectedCompany === "all"
+                      ? "bg-[var(--color-primary-50)] text-[var(--color-primary-700)]"
+                      : "text-foreground hover:bg-[var(--color-bg-subtle)]"
+                  )}
+                >
+                  <Building2 className="h-4 w-4 shrink-0" />
+                  <span className="min-w-0 flex-1 text-sm font-medium">Todas as empresas</span>
+                  {selectedCompany === "all" ? <Check className="h-4 w-4 shrink-0" /> : null}
+                </button>
+                {companies.map((company) => (
+                  <button
+                    key={company.id}
+                    type="button"
+                    onClick={() => {
+                      onCompanyChange(company.id);
+                      setCompanyFilterOpen(false);
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors focus-ring",
+                      selectedCompany === company.id
+                        ? "bg-[var(--color-primary-50)] text-[var(--color-primary-700)]"
+                        : "text-foreground hover:bg-[var(--color-bg-subtle)]"
+                    )}
+                  >
+                    <Building2 className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{company.name}</span>
+                      <span className="mt-0.5 block truncate font-mono text-[10px] text-[var(--color-text-secondary)]">
+                        {formatCnpj(company.cnpj)}
+                      </span>
+                    </span>
+                    {selectedCompany === company.id ? <Check className="h-4 w-4 shrink-0" /> : null}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          ) : null}
 
           <Popover open={instanceFilterOpen} onOpenChange={setInstanceFilterOpen}>
             <Tooltip>
@@ -209,6 +300,7 @@ export function LeadSidebar({
               </div>
             </PopoverContent>
           </Popover>
+          </div>
         </div>
 
         <div className="relative mt-3">

@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { normalizePhoneIdentity } from "./phone-normalization.js";
 
 import {
   RbClient,
@@ -187,21 +188,6 @@ function normalizePhone(value: unknown) {
   }
 
   return digits;
-}
-
-function phoneVariants(phone: string) {
-  const digits = normalizeDigits(phone);
-  if (!digits) {
-    return [];
-  }
-
-  const variants = new Set<string>([digits]);
-  if (digits.startsWith("55") && digits.length > 11) {
-    variants.add(digits.slice(2));
-  } else {
-    variants.add(`55${digits}`);
-  }
-  return Array.from(variants);
 }
 
 function normalizePaymentTypeId(value: unknown) {
@@ -631,12 +617,15 @@ export class RbBillingWorker {
   }
 
   private async findLeadByPhone(acesId: number, phone: string): Promise<LeadRow | null> {
-    const variants = phoneVariants(phone);
+    const identity = normalizePhoneIdentity(phone);
+    if (!identity) return null;
+
     const { data: lead, error } = await this.serviceClient
       .from("leads")
       .select("id, aces_id, name, contact_phone, stage_id, owner_id, instancia")
       .eq("aces_id", acesId)
-      .in("contact_phone", variants)
+      .eq("phone_identity", identity)
+      .eq("view", true)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -714,6 +703,7 @@ export class RbBillingWorker {
       .from("leads")
       .select("id, aces_id, name, contact_phone, stage_id, owner_id, instancia")
       .eq("id", meta.lead_id)
+      .eq("view", true)
       .maybeSingle();
 
     if (leadError) {
@@ -760,6 +750,10 @@ export class RbBillingWorker {
       .single();
 
     if (error) {
+      if (String(error.code ?? "") === "23505") {
+        const concurrentLead = await this.findLeadByPhone(acesId, debt.phone);
+        if (concurrentLead) return concurrentLead;
+      }
       throw new Error(`Nao foi possivel criar lead RB: ${error.message}`);
     }
 

@@ -16,13 +16,15 @@ export function filterLeadsByPeriod(
         return leadDate.getTime() === today.getTime();
       });
     
-    case "7d":
+    case "7d": {
       const sevenDaysAgo = subDays(now, 7);
       return leads.filter((lead) => new Date(lead.dataCriacao) >= sevenDaysAgo);
+    }
     
-    case "30d":
+    case "30d": {
       const thirtyDaysAgo = subDays(now, 30);
       return leads.filter((lead) => new Date(lead.dataCriacao) >= thirtyDaysAgo);
+    }
     
     case "custom":
       if (!customRange?.from || !customRange?.to) return leads;

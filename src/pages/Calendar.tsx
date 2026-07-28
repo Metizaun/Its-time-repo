@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, format } from "date-fns";
-import { ChevronLeft, ChevronRight, Database, Plus, RotateCcw } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { ChevronLeft, ChevronRight, Database, Plus, RotateCcw, Settings2 } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { CalendarEventDialog } from "@/components/calendar/CalendarEventDialog";
 import { DayHeader } from "@/components/calendar/DayHeader";
@@ -10,6 +11,7 @@ import { EventPopover } from "@/components/calendar/EventPopover";
 import { MonthView } from "@/components/calendar/MonthView";
 import { WeekView } from "@/components/calendar/WeekView";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -21,7 +23,9 @@ import { useCalendarEvents } from "@/hooks/useCalendarEvents";
 import { useCalendarNavigation } from "@/hooks/useCalendarNavigation";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLeads } from "@/hooks/useLeads";
+import { useProfessionalBooking } from "@/hooks/useProfessionalBooking";
 import { supabase } from "@/integrations/supabase/client";
+import { utcToWallDate, wallDateToUtc } from "@/lib/calendarTimezone";
 import { cn } from "@/lib/utils";
 import type {
   CalendarEvent,
@@ -64,12 +68,12 @@ const FOLLOWUP_FILTERS: Array<{ value: FollowupFilter; label: string }> = [
   { value: "disabled", label: "Desligado" },
 ];
 
-function buildDefaultSlot(date: Date) {
+function buildDefaultSlot(date: Date, timezone = "America/Sao_Paulo") {
   const start = new Date(date);
   start.setHours(9, 0, 0, 0);
   const end = new Date(start);
   end.setHours(10, 0, 0, 0);
-  return { start, end };
+  return { start: wallDateToUtc(start, timezone), end: wallDateToUtc(end, timezone) };
 }
 
 function toEventInput(event: CalendarEvent, overrides: Partial<CalendarEventInput> = {}): CalendarEventInput {
@@ -116,15 +120,20 @@ export default function Calendar() {
   } = useCalendarNavigation(new Date(), "week");
 
   const { leads, loading: leadsLoading } = useLeads({ enableRealtime: false });
+  const bookingDirectory = useProfessionalBooking(true);
+  const calendarTimezone = bookingDirectory.timezone;
   const {
     events,
     loading: eventsLoading,
     schemaReady,
     createEvent,
+    createProfessionalAppointment,
+    rescheduleProfessionalAppointment,
+    cancelProfessionalAppointment,
     updateEvent,
     setEventStatus,
     softDeleteEvent,
-  } = useCalendarEvents(visibleRange);
+  } = useCalendarEvents(visibleRange, true, calendarTimezone);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
@@ -133,23 +142,53 @@ export default function Calendar() {
   const [defaultEnd, setDefaultEnd] = useState(() => buildDefaultSlot(new Date()).end);
   const [defaultLeadId, setDefaultLeadId] = useState<string | null>(queryLeadId);
   const [leadFilter, setLeadFilter] = useState(queryLeadId ?? "all");
+  const [companyFilter, setCompanyFilter] = useState("all");
+  const [professionalFilter, setProfessionalFilter] = useState("all");
+  const [serviceFilter, setServiceFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<CalendarEventStatus | "all">("all");
   const [followupFilter, setFollowupFilter] = useState<FollowupFilter>("all");
 
   const leadsById = useMemo(() => new Map(leads.map((lead) => [lead.id, lead])), [leads]);
+  const companyOptions = useMemo(() => {
+    const unique = new Map<string, string>();
+    bookingDirectory.locationOptions.forEach((location) => {
+      if (location.empresa_id && location.empresa_name) unique.set(location.empresa_id, location.empresa_name);
+    });
+    return Array.from(unique, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [bookingDirectory.locationOptions]);
+  const professionalOptions = useMemo(() => {
+    const unique = new Map<string, string>();
+    bookingDirectory.locationOptions
+      .filter((location) => companyFilter === "all" || location.empresa_id === companyFilter)
+      .forEach((location) => unique.set(location.professional_id, location.professional_name));
+    return Array.from(unique, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [bookingDirectory.locationOptions, companyFilter]);
+  const serviceOptions = useMemo(() => {
+    const unique = new Map<string, string>();
+    bookingDirectory.locationOptions
+      .filter((location) => companyFilter === "all" || location.empresa_id === companyFilter)
+      .filter((location) => professionalFilter === "all" || location.professional_id === professionalFilter)
+      .forEach((location) => {
+        bookingDirectory.servicesForLocation(location.id).forEach((service) => unique.set(service.id, service.name));
+      });
+    return Array.from(unique, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [bookingDirectory, companyFilter, professionalFilter]);
   const loading = leadsLoading || eventsLoading;
   const filteredEvents = useMemo(() => {
     return events.filter((event) => {
       const matchesLead = leadFilter === "all" || event.lead_id === leadFilter;
+      const matchesCompany = companyFilter === "all" || event.empresa_id === companyFilter;
+      const matchesProfessional = professionalFilter === "all" || event.professional_id === professionalFilter;
+      const matchesService = serviceFilter === "all" || event.service_id === serviceFilter;
       const matchesStatus = statusFilter === "all" || event.status === statusFilter;
       const matchesFollowup =
         followupFilter === "all" ||
         (followupFilter === "enabled" && event.followup_1h_enabled) ||
         event.followup_1h_status === followupFilter;
 
-      return matchesLead && matchesStatus && matchesFollowup;
+      return matchesLead && matchesCompany && matchesProfessional && matchesService && matchesStatus && matchesFollowup;
     });
-  }, [events, followupFilter, leadFilter, statusFilter]);
+  }, [companyFilter, events, followupFilter, leadFilter, professionalFilter, serviceFilter, statusFilter]);
   const activePopoverEvent = popoverState
     ? events.find((event) => event.id === popoverState.event.id) ?? popoverState.event
     : null;
@@ -172,7 +211,7 @@ export default function Calendar() {
     if (queryNew !== "1" || handledNewQueryRef.current || leadsLoading) return;
 
     const leadExists = queryLeadId ? leads.some((lead) => lead.id === queryLeadId) : false;
-    const { start, end } = buildDefaultSlot(currentDate);
+    const { start, end } = buildDefaultSlot(currentDate, calendarTimezone);
     setDefaultStart(start);
     setDefaultEnd(end);
     setDefaultLeadId(leadExists ? queryLeadId : null);
@@ -180,7 +219,7 @@ export default function Calendar() {
     setPopoverState(null);
     setDialogOpen(true);
     handledNewQueryRef.current = true;
-  }, [currentDate, leads, leadsLoading, queryLeadId, queryNew]);
+  }, [calendarTimezone, currentDate, leads, leadsLoading, queryLeadId, queryNew]);
 
   useEffect(() => {
     if (!queryEventId || focusedEventIdRef.current === queryEventId) return;
@@ -188,7 +227,7 @@ export default function Calendar() {
     const localEvent = events.find((event) => event.id === queryEventId);
     if (localEvent) {
       focusedEventIdRef.current = queryEventId;
-      goToDate(new Date(localEvent.start_time));
+      goToDate(utcToWallDate(localEvent.start_time, calendarTimezone));
       setSelectedEvent(localEvent);
       setDefaultStart(new Date(localEvent.start_time));
       setDefaultEnd(new Date(localEvent.end_time));
@@ -208,7 +247,7 @@ export default function Calendar() {
         if (cancelled || !data) return;
         const event = data as CalendarEvent;
         focusedEventIdRef.current = queryEventId;
-        goToDate(new Date(event.start_time));
+        goToDate(utcToWallDate(event.start_time, calendarTimezone));
         setSelectedEvent(event);
         setDefaultStart(new Date(event.start_time));
         setDefaultEnd(new Date(event.end_time));
@@ -219,7 +258,7 @@ export default function Calendar() {
     return () => {
       cancelled = true;
     };
-  }, [events, goToDate, queryEventId]);
+  }, [calendarTimezone, events, goToDate, queryEventId]);
 
   function updateLeadFilter(value: string) {
     setLeadFilter(value);
@@ -237,6 +276,9 @@ export default function Calendar() {
 
   function clearFilters() {
     setLeadFilter("all");
+    setCompanyFilter("all");
+    setProfessionalFilter("all");
+    setServiceFilter("all");
     setStatusFilter("all");
     setFollowupFilter("all");
     const nextParams = new URLSearchParams(searchParams);
@@ -246,8 +288,8 @@ export default function Calendar() {
   }
 
   function openCreateFromSelection(selection: { start: Date; end: Date; allDay: boolean }) {
-    setDefaultStart(selection.start);
-    setDefaultEnd(selection.end);
+    setDefaultStart(wallDateToUtc(selection.start, calendarTimezone));
+    setDefaultEnd(wallDateToUtc(selection.end, calendarTimezone));
     setDefaultLeadId(leadFilter !== "all" ? leadFilter : queryLeadId);
     setSelectedEvent(null);
     setPopoverState(null);
@@ -255,7 +297,7 @@ export default function Calendar() {
   }
 
   function openCreateAtDate(date = currentDate) {
-    const { start, end } = buildDefaultSlot(date);
+    const { start, end } = buildDefaultSlot(date, calendarTimezone);
     openCreateFromSelection({ start, end, allDay: false });
   }
 
@@ -268,11 +310,20 @@ export default function Calendar() {
   }
 
   function handleMoveEvent(event: CalendarEvent, start: Date, end: Date, allDay: boolean) {
+    if (event.professional_location_id) {
+      if (allDay) {
+        toast.info("Agendamentos profissionais precisam permanecer em um horÃ¡rio disponÃ­vel.");
+        return;
+      }
+      void rescheduleProfessionalAppointment(event.id, wallDateToUtc(start, calendarTimezone).toISOString(), { showToast: false });
+      return;
+    }
+
     void updateEvent(
       event.id,
       toEventInput(event, {
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
+        start_time: wallDateToUtc(start, calendarTimezone).toISOString(),
+        end_time: wallDateToUtc(end, calendarTimezone).toISOString(),
         all_day: allDay,
       }),
       { showToast: false }
@@ -280,6 +331,11 @@ export default function Calendar() {
   }
 
   function handleResizeEvent(event: CalendarEvent, end: Date) {
+    if (event.professional_location_id) {
+      toast.info("A duraÃ§Ã£o deste atendimento Ã© definida pelo serviÃ§o.");
+      return;
+    }
+
     void updateEvent(
       event.id,
       toEventInput(event, {
@@ -291,23 +347,33 @@ export default function Calendar() {
   }
 
   function handleSetStatus(event: CalendarEvent, status: CalendarEventStatus) {
+    if (event.professional_location_id && status === "cancelled") {
+      openEventDialog(event);
+      toast.info("Informe o motivo do cancelamento antes de confirmar.");
+      return;
+    }
     void setEventStatus(event.id, status).then(() => setPopoverState(null));
   }
 
-  const hasActiveFilters = leadFilter !== "all" || statusFilter !== "all" || followupFilter !== "all";
+  const hasActiveFilters = leadFilter !== "all"
+    || companyFilter !== "all"
+    || professionalFilter !== "all"
+    || serviceFilter !== "all"
+    || statusFilter !== "all"
+    || followupFilter !== "all";
 
   return (
     <div className="flex min-h-[calc(100vh-var(--layout-topbar-height)-32px)] flex-col gap-3">
-      <header className="flex flex-col gap-3 rounded-[28px] border border-[var(--color-border-subtle)] bg-white px-4 py-3 shadow-[0_12px_32px_rgba(26,24,20,0.05)] lg:flex-row lg:items-center lg:justify-between">
+      <header className="flex flex-col gap-3 rounded-[var(--radius-3xl)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 py-3 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={goToday} className="rounded-full bg-white">
+          <Button variant="outline" size="sm" onClick={goToday} className="rounded-full bg-[var(--color-surface-1)]">
             Hoje
           </Button>
           <div className="flex items-center rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-0.5">
-            <button type="button" onClick={goPrevious} className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-secondary)] hover:bg-white hover:text-[var(--color-text-primary)]" aria-label="Periodo anterior">
+            <button type="button" onClick={goPrevious} className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-text-primary)]" aria-label="Periodo anterior">
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <button type="button" onClick={goNext} className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-secondary)] hover:bg-white hover:text-[var(--color-text-primary)]" aria-label="Proximo periodo">
+            <button type="button" onClick={goNext} className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-text-primary)]" aria-label="Proximo periodo">
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
@@ -329,7 +395,7 @@ export default function Calendar() {
                 className={cn(
                   "rounded-full px-4 py-1.5 text-sm font-semibold transition-all",
                   viewMode === option.value
-                    ? "bg-white text-[var(--color-primary-600)] shadow-sm"
+                    ? "bg-[var(--color-surface-1)] text-[var(--color-primary-600)] shadow-sm"
                     : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                 )}
               >
@@ -337,7 +403,17 @@ export default function Calendar() {
               </button>
             ))}
           </div>
-          <Button onClick={() => openCreateAtDate()} className="rounded-full shadow-[0_10px_22px_rgba(232,81,26,0.22)]">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button asChild variant="outline" size="icon" className="rounded-full bg-[var(--color-surface-1)]">
+                <Link to="/calendar/settings" aria-label="Configurar agenda">
+                  <Settings2 className="h-4 w-4" />
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Configurar agenda</TooltipContent>
+          </Tooltip>
+          <Button onClick={() => openCreateAtDate()} className="rounded-full shadow-primary">
             <Plus className="mr-2 h-4 w-4" />
             Novo evento
           </Button>
@@ -345,8 +421,63 @@ export default function Calendar() {
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
+        {companyOptions.length > 0 ? (
+          <Select
+            value={companyFilter}
+            onValueChange={(value) => {
+              setCompanyFilter(value);
+              setProfessionalFilter("all");
+              setServiceFilter("all");
+            }}
+          >
+            <SelectTrigger className="h-9 w-auto min-w-[170px] rounded-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 shadow-none">
+              <SelectValue placeholder="Empresa" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as empresas</SelectItem>
+              {companyOptions.map((company) => (
+                <SelectItem key={company.id} value={company.id}>{company.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+
+        {professionalOptions.length > 0 ? (
+          <Select
+            value={professionalFilter}
+            onValueChange={(value) => {
+              setProfessionalFilter(value);
+              setServiceFilter("all");
+            }}
+          >
+            <SelectTrigger className="h-9 w-auto min-w-[180px] rounded-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 shadow-none">
+              <SelectValue placeholder="Profissional" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os profissionais</SelectItem>
+              {professionalOptions.map((professional) => (
+                <SelectItem key={professional.id} value={professional.id}>{professional.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+
+        {serviceOptions.length > 0 ? (
+          <Select value={serviceFilter} onValueChange={setServiceFilter}>
+            <SelectTrigger className="h-9 w-auto min-w-[170px] rounded-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 shadow-none">
+              <SelectValue placeholder="Serviço" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os serviços</SelectItem>
+              {serviceOptions.map((service) => (
+                <SelectItem key={service.id} value={service.id}>{service.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+
         <Select value={leadFilter} onValueChange={updateLeadFilter}>
-          <SelectTrigger className="h-9 w-auto min-w-[180px] rounded-full border-[var(--color-border-subtle)] bg-white px-4 shadow-none">
+          <SelectTrigger className="h-9 w-auto min-w-[180px] rounded-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 shadow-none">
             <SelectValue placeholder="Lead" />
           </SelectTrigger>
           <SelectContent>
@@ -360,7 +491,7 @@ export default function Calendar() {
         </Select>
 
         <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as CalendarEventStatus | "all")}>
-          <SelectTrigger className="h-9 w-auto min-w-[170px] rounded-full border-[var(--color-border-subtle)] bg-white px-4 shadow-none">
+          <SelectTrigger className="h-9 w-auto min-w-[170px] rounded-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 shadow-none">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -373,7 +504,7 @@ export default function Calendar() {
         </Select>
 
         <Select value={followupFilter} onValueChange={(value) => setFollowupFilter(value as FollowupFilter)}>
-          <SelectTrigger className="h-9 w-auto min-w-[180px] rounded-full border-[var(--color-border-subtle)] bg-white px-4 shadow-none">
+          <SelectTrigger className="h-9 w-auto min-w-[180px] rounded-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 shadow-none">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -396,7 +527,7 @@ export default function Calendar() {
       {isMobile && viewMode !== "month" ? (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {weekDays.map((day) => (
-            <div key={day.toISOString()} className="min-w-16 rounded-2xl bg-white">
+            <div key={day.toISOString()} className="min-w-16 rounded-2xl bg-[var(--color-surface-1)]">
               <DayHeader
                 day={day}
                 compact
@@ -426,6 +557,7 @@ export default function Calendar() {
             onSelectEvent={(event, position) => setPopoverState({ event, position })}
             onMoveEvent={handleMoveEvent}
             onResizeEvent={handleResizeEvent}
+            timezone={calendarTimezone}
           />
         ) : viewMode === "day" ? (
           <DayView
@@ -435,6 +567,7 @@ export default function Calendar() {
             onSelectEvent={(event, position) => setPopoverState({ event, position })}
             onMoveEvent={handleMoveEvent}
             onResizeEvent={handleResizeEvent}
+            timezone={calendarTimezone}
           />
         ) : (
           <MonthView
@@ -444,12 +577,13 @@ export default function Calendar() {
             onCreateAtDate={openCreateAtDate}
             onSelectEvent={(event, position) => setPopoverState({ event, position })}
             onMoveEvent={handleMoveEvent}
+            timezone={calendarTimezone}
           />
         )}
 
         {loading ? (
-          <div className="absolute inset-0 z-40 flex items-center justify-center rounded-[28px] bg-white/55 backdrop-blur-[1px]">
-            <div className="rounded-full border border-[var(--color-border-subtle)] bg-white px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] shadow-sm">
+          <div className="absolute inset-0 z-40 flex items-center justify-center rounded-[var(--radius-3xl)] bg-[var(--color-surface-overlay)] backdrop-blur-sm">
+            <div className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] shadow-sm">
               Carregando agenda...
             </div>
           </div>
@@ -464,6 +598,7 @@ export default function Calendar() {
           onClose={() => setPopoverState(null)}
           onEdit={openEventDialog}
           onSetStatus={handleSetStatus}
+          timezone={calendarTimezone}
         />
       ) : null}
 
@@ -476,6 +611,8 @@ export default function Calendar() {
         defaultLeadId={defaultLeadId}
         onOpenChange={setDialogOpen}
         onCreate={createEvent}
+        onCreateProfessional={createProfessionalAppointment}
+        onCancelProfessional={cancelProfessionalAppointment}
         onUpdate={updateEvent}
         onDelete={softDeleteEvent}
       />

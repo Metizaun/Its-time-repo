@@ -19,7 +19,7 @@ export const PROMPT_GUIDANCE_SECTIONS: PromptGuidanceSection[] = [
   {
     title: "Identidade do Agente",
     description:
-      "Defina nome do agente, empresa, nicho e tom da marca antes de personalizar o restante.",
+      "Defina nome do agente, empresa, nicho, escopo e objetivo operacional.",
     required: true,
   },
   {
@@ -31,7 +31,7 @@ export const PROMPT_GUIDANCE_SECTIONS: PromptGuidanceSection[] = [
   {
     title: "Diretriz Principal",
     description:
-      "Descreva identidade, personalidade, tom de voz e objetivo principal do consultor virtual.",
+      "Descreva objetivo principal, prioridades e limites do consultor virtual. A personalidade e configurada fora do prompt.",
     required: true,
   },
   {
@@ -43,7 +43,7 @@ export const PROMPT_GUIDANCE_SECTIONS: PromptGuidanceSection[] = [
   {
     title: "Framework CARE",
     description:
-      "Preencha tom, qualificacao, recomendacao, urgencia e protocolo de conversao presencial.",
+      "Preencha qualificacao, recomendacao, urgencia e protocolo de conversao presencial.",
     required: true,
   },
   {
@@ -108,27 +108,9 @@ export function parseManagedAgentPrompt(systemPrompt?: string | null): ParsedAge
 }
 
 export function buildManagedAgentPrompt({
-  tone,
   promptBody,
 }: ParsedAgentPrompt): string {
-  const sections: string[] = [];
-
-  if (tone.trim()) {
-    sections.push(
-      [
-        MANAGED_TONE_START,
-        `Tom da marca: ${tone.trim()}`,
-        "Aplique esse tom em todas as respostas sem mencionar esta instrução ao lead.",
-        MANAGED_TONE_END,
-      ].join("\n")
-    );
-  }
-
-  if (promptBody.trim()) {
-    sections.push(promptBody.trim());
-  }
-
-  return sections.join("\n\n").trim();
+  return promptBody.trim();
 }
 
 export function getPromptBodyPreview(promptBody: string, maxLength = 180) {

@@ -7,6 +7,7 @@ import { ChatHeader } from "@/components/chat/ChatHeader";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatWindowNotice } from "@/components/chat/ChatWindowNotice";
 import { MessageList } from "@/components/chat/MessageList";
+import { RoutingQueueBanner } from "@/components/chat/RoutingQueueBanner";
 import { LeadSidebar } from "@/components/leads/LeadSidebar";
 import EditLeadModal from "@/components/modals/EditLeadModal";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ import { type Lead, useLeads } from "@/hooks/useLeads";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { usePipelines } from "@/hooks/usePipelines";
+import { useRoutingQueue } from "@/hooks/useRoutingQueue";
 import { useChatUnread } from "@/contexts/ChatUnreadContext";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
@@ -49,6 +51,7 @@ export default function Chat() {
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [activeFilter, setActiveFilter] = useState<"all" | "unread" | "manual">("all");
   const [selectedInstance, setSelectedInstance] = useState("all");
+  const [selectedCompany, setSelectedCompany] = useState("all");
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
   const [finalizeStageId, setFinalizeStageId] = useState("");
   const [finalizePipelineId, setFinalizePipelineId] = useState("");
@@ -60,6 +63,7 @@ export default function Chat() {
     finalizePipelineId || null,
     finalizeDialogOpen && Boolean(finalizePipelineId)
   );
+  const routingQueue = useRoutingQueue();
 
   const searchFilteredLeads = useMemo(() => {
     const query = ui.searchQuery.trim().toLocaleLowerCase("pt-BR");
@@ -74,11 +78,31 @@ export default function Chat() {
     );
   }, [leads, ui.searchQuery]);
 
-  const instanceFilteredLeads = useMemo(
+  const companyOptions = useMemo(() => {
+    const unique = new Map<string, { id: string; name: string; cnpj: string }>();
+    for (const lead of leads) {
+      if (!lead.empresa_id || !lead.empresa_name || !lead.empresa_cnpj) continue;
+      unique.set(lead.empresa_id, {
+        id: lead.empresa_id,
+        name: lead.empresa_name,
+        cnpj: lead.empresa_cnpj,
+      });
+    }
+    return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name, "pt-BR"));
+  }, [leads]);
+
+  const companyFilteredLeads = useMemo(
     () => searchFilteredLeads.filter(
+      (lead) => selectedCompany === "all" || lead.empresa_id === selectedCompany
+    ),
+    [searchFilteredLeads, selectedCompany]
+  );
+
+  const instanceFilteredLeads = useMemo(
+    () => companyFilteredLeads.filter(
       (lead) => selectedInstance === "all" || lead.instance_name === selectedInstance
     ),
-    [searchFilteredLeads, selectedInstance]
+    [companyFilteredLeads, selectedInstance]
   );
 
   const manualCount = useMemo(
@@ -97,11 +121,23 @@ export default function Chat() {
     }
 
     if (activeFilter === "manual") {
-      return instanceFilteredLeads.filter((lead) => lead.interaction_mode === "human");
+      return instanceFilteredLeads
+        .filter((lead) => lead.interaction_mode === "human")
+        .sort((left, right) => {
+          const leftWaiting = routingQueue.byLead.get(left.id)?.status === "waiting" ? 1 : 0;
+          const rightWaiting = routingQueue.byLead.get(right.id)?.status === "waiting" ? 1 : 0;
+          return rightWaiting - leftWaiting;
+        });
     }
 
     return instanceFilteredLeads;
-  }, [activeFilter, instanceFilteredLeads, unreadByLead]);
+  }, [activeFilter, instanceFilteredLeads, routingQueue.byLead, unreadByLead]);
+
+  useEffect(() => {
+    if (selectedCompany === "all") return;
+    if (companyOptions.some((company) => company.id === selectedCompany)) return;
+    setSelectedCompany("all");
+  }, [companyOptions, selectedCompany]);
 
   useEffect(() => {
     if (selectedInstance === "all") return;
@@ -132,6 +168,7 @@ export default function Chat() {
   };
 
   const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
+  const selectedRouting = selectedLeadId ? routingQueue.byLead.get(selectedLeadId) ?? null : null;
 
   useEffect(() => {
     if (activeFilter === "manual" && selectedLead && selectedLead.interaction_mode !== "human") {
@@ -210,6 +247,12 @@ export default function Chat() {
 
     try {
       await finalizeHumanHandoff(selectedLead.id, finalizeStageId);
+      if (selectedRouting?.status === "claimed") {
+        await routingQueue.close(selectedRouting.routingEventId).catch((error) => {
+          console.error("Atendimento finalizado, mas a fila nao foi fechada:", error);
+          toast.warning("Atendimento finalizado; a fila sera atualizada em seguida");
+        });
+      }
       await Promise.all([
         refetch({ showLoading: false }),
         leadAiControl.refetch({ silent: true }),
@@ -226,6 +269,23 @@ export default function Chat() {
       });
     } finally {
       setFinalizingHandoff(false);
+    }
+  };
+
+  const handleClaimRouting = async () => {
+    if (!selectedRouting) return;
+    try {
+      const result = await routingQueue.claim(selectedRouting.routingEventId);
+      await refetch({ showLoading: false });
+      if (result.claimed === false) {
+        toast.info("Este atendimento ja foi assumido por outra pessoa");
+        return;
+      }
+      toast.success("Atendimento assumido por voce");
+    } catch (error) {
+      toast.error("Nao foi possivel assumir o atendimento", {
+        description: error instanceof Error ? error.message : "Atualize a fila e tente novamente.",
+      });
     }
   };
 
@@ -257,6 +317,9 @@ export default function Chat() {
             instancesLoading={instancesLoading}
             selectedInstance={selectedInstance}
             onInstanceChange={setSelectedInstance}
+            companies={companyOptions}
+            selectedCompany={selectedCompany}
+            onCompanyChange={setSelectedCompany}
           />
         </div>
       )}
@@ -289,6 +352,14 @@ export default function Chat() {
                     : null
                 }
               />
+
+              {selectedRouting ? (
+                <RoutingQueueBanner
+                  item={selectedRouting}
+                  busy={routingQueue.actionId === selectedRouting.routingEventId}
+                  onClaim={() => void handleClaimRouting()}
+                />
+              ) : null}
 
               <MessageList messages={messages} loading={messagesLoading} />
 

@@ -94,6 +94,27 @@ export type LensPriceRule = {
   isActive: boolean;
 };
 
+export type ForwardingDestination = {
+  id: string;
+  destination_key: string;
+  display_name: string;
+  mode: "external_notification" | "agent" | "internal_company";
+  target_phone: string | null;
+  target_agent_id: string | null;
+  empresa_id: string | null;
+  context_instruction: string;
+  is_active: boolean;
+  seller_ids: string[];
+};
+
+export type ForwardingSetup = {
+  destinations: ForwardingDestination[];
+  companies: Array<{ id: string; cnpj: string; name: string; city: string; state: string }>;
+  sellers: Array<{ id: string; name: string | null; email: string }>;
+  memberships: Array<{ empresa_id: string; crm_user_id: string }>;
+  agents: Array<{ id: string; name: string; instance_name: string; is_active: boolean }>;
+};
+
 export async function listAgentTemplates() {
   const response = await getCrmBackend<{ templates?: AgentTemplate[] }>(
     "/api/agent-templates"
@@ -227,5 +248,36 @@ export async function runRbBillingNow(agentId: string) {
   return postCrmBackend<{ success: boolean; result: unknown }>(
     `/api/agents/${encodeURIComponent(agentId)}/tools/rb_billing/run-now`,
     {}
+  );
+}
+
+export async function getForwardingSetup(agentId: string) {
+  return getCrmBackend<ForwardingSetup>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/forwarding/setup`,
+  );
+}
+
+export async function saveForwardingDestination(
+  agentId: string,
+  input: {
+    destinationKey: string;
+    displayName: string;
+    mode: "agent" | "internal_company";
+    targetAgentId?: string | null;
+    empresaId?: string | null;
+    sellerIds?: string[];
+    contextInstruction: string;
+  },
+) {
+  const response = await postCrmBackend<{ destination: ForwardingDestination }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/forwarding/destinations`,
+    input,
+  );
+  return response.destination;
+}
+
+export async function deactivateForwardingDestination(agentId: string, destinationId: string) {
+  return deleteCrmBackend<{ success: boolean }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/forwarding/destinations/${encodeURIComponent(destinationId)}`,
   );
 }

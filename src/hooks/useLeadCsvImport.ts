@@ -69,8 +69,23 @@ function normalizePhone(value: unknown) {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
 
-  const normalized = raw.replace(/[^\d+]/g, "");
+  const normalized = raw.replace(/\D/g, "");
   return normalized.length > 0 ? normalized : null;
+}
+
+function phoneIdentity(value: string) {
+  const raw = value.trim();
+  let digits = value.replace(/\D/g, "");
+  if ((raw.startsWith("+") || raw.startsWith("00")) && !digits.startsWith("55")) {
+    return `intl:${digits}`;
+  }
+  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
+    digits = digits.slice(2);
+  }
+  if (digits.length === 11 && digits[2] === "9") {
+    digits = `${digits.slice(0, 2)}${digits.slice(3)}`;
+  }
+  return digits.length === 10 ? `br:${digits}` : `raw:${digits}`;
 }
 
 function isCsvFile(file: File) {
@@ -175,7 +190,7 @@ export function useLeadCsvImport() {
         } else if (!normalizedPhone) {
           status = "invalid";
           reason = "Telefone obrigatorio ou invalido.";
-        } else if (seenPhones.has(normalizedPhone)) {
+        } else if (seenPhones.has(phoneIdentity(normalizedPhone))) {
           status = "duplicate";
           reason = "Telefone duplicado dentro do arquivo.";
         }
@@ -212,7 +227,7 @@ export function useLeadCsvImport() {
           return;
         }
 
-        seenPhones.add(normalizedPhone);
+        seenPhones.add(phoneIdentity(normalizedPhone));
         nextValidRows.push({
           nome,
           telefone: normalizedPhone,

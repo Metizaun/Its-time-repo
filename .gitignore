@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+*.tsbuildinfo
+supabase/.temp/start-secrets/
+/scripts/clone_dr_oculos.mjs
+/scripts/dr_oculos_cloning.sql
 
 # Editor directories and files
 .vscode/*

@@ -39,6 +39,17 @@ type RawBodyRequest = Request & {
 };
 
 type CrmUserRole = "NENHUM" | "VENDEDOR" | "ADMIN";
+type AgentPersonalityProfile = "surgical" | "consultative" | "balanced" | "dynamic" | "enthusiastic";
+
+function asAgentPersonalityProfile(value: unknown): AgentPersonalityProfile | undefined {
+  return value === "surgical"
+    || value === "consultative"
+    || value === "balanced"
+    || value === "dynamic"
+    || value === "enthusiastic"
+    ? value
+    : undefined;
+}
 
 function asString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -47,6 +58,91 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeCnpj(value: unknown) {
+  return String(value ?? "")
+    .replace(/[^0-9a-z]/gi, "")
+    .toUpperCase();
+}
+
+function isValidCnpj(value: unknown) {
+  const cnpj = normalizeCnpj(value);
+  if (!/^[0-9A-Z]{12}[0-9]{2}$/.test(cnpj)) return false;
+  if (/^(\d)\1{13}$/.test(cnpj)) return false;
+
+  const characterValue = (character: string) =>
+    character.charCodeAt(0) - 48;
+  const calculateDigit = (base: string, weights: number[]) => {
+    const sum = base
+      .split("")
+      .reduce(
+        (total, character, index) =>
+          total + characterValue(character) * weights[index],
+        0,
+      );
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+
+  const firstDigit = calculateDigit(
+    cnpj.slice(0, 12),
+    [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2],
+  );
+  if (firstDigit !== Number(cnpj[12])) return false;
+
+  const secondDigit = calculateDigit(
+    `${cnpj.slice(0, 12)}${firstDigit}`,
+    [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2],
+  );
+  return secondDigit === Number(cnpj[13]);
+}
+
+function parseCompanyInput(body: unknown) {
+  const payload = asRecord(body);
+  const cnpj = normalizeCnpj(payload.cnpj);
+  const legalName = asString(payload.legalName);
+  const name = asString(payload.name);
+  const phone = asString(payload.phone);
+  const email = asString(payload.email)?.toLowerCase() ?? null;
+  const address = asString(payload.address);
+  const city = asString(payload.city);
+  const state = asString(payload.state)?.toUpperCase() ?? null;
+  const postalCode = asString(payload.postalCode)?.replace(/\D/g, "") || null;
+  const timezone = asString(payload.timezone) ?? "America/Sao_Paulo";
+
+  if (!isValidCnpj(cnpj)) {
+    throw new HttpError(400, "CNPJ invalido");
+  }
+  if (!legalName || !name || !address || !city || !state) {
+    throw new HttpError(
+      400,
+      "CNPJ, razao social, nome fantasia, endereco, cidade e estado sao obrigatorios",
+    );
+  }
+  if (!/^[A-Z]{2}$/.test(state)) {
+    throw new HttpError(400, "Estado invalido");
+  }
+  if (postalCode && !/^\d{8}$/.test(postalCode)) {
+    throw new HttpError(400, "CEP invalido");
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpError(400, "E-mail invalido");
+  }
+
+  return {
+    cnpj,
+    legal_name: legalName,
+    name,
+    phone,
+    email,
+    address,
+    city,
+    state,
+    postal_code: postalCode,
+    timezone,
+    is_active: payload.isActive !== false,
+  };
 }
 
 function summarizeEvolutionWebhookPayload(payload: WebhookPayload) {
@@ -879,10 +975,10 @@ app.get(
           read: Boolean(item.is_read),
           action:
             actionUrl?.pathname === "/chat" &&
-            actionUrl.searchParams.get("leadId")
+            (actionUrl.searchParams.get("leadId") || actionUrl.searchParams.get("lead"))
               ? {
                   kind: "openConversation",
-                  target: actionUrl.searchParams.get("leadId"),
+                  target: actionUrl.searchParams.get("leadId") || actionUrl.searchParams.get("lead"),
                 }
               : null,
         };
@@ -1208,6 +1304,24 @@ app.patch(
           revokeError,
         );
       }
+
+      const { error: companyRevokeError } = await supabaseAdmin
+        .from("empresa_memberships")
+        .update({
+          is_active: false,
+          revoked_at: new Date().toISOString(),
+        })
+        .eq("aces_id", context.acesId)
+        .eq("crm_user_id", getSingleParam(req.params.id))
+        .eq("is_active", true);
+
+      if (companyRevokeError) {
+        throw new HttpError(
+          500,
+          "Role atualizada, mas os acessos de empresa nao foram revogados",
+          companyRevokeError,
+        );
+      }
     }
 
     res.json({ success: true });
@@ -1355,6 +1469,361 @@ app.delete(
       throw new HttpError(
         500,
         "Nao foi possivel revogar o acesso da instancia",
+        error,
+      );
+    }
+
+    res.json({ success: true });
+  }),
+);
+
+app.get(
+  "/api/routing-queue",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const status = typeof req.query.status === "string" &&
+      ["waiting", "claimed", "closed", "cancelled"].includes(req.query.status)
+      ? req.query.status
+      : null;
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 100);
+    const before = asString(req.query.before);
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_list_routing_queue", {
+      p_status: status,
+      p_limit: limit,
+      p_before: before,
+    });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar a fila de encaminhamentos", error);
+    res.json({ success: true, items: data ?? [] });
+  }),
+);
+
+app.post(
+  "/api/routing-queue/:id/claim",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_claim_routing_event", {
+      p_event_id: getSingleParam(req.params.id),
+    });
+    if (error) throw new HttpError(409, "Nao foi possivel assumir o atendimento", error);
+    res.json({ success: true, result: data });
+  }),
+);
+
+app.post(
+  "/api/routing-queue/:id/reassign",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (req.authContext?.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem reatribuir atendimentos");
+    }
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const userId = typeof req.body.userId === "string" ? req.body.userId.trim() : "";
+    if (!userId) throw new HttpError(400, "Vendedor de destino obrigatorio");
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_reassign_routing_event", {
+      p_event_id: getSingleParam(req.params.id),
+      p_user_id: userId,
+    });
+    if (error) throw new HttpError(409, "Nao foi possivel reatribuir o atendimento", error);
+    res.json({ success: true, result: data });
+  }),
+);
+
+app.post(
+  "/api/routing-queue/:id/close",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_close_routing_event", {
+      p_event_id: getSingleParam(req.params.id),
+    });
+    if (error) throw new HttpError(409, "Nao foi possivel finalizar a fila do atendimento", error);
+    res.json({ success: true, result: data });
+  }),
+);
+
+app.get(
+  "/api/admin/companies",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem listar empresas");
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const [companiesResult, membershipsResult] = await Promise.all([
+      supabaseAdmin
+        .from("empresas")
+        .select(
+          "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, is_active, created_at, updated_at",
+        )
+        .eq("aces_id", context.acesId)
+        .order("name"),
+      supabaseAdmin
+        .from("empresa_memberships")
+        .select("empresa_id")
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true),
+    ]);
+
+    const error = companiesResult.error ?? membershipsResult.error;
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar empresas", error);
+    }
+
+    const memberCountByCompany = new Map<string, number>();
+    for (const membership of membershipsResult.data ?? []) {
+      const companyId = String(membership.empresa_id);
+      memberCountByCompany.set(
+        companyId,
+        (memberCountByCompany.get(companyId) ?? 0) + 1,
+      );
+    }
+
+    res.json({
+      success: true,
+      companies: (companiesResult.data ?? []).map((company) => ({
+        id: company.id,
+        cnpj: company.cnpj,
+        legalName: company.legal_name,
+        name: company.name,
+        phone: company.phone,
+        email: company.email,
+        address: company.address,
+        city: company.city,
+        state: company.state,
+        postalCode: company.postal_code,
+        timezone: company.timezone,
+        isActive: company.is_active,
+        memberCount: memberCountByCompany.get(String(company.id)) ?? 0,
+        createdAt: company.created_at,
+        updatedAt: company.updated_at,
+      })),
+    });
+  }),
+);
+
+app.post(
+  "/api/admin/companies",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem criar empresas");
+    }
+
+    const input = parseCompanyInput(req.body);
+    const supabaseAdmin = createServiceSupabaseClient();
+    const { data, error } = await supabaseAdmin
+      .from("empresas")
+      .insert({
+        aces_id: context.acesId,
+        created_by: context.crmUserId,
+        ...input,
+      })
+      .select(
+        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, is_active, created_at, updated_at",
+      )
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        throw new HttpError(409, "Este CNPJ ja esta cadastrado nesta conta", error);
+      }
+      if (error.code === "23514") {
+        throw new HttpError(400, "CNPJ ou dados da empresa invalidos", error);
+      }
+      throw new HttpError(500, "Nao foi possivel criar a empresa", error);
+    }
+
+    res.status(201).json({ success: true, company: data });
+  }),
+);
+
+app.patch(
+  "/api/admin/companies/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem editar empresas");
+    }
+
+    const input = parseCompanyInput(req.body);
+    const supabaseAdmin = createServiceSupabaseClient();
+    const { data, error } = await supabaseAdmin
+      .from("empresas")
+      .update(input)
+      .eq("id", getSingleParam(req.params.id))
+      .eq("aces_id", context.acesId)
+      .select(
+        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, is_active, created_at, updated_at",
+      )
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === "23505") {
+        throw new HttpError(409, "Este CNPJ ja esta cadastrado nesta conta", error);
+      }
+      if (error.code === "23514") {
+        throw new HttpError(400, "CNPJ ou dados da empresa invalidos", error);
+      }
+      throw new HttpError(500, "Nao foi possivel atualizar a empresa", error);
+    }
+    if (!data) throw new HttpError(404, "Empresa nao encontrada");
+
+    res.json({ success: true, company: data });
+  }),
+);
+
+app.get(
+  "/api/admin/company-access",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(
+        403,
+        "Apenas administradores podem gerenciar acessos de empresa",
+      );
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const [companiesResult, membershipsResult] = await Promise.all([
+      supabaseAdmin
+        .from("empresas")
+        .select("id, cnpj, name, city, state, is_active")
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true)
+        .order("name"),
+      supabaseAdmin
+        .from("empresa_memberships")
+        .select("id, empresa_id, crm_user_id, is_active")
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true),
+    ]);
+
+    const error = companiesResult.error ?? membershipsResult.error;
+    if (error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel carregar os acessos de empresa",
+        error,
+      );
+    }
+
+    res.json({
+      success: true,
+      companies: companiesResult.data ?? [],
+      memberships: membershipsResult.data ?? [],
+    });
+  }),
+);
+
+app.post(
+  "/api/admin/company-access",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(
+        403,
+        "Apenas administradores podem gerenciar acessos de empresa",
+      );
+    }
+
+    const companyId = String(req.body.companyId ?? "").trim();
+    const crmUserId = String(req.body.crmUserId ?? "").trim();
+    if (!companyId || !crmUserId) {
+      throw new HttpError(400, "Empresa e vendedor sao obrigatorios");
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const [{ data: company }, { data: seller }] = await Promise.all([
+      supabaseAdmin
+        .from("empresas")
+        .select("id")
+        .eq("id", companyId)
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true)
+        .maybeSingle(),
+      supabaseAdmin
+        .from("users")
+        .select("id")
+        .eq("id", crmUserId)
+        .eq("aces_id", context.acesId)
+        .eq("role", "VENDEDOR")
+        .maybeSingle(),
+    ]);
+
+    if (!company || !seller) {
+      throw new HttpError(404, "Empresa ou vendedor nao encontrado na conta");
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("empresa_memberships")
+      .upsert(
+        {
+          aces_id: context.acesId,
+          empresa_id: companyId,
+          crm_user_id: crmUserId,
+          granted_by: context.crmUserId,
+          is_active: true,
+          granted_at: new Date().toISOString(),
+          revoked_at: null,
+        },
+        { onConflict: "empresa_id,crm_user_id" },
+      )
+      .select("id, empresa_id, crm_user_id, is_active")
+      .single();
+
+    if (error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel salvar o acesso da empresa",
+        error,
+      );
+    }
+
+    res.json({ success: true, membership: data });
+  }),
+);
+
+app.delete(
+  "/api/admin/company-access/:companyId/:userId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(
+        403,
+        "Apenas administradores podem gerenciar acessos de empresa",
+      );
+    }
+
+    const supabaseAdmin = createServiceSupabaseClient();
+    const { error } = await supabaseAdmin
+      .from("empresa_memberships")
+      .update({ is_active: false, revoked_at: new Date().toISOString() })
+      .eq("aces_id", context.acesId)
+      .eq("empresa_id", getSingleParam(req.params.companyId))
+      .eq("crm_user_id", getSingleParam(req.params.userId))
+      .eq("is_active", true);
+
+    if (error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel revogar o acesso da empresa",
         error,
       );
     }
@@ -1776,6 +2245,7 @@ app.post(
         typeof req.body.temperature === "number"
           ? req.body.temperature
           : undefined,
+      personalityProfile: asAgentPersonalityProfile(req.body.personalityProfile),
       isActive:
         typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
@@ -1841,6 +2311,7 @@ app.patch(
         typeof req.body.temperature === "number"
           ? req.body.temperature
           : undefined,
+      personalityProfile: asAgentPersonalityProfile(req.body.personalityProfile),
       isActive:
         typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
@@ -1962,6 +2433,7 @@ app.post(
         typeof req.body.temperature === "number"
           ? req.body.temperature
           : undefined,
+      personalityProfile: asAgentPersonalityProfile(req.body.personalityProfile),
       isActive:
         typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
       bufferWaitMs:
@@ -2025,6 +2497,7 @@ app.patch(
         typeof req.body.temperature === "number"
           ? req.body.temperature
           : undefined,
+      personalityProfile: asAgentPersonalityProfile(req.body.personalityProfile),
       bufferWaitMs:
         typeof req.body.bufferWaitMs === "number"
           ? req.body.bufferWaitMs
@@ -2363,6 +2836,16 @@ app.post(
 );
 
 app.get(
+  "/api/agents/:id/tools/forwarding/setup",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const setup = await manager.getForwardingSetup(req.authContext!, agentId);
+    res.json({ success: true, ...setup });
+  }),
+);
+
+app.get(
   "/api/agents/:id/tools/forwarding/destinations",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -2382,7 +2865,8 @@ app.post(
     const agentId = getSingleParam(req.params.id);
     if (
       req.body.mode !== "external_notification" &&
-      req.body.mode !== "agent"
+      req.body.mode !== "agent" &&
+      req.body.mode !== "internal_company"
     ) {
       throw new HttpError(400, "Modo de encaminhamento invalido");
     }
@@ -2401,6 +2885,13 @@ app.post(
           typeof req.body.targetAgentId === "string"
             ? req.body.targetAgentId
             : null,
+        empresaId:
+          typeof req.body.empresaId === "string"
+            ? req.body.empresaId
+            : null,
+        sellerIds: Array.isArray(req.body.sellerIds)
+          ? req.body.sellerIds.map((sellerId: unknown) => String(sellerId))
+          : [],
         contextInstruction: String(req.body.contextInstruction ?? ""),
       },
     );

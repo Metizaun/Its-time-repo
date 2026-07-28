@@ -2,6 +2,7 @@ import { format, isSameMonth, isToday, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 import { cn } from "@/lib/utils";
+import { formatInCalendarTimezone, utcToWallDate } from "@/lib/calendarTimezone";
 import type { CalendarEvent, CalendarEventStatus } from "@/types/calendar";
 
 type MonthViewProps = {
@@ -11,6 +12,7 @@ type MonthViewProps = {
   onCreateAtDate: (date: Date) => void;
   onSelectEvent: (event: CalendarEvent, position: { top: number; left: number }) => void;
   onMoveEvent: (event: CalendarEvent, start: Date, end: Date, allDay: boolean) => void;
+  timezone: string;
 };
 
 const STATUS_DOT_COLORS: Record<CalendarEventStatus, string> = {
@@ -21,9 +23,9 @@ const STATUS_DOT_COLORS: Record<CalendarEventStatus, string> = {
   no_show: "var(--color-warning-600)",
 };
 
-function eventsForDay(events: CalendarEvent[], day: Date) {
+function eventsForDay(events: CalendarEvent[], day: Date, timezone: string) {
   const key = format(day, "yyyy-MM-dd");
-  return events.filter((event) => format(parseISO(event.start_time), "yyyy-MM-dd") === key);
+  return events.filter((event) => format(utcToWallDate(event.start_time, timezone), "yyyy-MM-dd") === key);
 }
 
 function readDropPayload(dataTransfer: DataTransfer) {
@@ -44,6 +46,7 @@ export function MonthView({
   onCreateAtDate,
   onSelectEvent,
   onMoveEvent,
+  timezone,
 }: MonthViewProps) {
   const weekDays = weeks[0] ?? [];
 
@@ -61,7 +64,7 @@ export function MonthView({
         {weeks.map((week) => (
           <div key={week[0]?.toISOString()} className="grid grid-cols-7 border-b border-[var(--color-border-subtle)] last:border-b-0">
             {week.map((day) => {
-              const dayEvents = eventsForDay(events, day);
+              const dayEvents = eventsForDay(events, day, timezone);
               const muted = !isSameMonth(day, currentDate);
               const today = isToday(day);
               const overflowCount = Math.max(dayEvents.length - 3, 0);
@@ -84,7 +87,7 @@ export function MonthView({
                     const event = events.find((candidate) => candidate.id === payload.id);
                     if (!event) return;
 
-                    const originalStart = parseISO(event.start_time);
+                    const originalStart = utcToWallDate(event.start_time, timezone);
                     const start = new Date(day);
                     start.setHours(originalStart.getHours(), originalStart.getMinutes(), 0, 0);
                     const durationMs =
@@ -131,7 +134,7 @@ export function MonthView({
                         className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-[var(--color-text-primary)] hover:bg-white"
                       >
                         <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: STATUS_DOT_COLORS[event.status] }} />
-                        <span className="truncate">{event.all_day ? "" : `${format(parseISO(event.start_time), "HH:mm")} `}{event.title}</span>
+                        <span className="truncate">{event.all_day ? "" : `${formatInCalendarTimezone(event.start_time, timezone, { hour: "2-digit", minute: "2-digit", hour12: false })} `}{event.title}</span>
                         {event.followup_1h_enabled ? <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-primary-300)]" title="Lembrete ativo" /> : null}
                       </span>
                     ))}

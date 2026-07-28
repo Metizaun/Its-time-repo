@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { endOfDay, parseISO, startOfDay } from "date-fns";
+import { endOfDay, startOfDay } from "date-fns";
 
 import type { CalendarEvent } from "@/types/calendar";
+import { utcToWallDate } from "@/lib/calendarTimezone";
 
 export const HOUR_HEIGHT = 64;
 export const DAY_START_HOUR = 0;
@@ -30,9 +31,9 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function eventOverlapsDay(event: CalendarEvent, day: Date) {
-  const start = parseISO(event.start_time);
-  const end = parseISO(event.end_time);
+function eventOverlapsDay(event: CalendarEvent, day: Date, timezone: string) {
+  const start = utcToWallDate(event.start_time, timezone);
+  const end = utcToWallDate(event.end_time, timezone);
   return start < endOfDay(day) && end > startOfDay(day);
 }
 
@@ -40,15 +41,15 @@ function getMinutesInDay(date: Date) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
-function toVisibleInterval(event: CalendarEvent, day: Date): EventInterval | null {
-  if (event.all_day || !eventOverlapsDay(event, day)) {
+function toVisibleInterval(event: CalendarEvent, day: Date, timezone: string): EventInterval | null {
+  if (event.all_day || !eventOverlapsDay(event, day, timezone)) {
     return null;
   }
 
   const dayStart = startOfDay(day);
   const dayEnd = endOfDay(day);
-  const eventStart = parseISO(event.start_time);
-  const eventEnd = parseISO(event.end_time);
+  const eventStart = utcToWallDate(event.start_time, timezone);
+  const eventEnd = utcToWallDate(event.end_time, timezone);
   const visibleStart = eventStart < dayStart ? dayStart : eventStart;
   const visibleEnd = eventEnd > dayEnd ? dayEnd : eventEnd;
 
@@ -143,9 +144,13 @@ export function dateWithMinutes(day: Date, minutes: number) {
   return nextDate;
 }
 
-export function layoutEventsForDay(events: CalendarEvent[], day: Date): CalendarEventLayout[] {
+export function layoutEventsForDay(
+  events: CalendarEvent[],
+  day: Date,
+  timezone = "America/Sao_Paulo",
+): CalendarEventLayout[] {
   const intervals = events
-    .map((event) => toVisibleInterval(event, day))
+    .map((event) => toVisibleInterval(event, day, timezone))
     .filter((interval): interval is EventInterval => interval !== null);
 
   const columnMap = assignColumns(intervals);
@@ -166,10 +171,10 @@ export function layoutEventsForDay(events: CalendarEvent[], day: Date): Calendar
   });
 }
 
-export function allDayEventsForDay(events: CalendarEvent[], day: Date) {
-  return events.filter((event) => event.all_day && eventOverlapsDay(event, day));
+export function allDayEventsForDay(events: CalendarEvent[], day: Date, timezone = "America/Sao_Paulo") {
+  return events.filter((event) => event.all_day && eventOverlapsDay(event, day, timezone));
 }
 
-export function useEventLayout(events: CalendarEvent[], day: Date) {
-  return useMemo(() => layoutEventsForDay(events, day), [events, day]);
+export function useEventLayout(events: CalendarEvent[], day: Date, timezone = "America/Sao_Paulo") {
+  return useMemo(() => layoutEventsForDay(events, day, timezone), [events, day, timezone]);
 }

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
+import { normalizePhoneDigits, normalizePhoneIdentity } from "../_shared/phone-normalization.ts";
 
 type ImportLeadCsvRow = {
   nome?: unknown;
@@ -46,10 +47,7 @@ function normalizeText(value: unknown) {
 }
 
 function normalizePhone(value: unknown) {
-  const raw = normalizeText(value);
-  if (!raw) return null;
-
-  const normalized = raw.replace(/[^\d+]/g, "");
+  const normalized = normalizePhoneDigits(value);
   return normalized.length > 0 ? normalized : null;
 }
 
@@ -179,12 +177,18 @@ function sanitizeRows(rows: ImportLeadCsvRow[]) {
       return;
     }
 
-    if (seenPhones.has(contactPhone)) {
+    const phoneIdentity = normalizePhoneIdentity(contactPhone);
+    if (!phoneIdentity) {
+      invalidRows.push({ rowNumber, reason: "Telefone obrigatorio ou invalido." });
+      return;
+    }
+
+    if (seenPhones.has(phoneIdentity)) {
       invalidRows.push({ rowNumber, reason: "Telefone duplicado no arquivo enviado." });
       return;
     }
 
-    seenPhones.add(contactPhone);
+    seenPhones.add(phoneIdentity);
     validRows.push({
       name,
       contact_phone: contactPhone,
@@ -294,17 +298,44 @@ async function insertRowsInChunks(
       view: true,
     }));
 
+    const identities = chunk
+      .map((row) => normalizePhoneIdentity(row.contact_phone))
+      .filter((identity): identity is string => Boolean(identity));
+    const { data: existing, error: existingError } = await adminClient
+      .schema("crm")
+      .from("leads")
+      .select("phone_identity")
+      .eq("aces_id", acesId)
+      .eq("view", true)
+      .in("phone_identity", identities);
+    if (existingError) throw new Error(existingError.message);
+
+    const existingIdentities = new Set((existing ?? []).map((lead) => lead.phone_identity));
+    const candidates = chunk.filter((row) => {
+      const identity = normalizePhoneIdentity(row.contact_phone);
+      return identity && !existingIdentities.has(identity);
+    });
+    if (candidates.length === 0) continue;
+
     const { data, error } = await adminClient
       .schema("crm")
       .from("leads")
-      .upsert(chunk, {
-        onConflict: "contact_phone,aces_id",
-        ignoreDuplicates: true,
-      })
+      .insert(candidates)
       .select("id");
 
     if (error) {
-      throw new Error(error.message);
+      if (error.code !== "23505") throw new Error(error.message);
+
+      for (const candidate of candidates) {
+        const { data: single, error: singleError } = await adminClient
+          .schema("crm")
+          .from("leads")
+          .insert(candidate)
+          .select("id");
+        if (singleError && singleError.code !== "23505") throw new Error(singleError.message);
+        inserted += single?.length ?? 0;
+      }
+      continue;
     }
 
     inserted += data?.length ?? 0;

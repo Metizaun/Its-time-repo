@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { AppState, Lead, Toast, KanbanColumn } from "@/types";
+import { AppState, Lead, Toast, KanbanColumn, ModalPayload } from "@/types";
 import { mockLeads, mockUsers, defaultKanbanColumns } from "@/lib/mockData";
 import { toast as showToast } from "sonner";
 
@@ -10,7 +10,7 @@ interface AppContextType {
   setSearchQuery: (query: string) => void;
   setPeriodFilter: (filter: AppState["ui"]["periodFilter"]) => void;
   setCustomRange: (range: { from: Date | null; to: Date | null }) => void;
-  openModal: (type: string, payload?: unknown) => void;
+  openModal: (type: string, payload?: ModalPayload) => void;
   closeModal: () => void;
   openDrawer: (leadId: string) => void;
   closeDrawer: () => void;
@@ -88,7 +88,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setUi((prev) => ({ ...prev, customRange: range }));
   };
 
-  const openModal = (type: string, payload?: unknown) => {
+  const openModal = (type: string, payload?: ModalPayload) => {
     setUi((prev) => ({ ...prev, modal: { type, payload } }));
   };
 

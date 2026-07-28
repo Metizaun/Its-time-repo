@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { BellRing } from "lucide-react";
-import { format, parseISO } from "date-fns";
+import { parseISO } from "date-fns";
 
 import { HOUR_HEIGHT, SNAP_MINUTES, type CalendarEventLayout } from "@/hooks/useEventLayout";
 import { cn } from "@/lib/utils";
+import { formatInCalendarTimezone } from "@/lib/calendarTimezone";
 import type { CalendarEvent, CalendarEventStatus } from "@/types/calendar";
 
 type EventBlockProps = {
   layout: CalendarEventLayout;
   onSelectEvent: (event: CalendarEvent, position: { top: number; left: number }) => void;
   onResizeEvent: (event: CalendarEvent, deltaMinutes: number) => void;
+  timezone: string;
 };
 
 const STATUS_STYLES: Record<CalendarEventStatus, { bg: string; border: string; text: string }> = {
@@ -25,11 +27,11 @@ function getResizeDeltaMinutes(startY: number, currentY: number) {
   return Math.round(rawDeltaMinutes / SNAP_MINUTES) * SNAP_MINUTES;
 }
 
-export function EventBlock({ layout, onSelectEvent, onResizeEvent }: EventBlockProps) {
+export function EventBlock({ layout, onSelectEvent, onResizeEvent, timezone }: EventBlockProps) {
   const { event, top, height, left, width, zIndex } = layout;
   const colors = STATUS_STYLES[event.status];
-  const startTime = format(parseISO(event.start_time), "HH:mm");
-  const endTime = format(parseISO(event.end_time), "HH:mm");
+  const startTime = formatInCalendarTimezone(event.start_time, timezone, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const endTime = formatInCalendarTimezone(event.end_time, timezone, { hour: "2-digit", minute: "2-digit", hour12: false });
   const isCompact = height < 46;
   const [resizeDelta, setResizeDelta] = useState(0);
   const [resizeStartY, setResizeStartY] = useState<number | null>(null);

@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
-import type { CalendarEvent, CalendarEventInput, CalendarEventRange, CalendarEventStatus } from "@/types/calendar";
+import { wallDateToUtc } from "@/lib/calendarTimezone";
+import type {
+  CalendarEvent,
+  CalendarEventInput,
+  CalendarEventRange,
+  CalendarEventStatus,
+  ProfessionalAppointmentInput,
+} from "@/types/calendar";
 
 type MutationResult = {
   data: CalendarEvent | null;
@@ -14,6 +21,12 @@ type MutationOptions = {
 };
 
 function getErrorMessage(error: unknown) {
+  if (typeof error === "object" && error && "message" in error) {
+    const message = String((error as { message?: unknown }).message);
+    if (message.includes("SLOT_UNAVAILABLE")) {
+      return "Esse horÃ¡rio acabou de ficar indisponÃ­vel. Escolha outra opÃ§Ã£o.";
+    }
+  }
   if (error instanceof Error) return error.message;
   if (typeof error === "object" && error && "message" in error) return String((error as { message?: unknown }).message);
   return "Erro inesperado no calendario";
@@ -34,7 +47,11 @@ function toCalendarPayload(input: CalendarEventInput) {
   };
 }
 
-export function useCalendarEvents(range: CalendarEventRange, enabled = true) {
+export function useCalendarEvents(
+  range: CalendarEventRange,
+  enabled = true,
+  timezone = "America/Sao_Paulo",
+) {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [schemaReady, setSchemaReady] = useState(true);
@@ -62,8 +79,8 @@ export function useCalendarEvents(range: CalendarEventRange, enabled = true) {
           .schema("calendar")
           .from("events")
           .select("*")
-          .lt("start_time", end.toISOString())
-          .gt("end_time", start.toISOString())
+          .lt("start_time", wallDateToUtc(end, timezone).toISOString())
+          .gt("end_time", wallDateToUtc(start, timezone).toISOString())
           .is("deleted_at", null)
           .order("start_time", { ascending: true });
 
@@ -86,7 +103,7 @@ export function useCalendarEvents(range: CalendarEventRange, enabled = true) {
         if (showLoading) setLoading(false);
       }
     },
-    [enabled]
+    [enabled, timezone]
   );
 
   const scheduleBackgroundFetch = useCallback(() => {
@@ -153,6 +170,86 @@ export function useCalendarEvents(range: CalendarEventRange, enabled = true) {
       }
     },
     [fetchEvents]
+  );
+
+  const createProfessionalAppointment = useCallback(
+    async (input: ProfessionalAppointmentInput): Promise<MutationResult> => {
+      try {
+        const { data, error } = await supabase.schema("calendar").rpc("create_professional_appointment", {
+          p_lead_id: input.leadId,
+          p_professional_location_id: input.professionalLocationId,
+          p_service_id: input.serviceId,
+          p_start_time: input.startTime,
+          p_title: input.title.trim() || null,
+          p_opportunity_id: input.opportunityId || null,
+          p_status: input.status ?? "scheduled",
+          p_description: input.description?.trim() || null,
+          p_location: input.location?.trim() || null,
+          p_meeting_url: input.meetingUrl?.trim() || null,
+          p_followup_1h_enabled: Boolean(input.followupEnabled),
+          p_booking_origin: "manual",
+          p_idempotency_key: input.idempotencyKey?.trim() || null,
+        });
+
+        if (error) throw error;
+
+        toast.success("Agendamento criado com sucesso!");
+        await fetchEvents({ showLoading: false });
+        return { data: data as CalendarEvent, error: null };
+      } catch (error) {
+        console.error("Erro ao criar agendamento profissional:", error);
+        toast.error("NÃ£o foi possÃ­vel criar o agendamento", { description: getErrorMessage(error) });
+        return { data: null, error };
+      }
+    },
+    [fetchEvents]
+  );
+
+  const rescheduleProfessionalAppointment = useCallback(
+    async (eventId: string, startTime: string, options: MutationOptions = {}): Promise<MutationResult> => {
+      try {
+        const { data, error } = await supabase.schema("calendar").rpc("reschedule_professional_appointment", {
+          p_event_id: eventId,
+          p_start_time: startTime,
+        });
+        if (error) throw error;
+
+        if (options.showToast ?? true) toast.success("Agendamento reagendado!");
+        await fetchEvents({ showLoading: false });
+        return { data: data as CalendarEvent, error: null };
+      } catch (error) {
+        console.error("Erro ao reagendar atendimento:", error);
+        if (options.showToast ?? true) {
+          toast.error("NÃ£o foi possÃ­vel reagendar", { description: getErrorMessage(error) });
+        }
+        await fetchEvents({ showLoading: false });
+        return { data: null, error };
+      }
+    },
+    [fetchEvents]
+  );
+
+  const cancelProfessionalAppointment = useCallback(
+    async (eventId: string, reason: string): Promise<MutationResult> => {
+      try {
+        const { data, error } = await supabase
+          .schema("calendar")
+          .rpc("cancel_professional_appointment", {
+            p_event_id: eventId,
+            p_reason: reason.trim(),
+          });
+        if (error) throw error;
+
+        toast.success("Agendamento cancelado.");
+        await fetchEvents({ showLoading: false });
+        return { data: data as CalendarEvent, error: null };
+      } catch (error) {
+        console.error("Erro ao cancelar atendimento:", error);
+        toast.error("Não foi possível cancelar", { description: getErrorMessage(error) });
+        return { data: null, error };
+      }
+    },
+    [fetchEvents],
   );
 
   const updateEvent = useCallback(
@@ -251,6 +348,9 @@ export function useCalendarEvents(range: CalendarEventRange, enabled = true) {
     schemaReady,
     refetch: fetchEvents,
     createEvent,
+    createProfessionalAppointment,
+    rescheduleProfessionalAppointment,
+    cancelProfessionalAppointment,
     updateEvent,
     setEventStatus,
     softDeleteEvent,

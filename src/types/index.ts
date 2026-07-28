@@ -30,6 +30,7 @@ export interface AIAgent {
   model: string;
   is_active: boolean;
   temperature: number;
+  personality_profile: "surgical" | "consultative" | "balanced" | "dynamic" | "enthusiastic";
   buffer_wait_ms: number;
   human_pause_minutes: number;
   auto_apply_threshold: number;
@@ -100,6 +101,11 @@ export interface Toast {
   };
 }
 
+export interface ModalPayload {
+  stage?: PipelineStage;
+  pipelineId?: string | null;
+}
+
 export interface AppState {
   currentUser: User;
   users: User[];
@@ -110,7 +116,7 @@ export interface AppState {
     customRange: { from: Date | null; to: Date | null };
     searchQuery: string;
     toastQueue: Toast[];
-    modal: { type: string; payload?: any } | null;
+    modal: { type: string; payload?: ModalPayload } | null;
     drawerLeadId: string | null;
     kanbanColumns: KanbanColumn[];
   };

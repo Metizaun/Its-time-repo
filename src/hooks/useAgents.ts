@@ -14,7 +14,8 @@ interface AgentPayload {
   system_prompt: string;
   model: string;
   is_active: boolean;
-  temperature: number;
+  temperature?: number;
+  personality_profile: AIAgent["personality_profile"];
   buffer_wait_ms?: number;
   human_pause_minutes?: number;
   handoff_enabled?: boolean;
@@ -135,6 +136,7 @@ export function useAgents() {
             model: payload.model,
             isActive: payload.is_active,
             temperature: payload.temperature,
+            personalityProfile: payload.personality_profile,
             bufferWaitMs: payload.buffer_wait_ms,
             humanPauseMinutes: payload.human_pause_minutes,
             handoffEnabled: payload.handoff_enabled,
@@ -151,6 +153,7 @@ export function useAgents() {
             model: payload.model,
             isActive: payload.is_active,
             temperature: payload.temperature,
+            personalityProfile: payload.personality_profile,
             bufferWaitMs: payload.buffer_wait_ms,
             humanPauseMinutes: payload.human_pause_minutes,
             handoffEnabled: payload.handoff_enabled,

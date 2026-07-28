@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { normalizePhoneIdentity } from "./phone-normalization.js";
 
 type MetaWebhookProcessorConfig = {
   supabaseUrl: string;
@@ -89,12 +90,20 @@ export class MetaWebhookProcessor {
           const handled = channel
             ? await this.processInboundMessage(channel, asRecord(message))
             : false;
-          handled ? processed += 1 : ignored += 1;
+          if (handled) {
+            processed += 1;
+          } else {
+            ignored += 1;
+          }
         }
 
         for (const status of statuses) {
           const handled = await this.processStatusEvent(channel, asRecord(status));
-          handled ? processed += 1 : ignored += 1;
+          if (handled) {
+            processed += 1;
+          } else {
+            ignored += 1;
+          }
         }
       }
     }
@@ -260,25 +269,28 @@ export class MetaWebhookProcessor {
   }
 
   private async findLeadByPhone(channel: MetaChannelContext, phone: string) {
-    const variants = phoneVariants(phone);
-    const scopedLead = await this.queryLeadByPhone(channel, variants, true);
+    const identity = normalizePhoneIdentity(phone);
+    if (!identity) return null;
+
+    const scopedLead = await this.queryLeadByPhone(channel, identity, true);
     if (scopedLead) {
       return scopedLead;
     }
 
-    return this.queryLeadByPhone(channel, variants, false);
+    return this.queryLeadByPhone(channel, identity, false);
   }
 
   private async queryLeadByPhone(
     channel: MetaChannelContext,
-    variants: string[],
+    identity: string,
     instanceScoped: boolean
   ) {
     let query = this.crmClient
       .from("leads")
       .select("id")
       .eq("aces_id", channel.acesId)
-      .in("contact_phone", variants)
+      .eq("phone_identity", identity)
+      .eq("view", true)
       .order("updated_at", { ascending: false })
       .limit(1);
 
@@ -306,18 +318,6 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
-}
-
-function phoneVariants(phone: string) {
-  const digits = phone.replace(/\D/g, "");
-  const variants = new Set<string>([digits]);
-  if (digits.startsWith("55") && digits.length > 11) {
-    variants.add(digits.slice(2));
-  } else if (digits.length <= 11) {
-    variants.add(`55${digits}`);
-  }
-
-  return Array.from(variants).filter(Boolean);
 }
 
 function timestampToIso(timestamp: string | null) {

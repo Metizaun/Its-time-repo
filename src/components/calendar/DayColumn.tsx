@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { isToday, parseISO } from "date-fns";
+import { format, parseISO } from "date-fns";
 
 import { EventBlock } from "@/components/calendar/EventBlock";
 import {
@@ -14,6 +14,7 @@ import {
   yToSnappedMinutes,
 } from "@/hooks/useEventLayout";
 import { cn } from "@/lib/utils";
+import { utcToWallDate } from "@/lib/calendarTimezone";
 import type { CalendarEvent } from "@/types/calendar";
 
 type DayColumnProps = {
@@ -23,6 +24,7 @@ type DayColumnProps = {
   onSelectEvent: (event: CalendarEvent, position: { top: number; left: number }) => void;
   onMoveEvent: (event: CalendarEvent, start: Date, end: Date, allDay: boolean) => void;
   onResizeEvent: (event: CalendarEvent, end: Date) => void;
+  timezone: string;
 };
 
 function getDropPayload(dataTransfer: DataTransfer) {
@@ -43,10 +45,11 @@ export function DayColumn({
   onSelectEvent,
   onMoveEvent,
   onResizeEvent,
+  timezone,
 }: DayColumnProps) {
   const [dragPreview, setDragPreview] = useState<{ top: number; height: number; label: string } | null>(null);
-  const layouts = useMemo(() => layoutEventsForDay(events, day), [day, events]);
-  const today = isToday(day);
+  const layouts = useMemo(() => layoutEventsForDay(events, day, timezone), [day, events, timezone]);
+  const today = format(day, "yyyy-MM-dd") === format(utcToWallDate(new Date(), timezone), "yyyy-MM-dd");
   const hours = Array.from({ length: DAY_END_HOUR - DAY_START_HOUR }, (_, index) => DAY_START_HOUR + index);
 
   const createAtPointer = useCallback(
@@ -128,6 +131,7 @@ export function DayColumn({
         <EventBlock
           key={layout.event.id}
           layout={layout}
+          timezone={timezone}
           onSelectEvent={onSelectEvent}
           onResizeEvent={(event, deltaMinutes) => {
             const currentEnd = parseISO(event.end_time);
@@ -149,13 +153,13 @@ export function DayColumn({
         </div>
       ) : null}
 
-      {today ? <CurrentTimeIndicator /> : null}
+      {today ? <CurrentTimeIndicator timezone={timezone} /> : null}
     </div>
   );
 }
 
-function CurrentTimeIndicator() {
-  const now = new Date();
+function CurrentTimeIndicator({ timezone }: { timezone: string }) {
+  const now = utcToWallDate(new Date(), timezone);
   const minutes = now.getHours() * 60 + now.getMinutes();
   const startMinutes = DAY_START_HOUR * 60;
   const endMinutes = DAY_END_HOUR * 60;

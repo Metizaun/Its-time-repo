@@ -15,7 +15,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
   const { openModal } = useApp();
   const location = useLocation();
   const isChatPage = location.pathname === "/chat";
-  const isCalendarPage = location.pathname === "/calendar";
+  const isCalendarPage = location.pathname.startsWith("/calendar");
   const isPipelinePage = location.pathname === "/pipeline";
 
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < TABLET_BP);

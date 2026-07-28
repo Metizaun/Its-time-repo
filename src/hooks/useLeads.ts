@@ -38,6 +38,9 @@ export interface Lead {
   interaction_mode: "ai" | "human";
   manual_pending_state: "waiting_first_reply" | "waiting_reply" | "clear" | null;
   manual_pending_since: string | null;
+  empresa_id: string | null;
+  empresa_name: string | null;
+  empresa_cnpj: string | null;
 }
 
 interface UseLeadsOptions {
@@ -149,7 +152,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
           .select("*")
           .in("id", chunk)
           .order("last_message_at", { ascending: false, nullsFirst: false })
-          .order("created_at", { ascending: false } as any);
+          .order("created_at", { ascending: false });
 
         if (error) throw error;
 
@@ -175,7 +178,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
       }
 
       setLeads(sortLeadsByRecency(allLeads));
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro ao carregar leads:", error);
       toast.error("Erro ao carregar leads");
     } finally {
@@ -214,8 +217,8 @@ export function useLeads(options: UseLeadsOptions = {}) {
 
         const visibleIdSet = new Set(
           (visibilityData ?? [])
-            .filter((row: any) => row?.view === true && typeof row?.id === "string" && row.id.length > 0)
-            .map((row: any) => row.id as string)
+            .filter((row) => row?.view === true && typeof row?.id === "string" && row.id.length > 0)
+            .map((row) => row.id)
         );
 
         for (const id of chunk) {
@@ -233,7 +236,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
 
         if (error) throw error;
 
-        const returnedIdSet = new Set((data ?? []).map((lead: any) => lead?.id).filter(Boolean));
+        const returnedIdSet = new Set((data ?? []).map((lead) => lead?.id).filter(Boolean));
         for (const id of visibleIds) {
           if (!returnedIdSet.has(id)) {
             idsToRemove.push(id);
@@ -313,6 +316,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
       return;
     }
 
+    const pendingRealtimeLeadIds = pendingRealtimeLeadIdsRef.current;
     const channel = supabase
       .channel("leads-changes-sorting")
       .on(
@@ -323,7 +327,9 @@ export function useLeads(options: UseLeadsOptions = {}) {
           table: "leads",
         },
         (payload) => {
-          const leadId = (payload.new as any)?.id ?? (payload.old as any)?.id;
+          const newRecord = payload.new as Record<string, unknown>;
+          const oldRecord = payload.old as Record<string, unknown>;
+          const leadId = newRecord.id ?? oldRecord.id;
 
           if (typeof leadId !== "string" || leadId.length === 0) {
             console.warn("[useLeads] Evento realtime sem leadId; fallback para refetch em background.", payload);
@@ -349,7 +355,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
         clearTimeout(flushRealtimeTimeoutRef.current);
         flushRealtimeTimeoutRef.current = null;
       }
-      pendingRealtimeLeadIdsRef.current.clear();
+      pendingRealtimeLeadIds.clear();
       window.removeEventListener("focus", handleResume);
       document.removeEventListener("visibilitychange", handleResume);
       void supabase.removeChannel(channel);

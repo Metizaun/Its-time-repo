@@ -36,6 +36,21 @@ import {
   type WhatsAppProviderName,
   WhatsAppProviderError,
 } from "./whatsapp-provider.js";
+import {
+  normalizePhoneForStorage as normalizePhone,
+  normalizePhoneIdentity,
+  phoneVariants,
+} from "./phone-normalization.js";
+import {
+  createAgendaContext,
+  mergeAgendaRequest,
+  parseAgendaRequest,
+  readAgendaContext,
+  setPresentedAgendaOptions,
+  type AgendaConversationContext,
+  type AgendaPresentedOption,
+  type AgendaRequest,
+} from "./agenda-subworkflow.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
@@ -244,6 +259,52 @@ const AGENT_FOLLOWUP_DEFAULT_MESSAGE =
 const AGENT_FOLLOWUP_CLARIFICATION_REPLY =
   "Claro. Qual horario voce prefere: pela manha, pela tarde ou depois das 18?";
 
+function buildAgentPersonalityInstruction(profile: PersonalityProfile) {
+  const profileInstructions: Record<PersonalityProfile, string[]> = {
+    surgical: [
+      "Responda primeiro o que foi perguntado e conduza pelo proximo passo mais curto.",
+      "Use frases muito curtas, concretas e precisas, sem introducoes, elogios ou conversa sem funcao.",
+      "Seja direto sem parecer impaciente, frio ou rispido.",
+      "Normalmente nao use emojis.",
+    ],
+    consultative: [
+      "Conduza como um especialista acessivel: seguro, profissional e claro.",
+      "Quando faltar informacao relevante, faca uma pergunta de diagnostico antes de recomendar.",
+      "Explique apenas o necessario para o cliente entender a recomendacao e decidir com seguranca.",
+      "Evite palestras, excesso de ressalvas e postura professoral.",
+    ],
+    balanced: [
+      "Converse como um bom atendente humano: natural, cordial, claro e eficiente.",
+      "Reconheca o pedido sem repetir mecanicamente e faca uma pergunta por vez.",
+      "Acompanhe a informalidade do cliente sem imita-lo de forma exagerada.",
+      "Use emoji apenas quando combinar naturalmente com a conversa.",
+    ],
+    dynamic: [
+      "Mantenha ritmo agil, proximo e proativo, com energia positiva controlada.",
+      "Use verbos de acao e destaque beneficios concretos para tornar o proximo passo facil.",
+      "Antecipe o proximo passo quando ele estiver claro, sem atropelar o cliente.",
+      "Evite urgencia inventada, intimidade precoce, excesso de exclamacoes e insistencia.",
+    ],
+    enthusiastic: [
+      "Seja caloroso, expressivo e genuinamente motivador quando houver motivo real.",
+      "Use linguagem viva, incentivo, exclamacoes e emojis com moderacao.",
+      "Preserve clareza e objetividade mesmo com maior expressao emocional.",
+      "Nunca transforme toda resposta em comemoracao nem use pressao, medo ou urgencia artificial.",
+    ],
+  };
+
+  return [
+    "## Perfil de comunicacao controlado pelo produto",
+    "Esta configuracao define integralmente a forma de conversar e prevalece sobre instrucoes conflitantes de tom ou persona no prompt comercial.",
+    "Base humana obrigatoria:",
+    "- adapte energia, formalidade e acolhimento ao momento real da conversa;",
+    "- nao repita saudacoes, frases prontas, o nome do cliente ou confirmacoes como 'claro' e 'perfeito' mecanicamente;",
+    "- em reclamacao, medo, cancelamento, dificuldade financeira, urgencia ou assunto sensivel, reduza a energia e priorize respeito e clareza;",
+    "- personalidade nunca altera fatos, regras comerciais, precos, permissoes ou a escolha segura de Tools;",
+    ...profileInstructions[profile].map((instruction) => `- ${instruction}`),
+  ].join("\n");
+}
+
 type JsonRecord = Record<string, unknown>;
 
 type AuthContext = {
@@ -265,6 +326,7 @@ type AgentRow = {
   model: string;
   is_active: boolean;
   temperature: number;
+  personality_profile: PersonalityProfile;
   buffer_wait_ms: number;
   human_pause_minutes: number;
   auto_apply_threshold: number;
@@ -278,6 +340,8 @@ type AgentRow = {
   created_at: string;
   updated_at: string;
 };
+
+type PersonalityProfile = "surgical" | "consultative" | "balanced" | "dynamic" | "enthusiastic";
 
 type StageRuleRow = {
   id: string;
@@ -606,6 +670,8 @@ type LeadAiStateRow = {
   manual_ai_enabled: boolean | null;
   optical_profile?: JsonRecord | null;
   memory_summary?: string | null;
+  agenda_context?: JsonRecord | null;
+  agenda_context_expires_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -664,6 +730,7 @@ type CreateAgentInput = {
   model?: string;
   provider?: "gemini";
   temperature?: number;
+  personalityProfile?: PersonalityProfile;
   bufferWaitMs?: number;
   humanPauseMinutes?: number;
   autoApplyThreshold?: number;
@@ -784,8 +851,28 @@ type StructuredModelResponse = {
   should_pause: boolean;
   should_handoff: boolean;
   handoff_reason: string;
+  forwarding_destination_key: string | null;
   native_followup: NativeFollowupDecision;
   visagism: VisagismDecision;
+  agenda_request: AgendaRequest;
+};
+
+type AgendaExecutionResult = {
+  status:
+    | "ignored"
+    | "succeeded"
+    | "ambiguous"
+    | "empty"
+    | "denied"
+    | "needs_input"
+    | "needs_confirmation"
+    | "conflict"
+    | "failed";
+  intent: AgendaRequest["intent"];
+  message: string;
+  data: JsonRecord;
+  context: AgendaConversationContext;
+  completed: boolean;
 };
 
 type ReplyModelResponse = {
@@ -805,7 +892,7 @@ type GeminiExecutionResult<TParsed> = {
 
 type HandoffExecutionResult = {
   triggered: boolean;
-  mode: "internal" | "external_notification" | "agent" | null;
+  mode: "internal" | "internal_company" | "external_notification" | "agent" | null;
   targetPhone: string | null;
   targetAgentId: string | null;
   reason: string;
@@ -1022,14 +1109,6 @@ function isProbablyTextPayload(buffer: Buffer) {
     sample.includes('"error"') ||
     sample.includes('"status"')
   );
-}
-
-function normalizePhone(phone: string): string {
-  const clean = phone.replace(/\D/g, "");
-  if (clean.startsWith("55") && clean.length > 11) {
-    return clean.slice(2);
-  }
-  return clean;
 }
 
 function isLidIdentifier(value: string | null | undefined) {
@@ -1396,21 +1475,6 @@ function resolveWhatsappRecipient(phone: string) {
   };
 }
 
-function phoneVariants(phone: string): string[] {
-  const normalized = normalizePhone(phone);
-  const variants = new Set<string>([normalized]);
-
-  if (normalized.length <= 11) {
-    variants.add(`55${normalized}`);
-  }
-
-  if (normalized.startsWith("55") && normalized.length > 11) {
-    variants.add(normalized.slice(2));
-  }
-
-  return Array.from(variants).filter(Boolean);
-}
-
 function phoneMatchesAllowedList(phone: string, allowedPhones: string[]) {
   const actualVariants = new Set(phoneVariants(phone));
   return allowedPhones.some((allowedPhone) => phoneVariants(allowedPhone).some((variant) => actualVariants.has(variant)));
@@ -1746,6 +1810,9 @@ function parseStructuredJson(text: string): StructuredModelResponse {
     should_pause: Boolean(parsed.should_pause),
     should_handoff: Boolean(parsed.should_handoff),
     handoff_reason: parsed.handoff_reason ? String(parsed.handoff_reason) : "",
+    forwarding_destination_key: parsed.forwarding_destination_key
+      ? String(parsed.forwarding_destination_key).trim()
+      : null,
     native_followup: {
       should_schedule: Boolean(nativeFollowup.should_schedule),
       needs_clarification: Boolean(nativeFollowup.needs_clarification),
@@ -1764,6 +1831,7 @@ function parseStructuredJson(text: string): StructuredModelResponse {
       should_start: visagism.should_start === true,
       reason: asString(visagism.reason) ?? "",
     },
+    agenda_request: parseAgendaRequest(parsed.agenda_request),
   };
 }
 
@@ -3564,6 +3632,7 @@ export class AgentManager {
       throw new HttpError(400, "Instancia do agente e obrigatoria");
     }
 
+    const personalityProfile = input.personalityProfile ?? "balanced";
     const instanceName = input.instanceName.trim();
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
 
@@ -3596,10 +3665,16 @@ export class AgentManager {
         await this.seedRbBillingToolConfig(context.acesId, agent.id, input.rbTokenApi.trim());
       }
 
-      if (input.unansweredFollowupEnabled !== undefined) {
+      if (input.unansweredFollowupEnabled !== undefined || input.personalityProfile !== undefined) {
+        const templateAgentUpdate: JsonRecord = {
+          personality_profile: personalityProfile,
+        };
+        if (input.unansweredFollowupEnabled !== undefined) {
+          templateAgentUpdate.unanswered_followup_enabled = input.unansweredFollowupEnabled;
+        }
         const { data: updatedAgent, error: updateError } = await this.agentsClient
           .from("ai_agents")
-          .update({ unanswered_followup_enabled: input.unansweredFollowupEnabled })
+          .update(templateAgentUpdate)
           .eq("id", agent.id)
           .eq("aces_id", context.acesId)
           .select("*")
@@ -3627,6 +3702,7 @@ export class AgentManager {
       model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: input.isActive ?? true,
       temperature: input.temperature ?? 0.4,
+      personality_profile: personalityProfile,
       buffer_wait_ms: input.bufferWaitMs ?? 45000,
       human_pause_minutes: input.humanPauseMinutes ?? 60,
       auto_apply_threshold: input.autoApplyThreshold ?? 0.85,
@@ -3649,6 +3725,7 @@ export class AgentManager {
 
     const agent = data as AgentRow;
     await this.refreshDerivedAgentState(agent);
+    await this.ensureCalendarToolBinding(agent.id, agent.aces_id);
     return agent;
   }
 
@@ -3669,9 +3746,36 @@ export class AgentManager {
     return { success: true };
   }
 
+  private async ensureCalendarToolBinding(agentId: string, acesId: number) {
+    const { error } = await this.agentsClient
+      .from("agent_tools")
+      .upsert(
+        {
+          aces_id: acesId,
+          agent_id: agentId,
+          tool_key: "calendar",
+          tool_version: 1,
+          is_enabled: false,
+          readiness: "needs_config",
+          config: {
+            queryAvailability: false,
+            create: false,
+            reschedule: false,
+            cancel: false,
+          },
+        },
+        { onConflict: "agent_id,tool_key", ignoreDuplicates: true },
+      );
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel preparar a Tool Agenda", error);
+    }
+  }
+
   async listAgentTools(context: AuthContext, agentId: string) {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    await this.ensureCalendarToolBinding(agentId, context.acesId);
     await this.syncPlatformToolReadiness(agentId, context.acesId);
     await this.syncDataToolReadiness(agentId, context.acesId);
 
@@ -3835,8 +3939,30 @@ export class AgentManager {
     }
     const isRbBillingTool = toolKey === "rb_billing";
     const rbBillingReady = isRbBillingTool ? isRbBillingToolConfigReady(nextConfig) : false;
+    const isCalendarTool = toolKey === "calendar";
+    if (isCalendarTool) {
+      nextConfig.queryAvailability = nextConfig.queryAvailability === true;
+      nextConfig.create = nextConfig.create === true;
+      nextConfig.reschedule = nextConfig.reschedule === true;
+      nextConfig.cancel = nextConfig.cancel === true;
+      if (nextConfig.create || nextConfig.reschedule || nextConfig.cancel) {
+        nextConfig.queryAvailability = true;
+      }
+    }
+    const calendarReady = isCalendarTool && (
+      nextConfig.queryAvailability
+      || nextConfig.create
+      || nextConfig.reschedule
+      || nextConfig.cancel
+    );
 
-    if (input.isEnabled === true && (isRbBillingTool ? !rbBillingReady : current.readiness !== "ready")) {
+    if (input.isEnabled === true && (
+      isRbBillingTool
+        ? !rbBillingReady
+        : isCalendarTool
+          ? !calendarReady
+          : current.readiness !== "ready"
+    )) {
       throw new HttpError(409, "Conclua a configuracao da Tool antes de ativa-la");
     }
 
@@ -3847,6 +3973,12 @@ export class AgentManager {
       payload.last_validated_at = new Date().toISOString();
       payload.is_enabled =
         input.isEnabled !== undefined ? Boolean(input.isEnabled && rbBillingReady) : Boolean(current.is_enabled && rbBillingReady);
+    } else if (isCalendarTool) {
+      payload.readiness = calendarReady ? "ready" : "needs_config";
+      payload.last_validated_at = new Date().toISOString();
+      payload.is_enabled = input.isEnabled !== undefined
+        ? Boolean(input.isEnabled && calendarReady)
+        : Boolean(current.is_enabled && calendarReady);
     } else if (input.isEnabled !== undefined) {
       payload.is_enabled = input.isEnabled;
     }
@@ -4891,13 +5023,78 @@ export class AgentManager {
 
     const { data, error } = await this.agentsClient
       .from("forwarding_destinations")
-      .select("id, destination_key, display_name, mode, target_phone, target_agent_id, context_instruction, is_active, created_at, updated_at")
+      .select("id, destination_key, display_name, mode, target_phone, target_agent_id, empresa_id, context_instruction, is_active, created_at, updated_at")
       .eq("aces_id", context.acesId)
       .eq("agent_tool_id", binding.id)
       .order("display_name", { ascending: true });
 
     if (error) throw new HttpError(500, "Nao foi possivel listar os destinos", error);
-    return data ?? [];
+    const destinations = data ?? [];
+    const destinationIds = destinations.map((destination) => destination.id);
+    if (destinationIds.length === 0) return [];
+
+    const { data: sellerRows, error: sellerError } = await this.agentsClient
+      .from("forwarding_destination_sellers")
+      .select("forwarding_destination_id, crm_user_id")
+      .eq("aces_id", context.acesId)
+      .in("forwarding_destination_id", destinationIds);
+    if (sellerError) throw new HttpError(500, "Nao foi possivel listar os vendedores dos destinos", sellerError);
+
+    const sellerIdsByDestination = new Map<string, string[]>();
+    for (const row of sellerRows ?? []) {
+      const current = sellerIdsByDestination.get(row.forwarding_destination_id) ?? [];
+      current.push(row.crm_user_id);
+      sellerIdsByDestination.set(row.forwarding_destination_id, current);
+    }
+
+    return destinations.map((destination) => ({
+      ...destination,
+      seller_ids: sellerIdsByDestination.get(destination.id) ?? [],
+    }));
+  }
+
+  async getForwardingSetup(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+
+    const [destinations, companiesResult, usersResult, membershipsResult, agentsResult] = await Promise.all([
+      this.listForwardingDestinations(context, agentId),
+      this.serviceClient
+        .from("empresas")
+        .select("id, cnpj, name, city, state")
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true)
+        .order("name"),
+      this.serviceClient
+        .from("users")
+        .select("id, name, email")
+        .eq("aces_id", context.acesId)
+        .eq("role", "VENDEDOR")
+        .order("name"),
+      this.serviceClient
+        .from("empresa_memberships")
+        .select("empresa_id, crm_user_id")
+        .eq("aces_id", context.acesId)
+        .eq("is_active", true),
+      this.agentsClient
+        .from("ai_agents")
+        .select("id, name, instance_name, is_active")
+        .eq("aces_id", context.acesId)
+        .neq("id", agentId)
+        .eq("is_active", true)
+        .order("name"),
+    ]);
+
+    const setupError = companiesResult.error ?? usersResult.error ?? membershipsResult.error ?? agentsResult.error;
+    if (setupError) throw new HttpError(500, "Nao foi possivel carregar a configuracao de encaminhamento", setupError);
+
+    return {
+      destinations,
+      companies: companiesResult.data ?? [],
+      sellers: usersResult.data ?? [],
+      memberships: membershipsResult.data ?? [],
+      agents: agentsResult.data ?? [],
+    };
   }
 
   async upsertForwardingDestination(
@@ -4906,9 +5103,11 @@ export class AgentManager {
     input: {
       destinationKey: string;
       displayName: string;
-      mode: "external_notification" | "agent";
+      mode: "external_notification" | "agent" | "internal_company";
       targetPhone?: string | null;
       targetAgentId?: string | null;
+      empresaId?: string | null;
+      sellerIds?: string[];
       contextInstruction: string;
     }
   ) {
@@ -4926,14 +5125,44 @@ export class AgentManager {
 
     let targetPhone: string | null = null;
     let targetAgentId: string | null = null;
+    let empresaId: string | null = null;
+    let sellerIds: string[] = [];
     if (input.mode === "external_notification") {
       const recipient = resolveWhatsappRecipient(input.targetPhone?.trim() ?? "");
       targetPhone = recipient.finalNumber;
-    } else {
+    } else if (input.mode === "agent") {
       targetAgentId = input.targetAgentId?.trim() || null;
       if (!targetAgentId) throw new HttpError(400, "Agente de destino e obrigatorio");
       if (targetAgentId === agentId) throw new HttpError(400, "O agente nao pode encaminhar para si mesmo");
       await this.getAgentForAccount(targetAgentId, context.acesId, context.crmUserId, context.role);
+    } else {
+      empresaId = input.empresaId?.trim() || null;
+      sellerIds = [...new Set((input.sellerIds ?? []).map((sellerId) => sellerId.trim()).filter(Boolean))];
+      if (!empresaId) throw new HttpError(400, "Empresa de destino e obrigatoria");
+      if (sellerIds.length === 0) throw new HttpError(400, "Selecione ao menos um vendedor da empresa");
+
+      const [{ data: company }, { data: memberships, error: membershipsError }] = await Promise.all([
+        this.serviceClient
+          .from("empresas")
+          .select("id")
+          .eq("id", empresaId)
+          .eq("aces_id", context.acesId)
+          .eq("is_active", true)
+          .maybeSingle(),
+        this.serviceClient
+          .from("empresa_memberships")
+          .select("crm_user_id")
+          .eq("empresa_id", empresaId)
+          .eq("aces_id", context.acesId)
+          .eq("is_active", true)
+          .in("crm_user_id", sellerIds),
+      ]);
+      if (membershipsError) throw new HttpError(500, "Nao foi possivel validar os vendedores da empresa", membershipsError);
+      if (!company) throw new HttpError(404, "Empresa de destino nao encontrada ou inativa");
+      const allowedSellerIds = new Set((memberships ?? []).map((membership) => membership.crm_user_id));
+      if (sellerIds.some((sellerId) => !allowedSellerIds.has(sellerId))) {
+        throw new HttpError(400, "Todos os vendedores devem possuir acesso ativo a empresa");
+      }
     }
 
     const { data: binding, error: bindingError } = await this.agentsClient
@@ -4958,6 +5187,7 @@ export class AgentManager {
           mode: input.mode,
           target_phone: targetPhone,
           target_agent_id: targetAgentId,
+          empresa_id: empresaId,
           context_instruction: input.contextInstruction.trim(),
           is_active: true,
         },
@@ -4967,8 +5197,47 @@ export class AgentManager {
       .single();
 
     if (error) throw new HttpError(500, "Nao foi possivel salvar o destino", error);
+
+    if (input.mode === "internal_company") {
+      const { error: sellerUpsertError } = await this.agentsClient
+        .from("forwarding_destination_sellers")
+        .upsert(
+          sellerIds.map((sellerId) => ({
+            aces_id: context.acesId,
+            forwarding_destination_id: data.id,
+            crm_user_id: sellerId,
+          })),
+          { onConflict: "forwarding_destination_id,crm_user_id" },
+        );
+      if (sellerUpsertError) throw new HttpError(500, "Destino salvo, mas os vendedores nao foram vinculados", sellerUpsertError);
+
+      const { data: currentSellerRows, error: currentSellersError } = await this.agentsClient
+        .from("forwarding_destination_sellers")
+        .select("id, crm_user_id")
+        .eq("aces_id", context.acesId)
+        .eq("forwarding_destination_id", data.id);
+      if (currentSellersError) throw new HttpError(500, "Nao foi possivel validar os vendedores vinculados", currentSellersError);
+      const obsoleteIds = (currentSellerRows ?? [])
+        .filter((row) => !sellerIds.includes(row.crm_user_id))
+        .map((row) => row.id);
+      if (obsoleteIds.length > 0) {
+        const { error: removeError } = await this.agentsClient
+          .from("forwarding_destination_sellers")
+          .delete()
+          .in("id", obsoleteIds);
+        if (removeError) throw new HttpError(500, "Nao foi possivel remover vendedores antigos do destino", removeError);
+      }
+    } else {
+      const { error: removeError } = await this.agentsClient
+        .from("forwarding_destination_sellers")
+        .delete()
+        .eq("aces_id", context.acesId)
+        .eq("forwarding_destination_id", data.id);
+      if (removeError) throw new HttpError(500, "Nao foi possivel limpar vendedores antigos do destino", removeError);
+    }
+
     await this.syncDataToolReadiness(agentId, context.acesId);
-    return data;
+    return { ...data, seller_ids: sellerIds };
   }
 
   async deactivateForwardingDestination(
@@ -5002,6 +5271,7 @@ export class AgentManager {
     if (input.provider !== undefined) payload.provider = input.provider;
     if (input.isActive !== undefined) payload.is_active = input.isActive;
     if (input.temperature !== undefined) payload.temperature = input.temperature;
+    if (input.personalityProfile !== undefined) payload.personality_profile = input.personalityProfile;
     if (input.bufferWaitMs !== undefined) payload.buffer_wait_ms = input.bufferWaitMs;
     if (input.humanPauseMinutes !== undefined) payload.human_pause_minutes = input.humanPauseMinutes;
     if (input.autoApplyThreshold !== undefined) payload.auto_apply_threshold = input.autoApplyThreshold;
@@ -6475,12 +6745,15 @@ export class AgentManager {
   }
 
   private async findLeadByPhone(acesId: number, phone: string) {
-    const variants = phoneVariants(phone);
+    const identity = normalizePhoneIdentity(phone);
+    if (!identity) return null;
+
     const { data, error } = await this.serviceClient
       .from("leads")
       .select("id, aces_id, owner_id, name, contact_phone, status, stage_id, instancia, interaction_mode, last_city, notes, check, last_message_at, last_lead_inbound_at, updated_at")
       .eq("aces_id", acesId)
-      .in("contact_phone", variants)
+      .eq("phone_identity", identity)
+      .eq("view", true)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -6691,6 +6964,10 @@ export class AgentManager {
       .single();
 
     if (error) {
+      if (String((error as { code?: string }).code ?? "") === "23505") {
+        const concurrentLead = await this.findLeadByPhone(acesId, phone);
+        if (concurrentLead) return concurrentLead;
+      }
       throw new HttpError(500, "Nao foi possivel criar o lead a partir da conversa", error);
     }
 
@@ -8353,11 +8630,43 @@ export class AgentManager {
 
   private async getHandoffConfig(agent: AgentRow) {
     const instruction = asString(agent.handoff_prompt);
+    const { data: toolBinding, error: toolError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, is_enabled")
+      .eq("agent_id", agent.id)
+      .eq("aces_id", agent.aces_id)
+      .eq("tool_key", "forwarding")
+      .maybeSingle();
+    if (toolError) throw new HttpError(500, "Nao foi possivel carregar a Tool Encaminhamento", toolError);
+
+    let destinations: Array<{
+      id: string;
+      destination_key: string;
+      display_name: string;
+      mode: "external_notification" | "agent" | "internal_company";
+      target_phone: string | null;
+      target_agent_id: string | null;
+      empresa_id: string | null;
+      context_instruction: string | null;
+    }> = [];
+
+    if (toolBinding?.is_enabled) {
+      const { data, error } = await this.agentsClient
+        .from("forwarding_destinations")
+        .select("id, destination_key, display_name, mode, target_phone, target_agent_id, empresa_id, context_instruction")
+        .eq("agent_tool_id", toolBinding.id)
+        .eq("aces_id", agent.aces_id)
+        .eq("is_active", true)
+        .order("display_name");
+      if (error) throw new HttpError(500, "Nao foi possivel carregar os destinos do Encaminhamento", error);
+      destinations = (data ?? []) as typeof destinations;
+    }
 
     return {
-      enabled: Boolean(agent.handoff_enabled && instruction),
+      enabled: Boolean((agent.handoff_enabled && instruction) || destinations.length > 0),
       instruction,
       mode: "internal" as const,
+      destinations,
     };
   }
 
@@ -8368,6 +8677,7 @@ export class AgentManager {
     reason: string;
     notification: string;
     sourceMessageId: string | null;
+    forwardingDestinationId?: string | null;
   }): Promise<HandoffExecutionResult> {
     const targetAgent = await this.getAgentById(params.targetAgentId);
     if (targetAgent.aces_id !== params.sourceAgent.aces_id) {
@@ -8548,6 +8858,37 @@ export class AgentManager {
       },
     });
 
+    const routingIdempotencyKey = params.sourceMessageId
+      ? `agent-forwarding:${params.sourceMessageId}:${targetAgent.id}`
+      : null;
+    const { error: routingEventError } = await this.serviceClient
+      .from("routing_events")
+      .upsert(
+        {
+          aces_id: params.sourceAgent.aces_id,
+          lead_id: params.lead.id,
+          source_agent_id: params.sourceAgent.id,
+          forwarding_destination_id: params.forwardingDestinationId ?? null,
+          target_agent_id: targetAgent.id,
+          destination_mode: "agent",
+          status: "completed",
+          reason: params.reason,
+          seller_ids_snapshot: [],
+          context_snapshot: {
+            source_agent_name: params.sourceAgent.name,
+            target_agent_name: targetAgent.name,
+            target_instance_name: targetAgent.instance_name,
+            transfer_session_id: sessionId,
+          },
+          idempotency_key: routingIdempotencyKey,
+          completed_at: new Date().toISOString(),
+        },
+        { onConflict: "aces_id,idempotency_key" },
+      );
+    if (routingEventError) {
+      console.error("[crm-ai] Encaminhamento concluido, mas o evento de roteamento nao foi salvo:", routingEventError);
+    }
+
     return {
       triggered: true,
       mode: "agent",
@@ -8555,6 +8896,106 @@ export class AgentManager {
       targetAgentId: targetAgent.id,
       reason: params.reason,
       notification: introduction,
+    };
+  }
+
+  private async routeLeadToCompany(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    destination: {
+      id: string;
+      display_name: string;
+      empresa_id: string | null;
+    };
+    reason: string;
+    summary: string;
+    sourceMessageId: string | null;
+  }): Promise<HandoffExecutionResult | null> {
+    if (!params.destination.empresa_id) return null;
+    const routingIdempotencyKey = params.sourceMessageId
+      ? `company-forwarding:${params.sourceMessageId}:${params.destination.id}`
+      : `company-forwarding:${params.lead.id}:${params.destination.id}:${randomUUID()}`;
+    const { data, error } = await this.serviceClient.rpc("service_route_company_lead", {
+      p_aces_id: params.agent.aces_id,
+      p_lead_id: params.lead.id,
+      p_source_agent_id: params.agent.id,
+      p_forwarding_destination_id: params.destination.id,
+      p_reason: params.reason,
+      p_context_snapshot: {
+        destination_name: params.destination.display_name,
+        summary: truncateText(params.summary, 1200),
+      },
+      p_idempotency_key: routingIdempotencyKey,
+    });
+    if (error) {
+      console.error("[crm-ai] Falha ao criar a fila empresarial:", error);
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "lead",
+        aggregateId: params.lead.id,
+        eventType: "company_forwarding.failed",
+        payload: { lead_id: params.lead.id, agent_id: params.agent.id },
+      }).catch(() => undefined);
+      return null;
+    }
+    const routing = asRecord(data);
+    if (routing.fallback_required === true) {
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "lead",
+        aggregateId: params.lead.id,
+        eventType: "company_forwarding.fallback",
+        payload: { lead_id: params.lead.id, agent_id: params.agent.id },
+      });
+      return null;
+    }
+
+    await this.freezeLead(params.agent, params.lead.id, "ai_policy", params.reason);
+    await this.saveMessage({
+      leadId: params.lead.id,
+      acesId: params.agent.aces_id,
+      content: INTERNAL_HANDOFF_TRANSITION_MESSAGE,
+      direction: "outbound",
+      sourceType: "system",
+      instanceName: params.agent.instance_name,
+      conversationId: null,
+    });
+    await this.saveMessage({
+      leadId: params.lead.id,
+      acesId: params.agent.aces_id,
+      content: buildInternalHandoffNote(
+        `${params.reason} Destino: ${params.destination.display_name}.`,
+        params.summary,
+      ),
+      direction: "outbound",
+      sourceType: "system",
+      instanceName: params.agent.instance_name,
+      conversationId: null,
+    });
+
+    await this.enqueueBiEvent({
+      acesId: params.agent.aces_id,
+      aggregateType: "lead",
+      aggregateId: params.lead.id,
+      eventType: "company_forwarding.waiting",
+      payload: {
+        lead_id: params.lead.id,
+        agent_id: params.agent.id,
+        empresa_id: params.destination.empresa_id,
+        forwarding_destination_id: params.destination.id,
+        tool_key: "forwarding",
+        status: "waiting",
+        routing_event_id: routing.routing_event_id ?? null,
+      },
+    });
+
+    return {
+      triggered: true,
+      mode: "internal_company",
+      targetPhone: null,
+      targetAgentId: null,
+      reason: params.reason,
+      notification: `Atendimento encaminhado para ${params.destination.display_name}.`,
     };
   }
 
@@ -8588,6 +9029,37 @@ export class AgentManager {
       latestLeadMessage?.trim() ||
       "Resumo indisponivel.";
 
+    const destination = response.forwarding_destination_key
+      ? config.destinations.find((item) => item.destination_key === response.forwarding_destination_key)
+      : null;
+    const sourceMessageId = [...messages]
+      .reverse()
+      .find((message) => message.source_type === "lead")?.id ?? null;
+
+    if (destination?.mode === "agent" && destination.target_agent_id) {
+      return this.transferLeadToAgent({
+        sourceAgent: agent,
+        targetAgentId: destination.target_agent_id,
+        lead,
+        reason,
+        notification: summary,
+        sourceMessageId,
+        forwardingDestinationId: destination.id,
+      });
+    }
+
+    if (destination?.mode === "internal_company") {
+      const companyRouting = await this.routeLeadToCompany({
+        agent,
+        lead,
+        destination,
+        reason,
+        summary,
+        sourceMessageId,
+      });
+      if (companyRouting) return companyRouting;
+    }
+
     await this.updateLeadInteractionMode(agent.aces_id, lead.id, "human");
     await this.freezeLead(agent, lead.id, "ai_policy", reason);
     await this.saveMessage({
@@ -8619,6 +9091,658 @@ export class AgentManager {
     };
   }
 
+  private async saveAgendaContext(
+    agentId: string,
+    leadId: string,
+    context: AgendaConversationContext | null,
+  ) {
+    await this.upsertLeadState(agentId, leadId, {
+      agenda_context: context ?? {},
+      agenda_context_expires_at: context?.expiresAt ?? null,
+    });
+  }
+
+  private async getCalendarCapabilities(agent: AgentRow) {
+    await this.ensureCalendarToolBinding(agent.id, agent.aces_id);
+    const [{ data: binding, error: bindingError }, { data: settings, error: settingsError }] =
+      await Promise.all([
+        this.agentsClient
+          .from("agent_tools")
+          .select("is_enabled, config")
+          .eq("aces_id", agent.aces_id)
+          .eq("agent_id", agent.id)
+          .eq("tool_key", "calendar")
+          .maybeSingle(),
+        this.serviceClient
+          .schema("calendar")
+          .from("settings")
+          .select("timezone, ai_booking_enabled")
+          .eq("aces_id", agent.aces_id)
+          .maybeSingle(),
+      ]);
+    if (bindingError || settingsError) {
+      throw buildSupabaseOperationError(
+        bindingError ?? settingsError,
+        "Nao foi possivel validar as permissoes da Agenda",
+      );
+    }
+    const config = asRecord(binding?.config);
+    const enabled = binding?.is_enabled === true;
+    return {
+      timezone: asString(settings?.timezone) ?? "America/Sao_Paulo",
+      aiBookingEnabled: settings?.ai_booking_enabled === true,
+      queryAvailability: enabled && config.queryAvailability === true,
+      create: enabled && config.create === true,
+      reschedule: enabled && config.reschedule === true,
+      cancel: enabled && config.cancel === true,
+    };
+  }
+
+  private localIsoDate(timezone: string, date = new Date()) {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  }
+
+  private formatAgendaSlotLabel(startTime: string, professionalName: string, timezone: string) {
+    const date = new Date(startTime);
+    const dateLabel = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: timezone,
+      weekday: "long",
+      day: "2-digit",
+      month: "short",
+    }).format(date);
+    const timeLabel = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+    return `${dateLabel}, ${timeLabel} — ${professionalName}`;
+  }
+
+  private async listAgendaDirectory(
+    acesId: number,
+    companyId: string | null,
+    professionalQuery: string | null,
+    serviceQuery: string | null,
+  ) {
+    const calendarClient = this.serviceClient.schema("calendar");
+    let locationsQuery = calendarClient
+      .from("professional_locations")
+      .select("id, professional_id, empresa_id, location_name")
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .eq("is_ai_visible", true)
+      .limit(40);
+    locationsQuery = companyId
+      ? locationsQuery.eq("empresa_id", companyId)
+      : locationsQuery.is("empresa_id", null);
+    const { data: locations, error: locationsError } = await locationsQuery;
+    if (locationsError) {
+      throw buildSupabaseOperationError(locationsError, "Nao foi possivel consultar os profissionais");
+    }
+    if (!locations?.length) return [];
+
+    const professionalIds = [...new Set(locations.map((row) => String(row.professional_id)))];
+    const locationIds = locations.map((row) => String(row.id));
+    const [{ data: professionals, error: professionalError }, { data: bindings, error: bindingError }] =
+      await Promise.all([
+        calendarClient
+          .from("professionals")
+          .select("id, name, specialty")
+          .eq("aces_id", acesId)
+          .eq("is_active", true)
+          .in("id", professionalIds),
+        calendarClient
+          .from("professional_services")
+          .select("professional_location_id, service_id, duration_minutes_override, price_cents_override")
+          .eq("aces_id", acesId)
+          .eq("is_active", true)
+          .eq("is_ai_visible", true)
+          .in("professional_location_id", locationIds),
+      ]);
+    if (professionalError || bindingError) {
+      throw buildSupabaseOperationError(
+        professionalError ?? bindingError,
+        "Nao foi possivel consultar os servicos dos profissionais",
+      );
+    }
+    const serviceIds = [...new Set((bindings ?? []).map((row) => String(row.service_id)))];
+    const { data: services, error: serviceError } = serviceIds.length
+      ? await calendarClient
+          .from("services")
+          .select("id, name, description, duration_minutes, price_cents")
+          .eq("aces_id", acesId)
+          .eq("is_active", true)
+          .eq("is_ai_visible", true)
+          .in("id", serviceIds)
+      : { data: [], error: null };
+    if (serviceError) {
+      throw buildSupabaseOperationError(serviceError, "Nao foi possivel consultar os servicos");
+    }
+
+    const professionalMap = new Map((professionals ?? []).map((row) => [String(row.id), row]));
+    const serviceMap = new Map((services ?? []).map((row) => [String(row.id), row]));
+    const normalizedProfessionalQuery = professionalQuery
+      ? normalizeAsciiText(professionalQuery).toLocaleLowerCase("pt-BR")
+      : null;
+    const normalizedServiceQuery = serviceQuery
+      ? normalizeAsciiText(serviceQuery).toLocaleLowerCase("pt-BR")
+      : null;
+
+    return locations.flatMap((location) => {
+      const professional = professionalMap.get(String(location.professional_id));
+      if (!professional) return [];
+      const professionalSearch = normalizeAsciiText(
+        `${professional.name ?? ""} ${professional.specialty ?? ""}`,
+      ).toLocaleLowerCase("pt-BR");
+      if (normalizedProfessionalQuery && !professionalSearch.includes(normalizedProfessionalQuery)) {
+        return [];
+      }
+      return (bindings ?? [])
+        .filter((binding) => String(binding.professional_location_id) === String(location.id))
+        .flatMap((binding) => {
+          const service = serviceMap.get(String(binding.service_id));
+          if (!service) return [];
+          const serviceSearch = normalizeAsciiText(
+            `${service.name ?? ""} ${service.description ?? ""}`,
+          ).toLocaleLowerCase("pt-BR");
+          if (normalizedServiceQuery && !serviceSearch.includes(normalizedServiceQuery)) return [];
+          return [{
+            professionalLocationId: String(location.id),
+            companyId: location.empresa_id ? String(location.empresa_id) : null,
+            professionalId: String(professional.id),
+            professionalName: String(professional.name),
+            specialty: asString(professional.specialty),
+            serviceId: String(service.id),
+            serviceName: String(service.name),
+            durationMinutes: Number(binding.duration_minutes_override ?? service.duration_minutes),
+            priceCents:
+              binding.price_cents_override === null && service.price_cents === null
+                ? null
+                : Number(binding.price_cents_override ?? service.price_cents),
+          }];
+        });
+    });
+  }
+
+  private async executeAgendaSubworkflow(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    request: AgendaRequest;
+    storedContext: unknown;
+    runId: string;
+  }): Promise<AgendaExecutionResult> {
+    const now = new Date();
+    let context = mergeAgendaRequest(
+      readAgendaContext(params.storedContext, now),
+      params.request,
+      now,
+    );
+    const result = (
+      status: AgendaExecutionResult["status"],
+      message: string,
+      data: JsonRecord = {},
+      completed = false,
+    ): AgendaExecutionResult => ({ status, intent: params.request.intent, message, data, context, completed });
+
+    if (params.request.intent === "none") return result("ignored", "Nenhuma acao de agenda identificada.");
+
+    try {
+      let company: Record<string, unknown> | null = null;
+      if (!context.companyId && context.companyQuery) {
+        const { data, error } = await this.serviceClient.rpc("lookup_company_directory", {
+          p_query: context.companyQuery,
+          p_service_query: context.serviceQuery,
+          p_professional_query: context.professionalQuery,
+          p_limit: 4,
+          p_aces_id: params.agent.aces_id,
+        });
+        if (error) throw buildSupabaseOperationError(error, "Nao foi possivel consultar as empresas");
+        const matches = (data ?? []) as Array<Record<string, unknown>>;
+        await this.enqueueBiEvent({
+          acesId: params.agent.aces_id,
+          aggregateType: "lead",
+          aggregateId: params.lead.id,
+          eventType: matches.length === 0
+            ? "company_lookup.empty"
+            : matches.length > 1
+              ? "company_lookup.ambiguous"
+              : "company_lookup.succeeded",
+          payload: { lead_id: params.lead.id, agent_id: params.agent.id, match_count: matches.length },
+        });
+        const top = matches[0];
+        const second = matches[1];
+        const trulyAmbiguous = Boolean(
+          top && second && Number(top.match_score ?? 0) - Number(second.match_score ?? 0) < 0.08,
+        );
+        if (!top) {
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result("empty", "Nenhuma empresa ativa corresponde ao contexto informado.");
+        }
+        if (trulyAmbiguous) {
+          const options: AgendaPresentedOption[] = matches.slice(0, 4).map((match, index) => ({
+            reference: String(index + 1),
+            kind: "company",
+            id: String(match.company_id),
+            companyId: String(match.company_id),
+            label: [match.trade_name, match.city, match.state].filter(Boolean).join(" — "),
+          }));
+          context = setPresentedAgendaOptions(context, options, now);
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result("ambiguous", "Ha mais de uma empresa compativel; solicite uma confirmacao curta.", {
+            options,
+          });
+        }
+        company = top;
+        context.companyId = String(top.company_id);
+      } else if (context.companyId) {
+        const { data } = await this.serviceClient
+          .from("empresas")
+          .select("id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone")
+          .eq("aces_id", params.agent.aces_id)
+          .eq("id", context.companyId)
+          .eq("is_active", true)
+          .maybeSingle();
+        company = data as Record<string, unknown> | null;
+      }
+
+      if (
+        !context.companyId &&
+        !context.companyQuery &&
+        !context.professionalQuery &&
+        params.request.intent !== "reschedule" &&
+        params.request.intent !== "cancel"
+      ) {
+        const { data: companies, error } = await this.serviceClient
+          .from("empresas")
+          .select("id, name, city, state")
+          .eq("aces_id", params.agent.aces_id)
+          .eq("is_active", true)
+          .order("name", { ascending: true })
+          .limit(5);
+        if (error) throw buildSupabaseOperationError(error, "Nao foi possivel consultar as empresas");
+        if (companies?.length) {
+          const options = companies.slice(0, 4).map((item, index): AgendaPresentedOption => ({
+            reference: String(index + 1),
+            kind: "company",
+            id: String(item.id),
+            companyId: String(item.id),
+            label: [item.name, item.city, item.state].filter(Boolean).join(" — "),
+          }));
+          context = setPresentedAgendaOptions(context, options, now);
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result("needs_input", "Pergunte somente em qual empresa ou unidade o cliente deseja atendimento.", {
+            options,
+            hasMore: companies.length > 4,
+          });
+        }
+      }
+
+      if (params.request.intent === "reschedule") {
+        const calendarClient = this.serviceClient.schema("calendar");
+        if (!context.appointmentEventId) {
+          const { data: events, error } = await calendarClient
+            .from("events")
+            .select("id, title, start_time, professional_id, professional_location_id, service_id, empresa_id, metadata")
+            .eq("aces_id", params.agent.aces_id)
+            .eq("lead_id", params.lead.id)
+            .in("status", ["scheduled", "confirmed"])
+            .is("deleted_at", null)
+            .order("start_time", { ascending: true })
+            .limit(4);
+          if (error) throw buildSupabaseOperationError(error, "Nao foi possivel consultar os agendamentos");
+          const timezone = (await this.getCalendarCapabilities(params.agent)).timezone;
+          const options = (events ?? []).map((event, index): AgendaPresentedOption => ({
+            reference: String(index + 1),
+            kind: "appointment",
+            id: String(event.id),
+            eventId: String(event.id),
+            companyId: event.empresa_id ? String(event.empresa_id) : null,
+            professionalId: event.professional_id ? String(event.professional_id) : null,
+            professionalLocationId: event.professional_location_id ? String(event.professional_location_id) : null,
+            serviceId: event.service_id ? String(event.service_id) : null,
+            startTime: String(event.start_time),
+            label: this.formatAgendaSlotLabel(
+              String(event.start_time),
+              asString(asRecord(event.metadata).professional_name) ?? String(event.title),
+              timezone,
+            ),
+          }));
+          context = setPresentedAgendaOptions(context, options, now);
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result(options.length ? "needs_input" : "empty", "Selecione o agendamento que deseja reagendar.", { options });
+        }
+        const { data: appointment, error } = await calendarClient
+          .from("events")
+          .select("id, professional_id, professional_location_id, service_id, empresa_id")
+          .eq("aces_id", params.agent.aces_id)
+          .eq("lead_id", params.lead.id)
+          .eq("id", context.appointmentEventId)
+          .in("status", ["scheduled", "confirmed"])
+          .is("deleted_at", null)
+          .maybeSingle();
+        if (error) throw buildSupabaseOperationError(error, "Nao foi possivel validar o agendamento");
+        if (!appointment?.professional_location_id || !appointment.service_id) {
+          context.appointmentEventId = null;
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result("empty", "O agendamento selecionado nao esta mais disponivel para reagendamento.");
+        }
+        context.companyId = appointment.empresa_id ? String(appointment.empresa_id) : null;
+        context.professionalId = String(appointment.professional_id);
+        context.professionalLocationId = String(appointment.professional_location_id);
+        context.serviceId = String(appointment.service_id);
+      }
+
+      const directory = await this.listAgendaDirectory(
+        params.agent.aces_id,
+        context.companyId,
+        context.professionalQuery,
+        context.serviceQuery,
+      );
+      const professionalOptions = [...new Map(directory.map((entry) => [entry.professionalId, entry])).values()]
+        .slice(0, 4)
+        .map((entry, index): AgendaPresentedOption => ({
+          reference: String(index + 1),
+          kind: "professional",
+          id: entry.professionalId,
+          companyId: entry.companyId,
+          professionalId: entry.professionalId,
+          professionalLocationId: entry.professionalLocationId,
+          label: entry.specialty ? `${entry.professionalName} — ${entry.specialty}` : entry.professionalName,
+        }));
+
+      if (params.request.intent === "company_info" || params.request.intent === "professionals" || params.request.intent === "price") {
+        if (params.request.intent === "professionals") {
+          context = setPresentedAgendaOptions(context, professionalOptions, now);
+        }
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result(directory.length || company ? "succeeded" : "empty", "Consulta deterministica concluida.", {
+          company,
+          professionals: professionalOptions,
+          services: directory.slice(0, 12).map((entry) => ({
+            professionalId: entry.professionalId,
+            professionalName: entry.professionalName,
+            serviceId: entry.serviceId,
+            serviceName: entry.serviceName,
+            durationMinutes: entry.durationMinutes,
+            priceCents: entry.priceCents,
+          })),
+        });
+      }
+
+      const capabilities = await this.getCalendarCapabilities(params.agent);
+      const mutationPermission =
+        params.request.intent === "book"
+          ? capabilities.create
+          : params.request.intent === "reschedule"
+            ? capabilities.reschedule
+            : params.request.intent === "cancel"
+              ? capabilities.cancel
+              : true;
+      if (!capabilities.queryAvailability || !mutationPermission ||
+        (["book", "reschedule", "cancel"] as AgendaRequest["intent"][]).includes(params.request.intent)
+          && !capabilities.aiBookingEnabled) {
+        if ((["book", "reschedule", "cancel"] as AgendaRequest["intent"][]).includes(params.request.intent)) {
+          await this.enqueueBiEvent({
+            acesId: params.agent.aces_id,
+            aggregateType: "lead",
+            aggregateId: params.lead.id,
+            eventType: "calendar_booking.denied",
+            payload: {
+              lead_id: params.lead.id,
+              agent_id: params.agent.id,
+              operation: params.request.intent,
+            },
+          });
+        }
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("denied", "A configuracao atual nao autoriza esta operacao pela IA.", {
+          operation: params.request.intent,
+        });
+      }
+
+      if (params.request.intent === "cancel") {
+        const calendarClient = this.serviceClient.schema("calendar");
+        const selectedEvent = context.selectedOption?.kind === "appointment" ? context.selectedOption : null;
+        if (!selectedEvent) {
+          const { data: events, error } = await calendarClient
+            .from("events")
+            .select("id, title, start_time, metadata")
+            .eq("aces_id", params.agent.aces_id)
+            .eq("lead_id", params.lead.id)
+            .in("status", ["scheduled", "confirmed"])
+            .is("deleted_at", null)
+            .order("start_time", { ascending: true })
+            .limit(4);
+          if (error) throw buildSupabaseOperationError(error, "Nao foi possivel consultar os agendamentos");
+          const options = (events ?? []).map((event, index): AgendaPresentedOption => ({
+            reference: String(index + 1),
+            kind: "appointment",
+            id: String(event.id),
+            eventId: String(event.id),
+            startTime: String(event.start_time),
+            label: this.formatAgendaSlotLabel(
+              String(event.start_time),
+              asString(asRecord(event.metadata).professional_name) ?? String(event.title),
+              capabilities.timezone,
+            ),
+          }));
+          context = setPresentedAgendaOptions(context, options, now);
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result(options.length ? "needs_input" : "empty", "Selecione o agendamento que deseja cancelar.", { options });
+        }
+        if (context.confirmation !== "yes") {
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result("needs_confirmation", "Confirme o cancelamento antes de executar.", { selected: selectedEvent });
+        }
+        const { data, error } = await calendarClient.rpc("cancel_professional_appointment", {
+          p_event_id: selectedEvent.eventId ?? selectedEvent.id,
+          p_reason: "Cancelado a pedido do cliente pelo atendimento com IA.",
+        });
+        if (error) throw buildSupabaseOperationError(error, "Nao foi possivel cancelar o agendamento");
+        await this.saveAgendaContext(params.agent.id, params.lead.id, null);
+        return { ...result("succeeded", "Agendamento cancelado.", { event: data }, true), context: createAgendaContext(now) };
+      }
+
+      let eligibleDirectory = directory;
+      if (context.professionalId) {
+        eligibleDirectory = eligibleDirectory.filter((entry) => entry.professionalId === context.professionalId);
+      }
+      if (context.serviceId) {
+        eligibleDirectory = eligibleDirectory.filter((entry) => entry.serviceId === context.serviceId);
+      }
+      if (!eligibleDirectory.length) {
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("empty", "Nenhum profissional ou servico ativo corresponde aos filtros.");
+      }
+
+      const uniqueServices = [...new Map(eligibleDirectory.map((entry) => [entry.serviceId, entry])).values()];
+      if (!context.serviceQuery && !context.serviceId && uniqueServices.length > 1) {
+        const services = uniqueServices.slice(0, 4).map((entry) => ({
+          serviceId: entry.serviceId,
+          name: entry.serviceName,
+          durationMinutes: entry.durationMinutes,
+          priceCents: entry.priceCents,
+        }));
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("needs_input", "Pergunte somente qual servico o cliente deseja.", { services });
+      }
+
+      const from = context.dateFrom ?? this.localIsoDate(capabilities.timezone, now);
+      const until = context.dateTo ?? this.localIsoDate(capabilities.timezone, new Date(now.getTime() + 14 * 86400000));
+      const slotResults = await Promise.all(
+        eligibleDirectory.slice(0, 12).map(async (entry) => {
+          const { data, error } = await this.serviceClient.schema("calendar").rpc("list_available_slots", {
+            p_professional_location_id: entry.professionalLocationId,
+            p_service_id: entry.serviceId,
+            p_date_from: from,
+            p_date_until: until,
+            p_period: context.period,
+            p_limit: 12,
+            p_exclude_event_id: context.appointmentEventId,
+            p_aces_id: params.agent.aces_id,
+          });
+          if (error) throw error;
+          return (data ?? []) as Array<Record<string, unknown>>;
+        }),
+      );
+      const slots = slotResults.flat().sort((left, right) =>
+        String(left.slot_start).localeCompare(String(right.slot_start)),
+      );
+      if (!slots.length) {
+        await this.enqueueBiEvent({
+          acesId: params.agent.aces_id,
+          aggregateType: "lead",
+          aggregateId: params.lead.id,
+          eventType: "calendar_availability.empty",
+          payload: { lead_id: params.lead.id, agent_id: params.agent.id },
+        });
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("empty", "Nao ha horarios validos para os filtros informados.");
+      }
+
+      if (!context.dateFrom) {
+        const dates = [...new Set(slots.map((slot) => this.localIsoDate(capabilities.timezone, new Date(String(slot.slot_start)))))];
+        const options = dates.slice(0, 3).map((date, index): AgendaPresentedOption => ({
+          reference: String(index + 1),
+          kind: "date",
+          id: date,
+          label: new Intl.DateTimeFormat("pt-BR", {
+            timeZone: "UTC",
+            weekday: "long",
+            day: "2-digit",
+            month: "long",
+          }).format(new Date(`${date}T12:00:00Z`)),
+        }));
+        context = setPresentedAgendaOptions(context, options, now);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("needs_input", "Apresente somente as tres datas retornadas.", { options });
+      }
+
+      const options = slots.slice(0, 3).map((slot, index): AgendaPresentedOption => ({
+        reference: String(index + 1),
+        kind: "slot",
+        id: `${slot.professional_id}:${slot.service_id}:${slot.slot_start}`,
+        companyId: slot.empresa_id ? String(slot.empresa_id) : null,
+        professionalId: String(slot.professional_id),
+        professionalLocationId: eligibleDirectory.find(
+          (entry) => entry.professionalId === String(slot.professional_id) && entry.serviceId === String(slot.service_id),
+        )?.professionalLocationId ?? null,
+        serviceId: String(slot.service_id),
+        startTime: String(slot.slot_start),
+        label: this.formatAgendaSlotLabel(
+          String(slot.slot_start),
+          String(slot.professional_name),
+          capabilities.timezone,
+        ),
+      }));
+
+      const selectedSlot = context.selectedOption?.kind === "slot" ? context.selectedOption : null;
+      if (params.request.intent === "availability" || !selectedSlot) {
+        context = setPresentedAgendaOptions(context, options, now);
+        await this.enqueueBiEvent({
+          acesId: params.agent.aces_id,
+          aggregateType: "lead",
+          aggregateId: params.lead.id,
+          eventType: "calendar_availability.succeeded",
+          payload: { lead_id: params.lead.id, agent_id: params.agent.id, option_count: options.length },
+        });
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("succeeded", "Apresente somente os horarios retornados.", { options });
+      }
+
+      if (!selectedSlot || !selectedSlot.professionalLocationId || !selectedSlot.serviceId || !selectedSlot.startTime) {
+        context = setPresentedAgendaOptions(context, options, now);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("needs_input", "Solicite a escolha de um dos horarios retornados.", { options });
+      }
+      if (context.confirmation !== "yes") {
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        return result("needs_confirmation", params.request.intent === "reschedule"
+          ? "Confirme o novo horario antes de reagendar."
+          : "Confirme empresa, profissional, servico, data e horario antes de criar.", {
+          selected: selectedSlot,
+        });
+      }
+      if (params.request.intent === "reschedule" && context.appointmentEventId) {
+        const { data: appointment, error: appointmentError } = await this.serviceClient
+          .schema("calendar")
+          .rpc("service_reschedule_professional_appointment", {
+            p_event_id: context.appointmentEventId,
+            p_start_time: selectedSlot.startTime,
+            p_aces_id: params.agent.aces_id,
+          });
+        if (appointmentError) {
+          const message = extractSupabaseErrorMessage(appointmentError) ?? "";
+          if (message.includes("SLOT_UNAVAILABLE")) {
+            context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== selectedSlot.id), now);
+            await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+            return result("conflict", "O horario deixou de estar disponivel; preserve as preferencias e ofereca novas opcoes.", {
+              options: context.presentedOptions,
+            });
+          }
+          throw appointmentError;
+        }
+        await this.saveAgendaContext(params.agent.id, params.lead.id, null);
+        return { ...result("succeeded", "Agendamento reagendado e revalidado com sucesso.", { appointment }, true), context: createAgendaContext(now) };
+      }
+      const { data: appointment, error: appointmentError } = await this.serviceClient
+        .schema("calendar")
+        .rpc("create_professional_appointment", {
+          p_lead_id: params.lead.id,
+          p_professional_location_id: selectedSlot.professionalLocationId,
+          p_service_id: selectedSlot.serviceId,
+          p_start_time: selectedSlot.startTime,
+          p_title: null,
+          p_opportunity_id: null,
+          p_status: "scheduled",
+          p_description: null,
+          p_location: null,
+          p_meeting_url: null,
+          p_followup_1h_enabled: false,
+          p_booking_origin: "ai",
+          p_idempotency_key: `agenda:${params.runId}:${selectedSlot.id}`,
+          p_aces_id: params.agent.aces_id,
+        });
+      if (appointmentError) {
+        const message = extractSupabaseErrorMessage(appointmentError) ?? "";
+        if (message.includes("SLOT_UNAVAILABLE")) {
+          context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== selectedSlot.id), now);
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+          return result("conflict", "O horario deixou de estar disponivel; preserve as preferencias e ofereca novas opcoes.", {
+            options: context.presentedOptions,
+          });
+        }
+        throw appointmentError;
+      }
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "lead",
+        aggregateId: params.lead.id,
+        eventType: "calendar_booking.succeeded",
+        payload: { lead_id: params.lead.id, agent_id: params.agent.id },
+      });
+      await this.saveAgendaContext(params.agent.id, params.lead.id, null);
+      return { ...result("succeeded", "Agendamento criado e revalidado com sucesso.", { appointment }, true), context: createAgendaContext(now) };
+    } catch (error) {
+      console.error("[crm-ai] Falha no subworkflow da Agenda:", error);
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "lead",
+        aggregateId: params.lead.id,
+        eventType: params.request.intent === "book" ? "calendar_booking.failed" : "calendar_availability.failed",
+        payload: { lead_id: params.lead.id, agent_id: params.agent.id },
+      }).catch(() => undefined);
+      await this.saveAgendaContext(params.agent.id, params.lead.id, context).catch(() => undefined);
+      return result("failed", "A operacao da Agenda falhou; nao invente dados e ofereca atendimento humano.");
+    }
+  }
+
   private async classifyConversation(
     agent: AgentRow,
     lead: LeadRow,
@@ -8627,6 +9751,8 @@ export class AgentManager {
     messages: MessageRow[]
   ): Promise<GeminiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = await this.getHandoffConfig(agent);
+    const leadState = await this.getLeadState(agent.id, lead.id);
+    const agendaContext = readAgendaContext(leadState?.agenda_context);
     const temporalContext = buildNativeTemporalContext();
     const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
     const conversation = messages
@@ -8658,7 +9784,7 @@ export class AgentManager {
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key.",
       "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
@@ -8676,12 +9802,24 @@ export class AgentManager {
       "Extraia desired_perception_answer apenas quando o lead responder como quer ser percebido pelas pessoas.",
       "Extraia desired_feeling_answer apenas quando o lead responder quais valores ou caracteristicas representam quem ele e.",
       "Nao confunda descricao tecnica de uma imagem com resposta de qualificacao. Use null quando nao houver resposta explicita.",
+      "agenda_request descreve somente a intencao operacional de empresas, profissionais, precos ou agenda.",
+      "agenda_request.intent deve ser: none, company_info, professionals, price, availability, book, reschedule ou cancel.",
+      "agenda_request pode conter companyQuery, professionalQuery, serviceQuery, dateFrom, dateTo, period, optionReference e confirmation.",
+      "Datas devem usar YYYY-MM-DD. period deve ser morning, afternoon ou evening. confirmation deve ser unknown, yes ou no.",
+      "Extraia somente dados informados ou inequivocamente referenciados. Nao invente IDs, datas, horarios, profissionais ou precos.",
+      "Expressoes como 'o segundo' devem ir em optionReference sem tentar adivinhar seu valor; o backend resolve contra as opcoes apresentadas.",
+      "Se o cliente mudar empresa, profissional ou servico, preencha o novo valor; o backend limpará as escolhas dependentes.",
+      "Para assuntos sem relacao com empresa ou agenda, use agenda_request.intent=none.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
       "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
       "handoff_reason deve explicar objetivamente por que o handoff foi acionado. Se nao houver handoff, deixe handoff_reason vazio.",
+      "forwarding_destination_key deve ser uma chave exata dos destinos disponiveis somente quando um destino especifico corresponder claramente ao contexto.",
+      "Nunca invente uma chave. Se houver handoff geral sem destino especifico, use null.",
+      "Quando uma empresa ou cidade ja estiver clara na conversa, compare diretamente com os destinos relacionados sem pedir novamente.",
       "",
       `Contexto temporal nativo: ${JSON.stringify(temporalContext)}`,
+      `Contexto estruturado atual da Agenda: ${JSON.stringify(agendaContext)}`,
       "",
       `Agente de atendimento configurado: ${JSON.stringify({
         id: agent.id,
@@ -8707,6 +9845,12 @@ export class AgentManager {
         enabled: handoffConfig.enabled,
         mode: handoffConfig.mode,
         instruction: handoffConfig.instruction ?? null,
+        destinations: handoffConfig.destinations.map((destination) => ({
+          key: destination.destination_key,
+          name: destination.display_name,
+          mode: destination.mode,
+          when_to_use: destination.context_instruction,
+        })),
       })}`,
       "",
       `Historico recente:\n${conversation}`,
@@ -8799,6 +9943,7 @@ export class AgentManager {
       nativeFollowupNeedsClarification: boolean;
       handoffTriggered: boolean;
       visagism: JsonRecord;
+      agenda: AgendaExecutionResult;
     }
   ): Promise<GeminiExecutionResult<ReplyModelResponse>> {
     const mediaAssets = await this.listAvailableMediaAssets(agent);
@@ -8827,6 +9972,7 @@ export class AgentManager {
 
     const prompt = [
       agent.system_prompt,
+      buildAgentPersonalityInstruction(agent.personality_profile ?? "balanced"),
       billingContext,
       "",
       "Voce e o agente de atendimento que responde ao lead pelo WhatsApp.",
@@ -8840,6 +9986,10 @@ export class AgentManager {
       "Se nao houver resposta util ou segura para enviar agora, retorne {\"reply_blocks\":[]}.",
       "Se houver handoff humano acionado, prefira nao responder ao lead, a menos que a propria conversa exija uma confirmacao curta.",
       "Se o visagismo estiver waiting_input, pergunte somente o campo faltante indicado. Se estiver succeeded, nao envie texto adicional porque a imagem ja foi enviada.",
+      "Quando houver resultado da Agenda, use apenas os dados estruturados retornados. Nunca invente empresa, profissional, preco ou disponibilidade.",
+      "Apresente no maximo tres datas, tres horarios ou quatro profissionais. Aproveite tudo que o cliente ja informou e faca somente a proxima pergunta necessaria.",
+      "Aceite escolhas numeradas naturalmente, sem frases de menu como 'digite zero' ou comandos rigidos de chatbot.",
+      "Se a operacao estiver denied, nao afirme que foi executada; explique brevemente e encaminhe para atendimento humano quando apropriado.",
       "",
       `Lead atual: ${JSON.stringify({
         id: lead.id,
@@ -8867,6 +10017,7 @@ export class AgentManager {
         native_followup_needs_clarification: executionContext.nativeFollowupNeedsClarification,
         handoff_triggered: executionContext.handoffTriggered,
         visagism: executionContext.visagism,
+        agenda: executionContext.agenda,
       })}`,
       "",
       `Materiais disponiveis: ${JSON.stringify(mediaAssets)}`,
@@ -9809,11 +10960,19 @@ export class AgentManager {
         bufferedEntries,
         imageAnalyses: opticsImageAnalyses,
       });
+      const agendaApplication = await this.executeAgendaSubworkflow({
+        agent,
+        lead,
+        request: result.parsed.agenda_request,
+        storedContext: leadState?.agenda_context,
+        runId,
+      });
       const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, {
         nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
         nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
         handoffTriggered: result.parsed.should_handoff,
         visagism: asRecord(visagismApplication),
+        agenda: agendaApplication,
       });
       await tryRecordAiUsage(this.serviceClient, {
         idempotencyKey: `ai_run:${runId}:customer_reply:${replyResult.modelName}:${replyResult.attempt}`,
@@ -9917,6 +11076,9 @@ export class AgentManager {
       }
 
       const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
+      if (handoffResult.triggered) {
+        await this.saveAgendaContext(agent.id, lead.id, null);
+      }
       const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
 
       if (shouldFreezeLead) {
@@ -9988,6 +11150,7 @@ export class AgentManager {
           delivery_format: deliveryFormat,
           media_delivery: mediaDelivery,
           visagism: visagismApplication,
+          agenda: agendaApplication,
           freeze_until: freezeUntil,
         },
         suggestedStageId,
@@ -11073,6 +12236,7 @@ export class AgentManager {
       model: AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
       is_active: false,
       temperature: 0.4,
+      personality_profile: "balanced",
       buffer_wait_ms: 45000,
       human_pause_minutes: 60,
       auto_apply_threshold: 0.85,

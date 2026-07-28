@@ -1,10 +1,9 @@
 import { useEffect } from "react";
 import { BellRing, CalendarCheck2, CheckCircle2, Clock3, Edit3, MapPin, XCircle } from "lucide-react";
-import { format, parseISO } from "date-fns";
-import { ptBR } from "date-fns/locale";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { formatInCalendarTimezone } from "@/lib/calendarTimezone";
 import type { Lead } from "@/hooks/useLeads";
 import type { CalendarEvent, CalendarEventStatus, CalendarFollowupStatus } from "@/types/calendar";
 
@@ -15,6 +14,7 @@ type EventPopoverProps = {
   onClose: () => void;
   onEdit: (event: CalendarEvent) => void;
   onSetStatus: (event: CalendarEvent, status: CalendarEventStatus) => void;
+  timezone: string;
 };
 
 const STATUS_LABELS: Record<CalendarEventStatus, string> = {
@@ -42,12 +42,12 @@ const FOLLOWUP_LABELS: Record<CalendarFollowupStatus, string> = {
   skipped: "ignorado",
 };
 
-function formatEventTime(event: CalendarEvent) {
+function formatEventTime(event: CalendarEvent, timezone: string) {
   if (event.all_day) {
-    return format(parseISO(event.start_time), "dd 'de' MMMM", { locale: ptBR });
+    return formatInCalendarTimezone(event.start_time, timezone, { day: "2-digit", month: "long" });
   }
 
-  return `${format(parseISO(event.start_time), "dd/MM HH:mm", { locale: ptBR })} - ${format(parseISO(event.end_time), "HH:mm", { locale: ptBR })}`;
+  return `${formatInCalendarTimezone(event.start_time, timezone, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })} - ${formatInCalendarTimezone(event.end_time, timezone, { hour: "2-digit", minute: "2-digit", hour12: false })}`;
 }
 
 export function EventPopover({
@@ -57,6 +57,7 @@ export function EventPopover({
   onClose,
   onEdit,
   onSetStatus,
+  timezone,
 }: EventPopoverProps) {
   useEffect(() => {
     const closeOnEscape = (keyboardEvent: KeyboardEvent) => {
@@ -113,7 +114,7 @@ export function EventPopover({
       <div className="space-y-2 text-sm text-[var(--color-text-secondary)]">
         <p className="flex items-center gap-2">
           <Clock3 className="h-4 w-4 text-[var(--color-primary-500)]" />
-          <span>{formatEventTime(event)}</span>
+          <span>{formatEventTime(event, timezone)}</span>
         </p>
         {lead ? (
           <p className="flex items-center gap-2">

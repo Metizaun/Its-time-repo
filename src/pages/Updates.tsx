@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, BookOpen, ExternalLink, Sparkles } from "lucide-react";
 import {
   CURRENT_RELEASE_VERSION,
   isCurrentReleasePublished,
@@ -20,15 +20,59 @@ interface Release {
   status: "active" | "stable" | "legacy";
   headline: string;
   description: string;
+  guideUrl?: string;
   items: ReleaseItem[];
 }
 
 const releasesData: Release[] = [
   {
-    version: "v2.5.0",
+    version: "v2.4.0",
+    date: "28 de Julho, 2026",
+    type: "major",
+    status: "active",
+    headline:
+      "Módulo Multi-Empresas e Integração Avançada com a Nova Agenda Comercial",
+    description:
+      "Lançamento do ecossistema Multi-Empresas: gerencie filiais, unidades por CNPJ, vincule leads a empresas específicas e sincronize a Nova Agenda com disponibilidade por local, fuso horário dedicado e Agentes de IA.",
+    guideUrl: "/guia-agenda",
+    items: [
+      {
+        type: "feature",
+        tag: "MULTI-COMPANY",
+        description:
+          "Gestão Completa de Empresas & Filiais: cadastro com validação de CNPJ, razão social, endereço, fuso horário local e controle granular de acessos para a equipe.",
+      },
+      {
+        type: "feature",
+        tag: "COMPANY-AGENDA",
+        description:
+          "Nova Agenda Multi-Unidade: filtre a disponibilidade por empresa, associe profissionais a múltiplos locais e gerencie serviços com preços e durações personalizadas.",
+      },
+      {
+        type: "feature",
+        tag: "AI-MULTIUNIT",
+        description:
+          "Agendamento Inteligente por IA: agentes cognitivos compreendem a localização desejada do lead no WhatsApp/Instagram e agendam na empresa e profissional corretos.",
+      },
+      {
+        type: "improvement",
+        tag: "LEAD-TENANCY",
+        description:
+          "Vínculo CRM Empresa-Lead: histórico de atendimentos e agendamentos segregado por empresa para relatórios de performance por unidade.",
+      },
+      {
+        type: "improvement",
+        tag: "CALENDAR-UX",
+        description:
+          "Performance e UX da Agenda: visualização otimizada em grade (Semana/Dia/Mês), sistema anti-conflito de horários e disparo automatizado de lembretes.",
+      },
+    ],
+  },
+  {
+    version: "v2.3.3",
     date: "21 de Julho, 2026",
     type: "minor",
-    status: "active",
+    status: "stable",
     headline:
       "Classificação Inteligente de Leads, IA por Voz e Criação de Templates Meta",
     description:
@@ -67,9 +111,9 @@ const releasesData: Release[] = [
     ],
   },
   {
-    version: "v2.4.0",
+    version: "v2.3.2",
     date: "20 de Julho, 2026",
-    type: "major",
+    type: "minor",
     status: "stable",
     headline: "Integração Nativa de Agentes SDR com Inteligência Cognitiva",
     description:
@@ -166,35 +210,31 @@ export default function Updates() {
 
   const TYPE_CONFIG: Record<
     ReleaseItem["type"],
-    { icon: string; label: string; gradient: string; textGradient: string }
+    { icon: string; label: string; badgeBg: string; textHex: string }
   > = {
     feature: {
       icon: "/update-icons/feature.png",
       label: "Novidade",
-      gradient: "update-gradient--orange-coral",
-      textGradient:
-        "linear-gradient(135deg, #FF5A1F 0%, #FF6848 50%, #F0525D 100%)",
+      badgeBg: "bg-[#FFF3EE] text-[#E8511A] border-[#FFE2D0]",
+      textHex: "#FF5A1F",
     },
     improvement: {
       icon: "/update-icons/improvement.png",
       label: "Melhoria",
-      gradient: "update-gradient--coral-pink",
-      textGradient:
-        "linear-gradient(135deg, #F45B42 0%, #F45362 52%, #EB3F78 100%)",
+      badgeBg: "bg-rose-50 text-rose-600 border-rose-200",
+      textHex: "#F45362",
     },
     fix: {
       icon: "/update-icons/fix.png",
       label: "Correção",
-      gradient: "update-gradient--orange-pink-electric",
-      textGradient:
-        "linear-gradient(90deg, #FF4B16 0%, #FF534D 45%, #F52D73 100%)",
+      badgeBg: "bg-orange-50 text-orange-600 border-orange-200",
+      textHex: "#FF4B16",
     },
     hotfix: {
       icon: "/update-icons/hotfix.png",
       label: "Hotfix",
-      gradient: "update-gradient--coral-pink-soft",
-      textGradient:
-        "linear-gradient(135deg, #FF8A6C 0%, #F68F89 48%, #F3A1B2 100%)",
+      badgeBg: "bg-pink-50 text-pink-600 border-pink-200",
+      textHex: "#F3A1B2",
     },
   };
 
@@ -256,15 +296,25 @@ export default function Updates() {
             </p>
           </div>
 
-          <a
-            href="https://itstime.com.br"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-[#d9d6d1] rounded-full bg-white/60 hover:bg-white text-xs font-mono transition-all duration-200"
-          >
-            <span>Website</span>
-            <ArrowUpRight className="w-3.5 h-3.5" />
-          </a>
+          <div className="flex items-center gap-3">
+            <Link
+              to="/guia-agenda"
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-[#E8511A] rounded-full bg-[#FFF3EE] text-[#E8511A] hover:bg-[#FFE2D0] text-xs font-mono transition-all font-semibold"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Guia do Usuário</span>
+            </Link>
+
+            <a
+              href="https://itstime.com.br"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-[#d9d6d1] rounded-full bg-white/60 hover:bg-white text-xs font-mono transition-all duration-200"
+            >
+              <span>Website</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </a>
+          </div>
         </div>
       </header>
 
@@ -308,7 +358,7 @@ export default function Updates() {
                 onClick={() => setActiveFilter(filter.id)}
                 className={`px-4 py-2 text-xs font-mono border rounded-full transition-all duration-200 uppercase ${
                   activeFilter === filter.id
-                    ? "bg-[#0e0e10] text-[#f5f3ef] border-[#0e0e10] shadow-sm"
+                    ? "bg-[#0e0e10] text-[#f5f3ef] border-[#0e0e10] shadow-sm font-bold"
                     : "bg-white/40 border-[#d9d6d1] text-neutral-600 hover:bg-white hover:text-neutral-900"
                 }`}
               >
@@ -316,7 +366,7 @@ export default function Updates() {
               </button>
             ))}
           </div>
-          <span className="text-xs font-mono text-neutral-400 uppercase mt-2 sm:mt-0">
+          <span className="text-xs font-mono text-neutral-500 uppercase mt-2 sm:mt-0">
             {filteredReleases.length}{" "}
             {filteredReleases.length === 1
               ? "versão encontrada"
@@ -376,9 +426,22 @@ export default function Updates() {
                     </h3>
 
                     {/* Descrição Geral */}
-                    <p className="text-neutral-600 leading-relaxed text-sm mb-8">
+                    <p className="text-neutral-600 leading-relaxed text-sm mb-6">
                       {release.description}
                     </p>
+
+                    {/* Botão de Guia de Uso (se houver) */}
+                    {release.guideUrl && (
+                      <div className="mb-6">
+                        <Link
+                          to={release.guideUrl}
+                          className="inline-flex items-center gap-2 px-4 py-2 border border-[#E8511A] text-[#E8511A] bg-[#FFF3EE] hover:bg-[#FFE2D0] rounded-xl text-xs font-mono font-bold transition-all shadow-sm group"
+                        >
+                          <BookOpen className="w-4 h-4 transition-transform group-hover:scale-110" />
+                          <span>Acessar Guia de Uso da Nova Agenda (Com Prints) &rarr;</span>
+                        </Link>
+                      </div>
+                    )}
 
                     {/* Lista de Alterações Modulares */}
                     <div className="space-y-3">
@@ -387,32 +450,29 @@ export default function Updates() {
                         return (
                           <div
                             key={index}
-                            className="flex gap-4 p-4 bg-white/70 hover:bg-white border border-[#d9d6d1]/80 hover:border-[#d0cdc7] rounded-xl transition-all duration-200 shadow-sm group"
+                            className="flex items-start gap-4 p-4 bg-white/80 hover:bg-white border border-[#d9d6d1]/80 hover:border-[#d0cdc7] rounded-xl transition-all duration-200 shadow-sm group"
                           >
+                            {/* Ícone PNG Oficial em Tamanho Total */}
                             <img
                               src={cfg.icon}
                               alt={cfg.label}
-                              className="w-16 h-16 shrink-0 self-center select-none"
+                              className="w-16 h-16 shrink-0 object-contain select-none self-center"
                               draggable={false}
                             />
 
-                            {/* Conteúdo */}
+                            {/* Conteúdo do Item */}
                             <div className="min-w-0 flex-1 flex flex-col justify-center">
-                              <span
-                                className="mb-0.5 block text-xs font-semibold tracking-wide"
-                                style={{
-                                  background: cfg.textGradient,
-                                  WebkitBackgroundClip: "text",
-                                  WebkitTextFillColor: "transparent",
-                                  backgroundClip: "text",
-                                }}
-                              >
-                                {cfg.label}
-                              </span>
-                              <span className="mb-2 block text-[10px] font-mono text-neutral-400 tracking-wider">
-                                {item.tag}
-                              </span>
-                              <p className="text-sm text-neutral-700 leading-relaxed font-light">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span
+                                  className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded border ${cfg.badgeBg}`}
+                                >
+                                  {cfg.label}
+                                </span>
+                                <span className="text-[10px] font-mono text-neutral-400 tracking-wider">
+                                  {item.tag}
+                                </span>
+                              </div>
+                              <p className="text-sm text-neutral-800 leading-relaxed font-normal">
                                 {item.description}
                               </p>
                             </div>
@@ -431,7 +491,7 @@ export default function Updates() {
               </p>
               <button
                 onClick={() => setActiveFilter("all")}
-                className="mt-4 text-xs font-mono text-[#E8511A] hover:underline"
+                className="mt-4 text-xs font-mono text-[#E8511A] hover:underline font-bold"
               >
                 Limpar filtros
               </button>
@@ -457,7 +517,7 @@ export default function Updates() {
               rel="noopener noreferrer"
               className="hover:text-neutral-900 transition-colors"
             >
-              Página Principal
+              Website
             </a>
           </div>
         </footer>

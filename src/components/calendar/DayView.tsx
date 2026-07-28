@@ -19,6 +19,7 @@ type DayViewProps = {
   onSelectEvent: (event: CalendarEvent, position: { top: number; left: number }) => void;
   onMoveEvent: (event: CalendarEvent, start: Date, end: Date, allDay: boolean) => void;
   onResizeEvent: (event: CalendarEvent, end: Date) => void;
+  timezone: string;
 };
 
 export function DayView({
@@ -28,9 +29,10 @@ export function DayView({
   onSelectEvent,
   onMoveEvent,
   onResizeEvent,
+  timezone,
 }: DayViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const allDayEvents = allDayEventsForDay(events, day);
+  const allDayEvents = allDayEventsForDay(events, day, timezone);
 
   useEffect(() => {
     const currentHour = new Date().getHours();
@@ -91,6 +93,7 @@ export function DayView({
             onSelectEvent={onSelectEvent}
             onMoveEvent={onMoveEvent}
             onResizeEvent={onResizeEvent}
+            timezone={timezone}
           />
         </div>
       </div>

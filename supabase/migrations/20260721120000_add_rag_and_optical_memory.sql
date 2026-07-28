@@ -1,8 +1,8 @@
--- Migration: Add RAG (pgvector) and Optical Profile Memory to CRM AI
+-- Migration: Add RAG (pgvector) and Optical Profile Memory to CRM AI.
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions;
 
 -- Add memory fields to ai_lead_state
-ALTER TABLE crm.ai_lead_state 
+ALTER TABLE agents.ai_lead_state
 ADD COLUMN IF NOT EXISTS optical_profile JSONB DEFAULT '{}'::jsonb,
 ADD COLUMN IF NOT EXISTS memory_summary TEXT DEFAULT NULL;
 
@@ -10,7 +10,7 @@ ADD COLUMN IF NOT EXISTS memory_summary TEXT DEFAULT NULL;
 CREATE TABLE IF NOT EXISTS crm.ai_knowledge_embeddings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     aces_id INT NOT NULL,
-    agent_id UUID REFERENCES crm.ai_agents(id) ON DELETE CASCADE,
+    agent_id UUID REFERENCES agents.ai_agents(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     metadata JSONB DEFAULT '{}'::jsonb,
     embedding extensions.vector(768),

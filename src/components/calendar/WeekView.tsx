@@ -21,6 +21,7 @@ type WeekViewProps = {
   onSelectEvent: (event: CalendarEvent, position: { top: number; left: number }) => void;
   onMoveEvent: (event: CalendarEvent, start: Date, end: Date, allDay: boolean) => void;
   onResizeEvent: (event: CalendarEvent, end: Date) => void;
+  timezone: string;
 };
 
 export function WeekView({
@@ -32,11 +33,12 @@ export function WeekView({
   onSelectEvent,
   onMoveEvent,
   onResizeEvent,
+  timezone,
 }: WeekViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasAllDayEvents = useMemo(
-    () => days.some((day) => allDayEventsForDay(events, day).length > 0),
-    [days, events]
+    () => days.some((day) => allDayEventsForDay(events, day, timezone).length > 0),
+    [days, events, timezone]
   );
 
   useEffect(() => {
@@ -66,7 +68,7 @@ export function WeekView({
           <div className="grid min-w-0 flex-1 gap-px p-1" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(156px, 1fr))` }}>
             {days.map((day) => (
               <div key={day.toISOString()} className="min-h-7 space-y-1">
-                {allDayEventsForDay(events, day).slice(0, 2).map((event) => (
+                {allDayEventsForDay(events, day, timezone).slice(0, 2).map((event) => (
                   <button
                     key={event.id}
                     type="button"
@@ -106,6 +108,7 @@ export function WeekView({
               onSelectEvent={onSelectEvent}
               onMoveEvent={onMoveEvent}
               onResizeEvent={onResizeEvent}
+              timezone={timezone}
             />
           ))}
         </div>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowUpRight, Cpu, Sparkles } from "lucide-react";
+import { ArrowUpRight, BookOpen, Building2, Calendar, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   CURRENT_RELEASE_VERSION,
@@ -13,42 +13,50 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-// ─── Constante de versão ───────────────────────────────────────────────────────
-// Atualize este valor a cada release para que o modal reapareça para todos.
 const CURRENT_VERSION = CURRENT_RELEASE_VERSION;
-const STORAGE_KEY = "its-time-seen-update";
+const STORAGE_KEY = "its-time-seen-update-v240";
 
-// ─── Novidades do release atual ───────────────────────────────────────────────
+// ─── Destaques da Release v2.4.0 ───────────────────────────────────────────────
 const HIGHLIGHTS = [
   {
-    icon: <Sparkles className="h-5 w-5" aria-hidden="true" />,
+    icon: "/update-icons/feature.png",
+    fallbackIcon: <Building2 className="h-5 w-5 text-[#E8511A]" />,
     type: "NOVIDADE",
-    gradient: "update-gradient--orange-coral",
-    text: "Sua IA agora pode falar — envio de mensagens de voz com diversas opções de vozes.",
+    tag: "MULTI-COMPANY",
+    badgeBg: "bg-[#FFF3EE] text-[#E8511A] border-[#FFE2D0]",
+    text: "Gestão Completa de Empresas & Filiais: cadastre unidades com validação de CNPJ, endereço e fuso horário local.",
   },
   {
-    icon: <Sparkles className="h-5 w-5" aria-hidden="true" />,
+    icon: "/update-icons/feature.png",
+    fallbackIcon: <Calendar className="h-5 w-5 text-[#E8511A]" />,
     type: "NOVIDADE",
-    gradient: "update-gradient--coral-pink",
-    text: "Pipeline inteligente classifica leads automaticamente, mesmo sem agentes de IA ativos.",
+    tag: "COMPANY-AGENDA",
+    badgeBg: "bg-[#FFF3EE] text-[#E8511A] border-[#FFE2D0]",
+    text: "Nova Agenda Multi-Unidade: filtre a disponibilidade por empresa, associe profissionais e gerencie tarifas por local.",
   },
   {
-    icon: <Sparkles className="h-5 w-5" aria-hidden="true" />,
+    icon: "/update-icons/feature.png",
+    fallbackIcon: <Sparkles className="h-5 w-5 text-[#E8511A]" />,
     type: "NOVIDADE",
-    gradient: "update-gradient--orange-pink-electric",
-    text: "Crie templates oficiais da Meta (Gupshup) diretamente pelo app.",
+    tag: "AI-MULTIUNIT",
+    badgeBg: "bg-[#FFF3EE] text-[#E8511A] border-[#FFE2D0]",
+    text: "Agendamento por IA Geolocalizada: Agentes cognitivos identificam a unidade do cliente e realizam agendamentos autônomos.",
   },
   {
-    icon: <Cpu className="h-5 w-5" aria-hidden="true" />,
+    icon: "/update-icons/improvement.png",
+    fallbackIcon: <Building2 className="h-5 w-5 text-rose-600" />,
     type: "MELHORIA",
-    gradient: "update-gradient--coral-pink-soft",
-    text: "Exibição de imagens (Gupshup) e botões interativos (Meta) no chat.",
+    tag: "LEAD-TENANCY",
+    badgeBg: "bg-rose-50 text-rose-700 border-rose-200",
+    text: "Vínculo CRM Empresa-Lead: acompanhe o histórico de atendimentos e agendamentos segregados por filial.",
   },
   {
-    icon: <Cpu className="h-5 w-5" aria-hidden="true" />,
+    icon: "/update-icons/improvement.png",
+    fallbackIcon: <Calendar className="h-5 w-5 text-rose-600" />,
     type: "MELHORIA",
-    gradient: "update-gradient--coral-pink",
-    text: "Chat redesenhado: mais limpo, rápido e produtivo.",
+    tag: "CALENDAR-UX",
+    badgeBg: "bg-rose-50 text-rose-700 border-rose-200",
+    text: "Grade da Agenda Otimizada: navegabilidade em tempo real com disparo de lembretes via WhatsApp (1h/24h) e alerta anti-conflito.",
   },
 ];
 
@@ -75,84 +83,102 @@ export function UpdatesModal() {
     navigate("/updates");
   }
 
+  function goToGuide() {
+    dismiss();
+    navigate("/guia-agenda");
+  }
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) dismiss(); }}>
       <DialogContent
-        className="w-[min(92vw,30rem)] overflow-hidden rounded-[var(--radius-xl)] border-[var(--border-default)] bg-[var(--color-surface-1)] p-0 shadow-[var(--shadow-lg)] gap-0"
+        className="w-[min(94vw,32rem)] overflow-hidden rounded-2xl border border-neutral-200 bg-white p-0 shadow-2xl gap-0"
         onInteractOutside={(e) => e.preventDefault()}
       >
-        {/* Cabeçalho com gradiente laranja sutil */}
-        <div className="relative overflow-hidden px-6 py-5 border-b border-[var(--border-subtle)]">
-          <div
-            className="pointer-events-none absolute inset-0 opacity-[0.04]"
-            style={{
-              background:
-                "radial-gradient(circle at 0% 50%, var(--color-primary-500), transparent 70%)",
-            }}
-            aria-hidden="true"
-          />
-
+        {/* Cabeçalho com destaque de versão */}
+        <div className="relative overflow-hidden px-6 py-5 border-b border-neutral-100 bg-[#faf9f6]">
           <div className="relative">
-            <div>
-              <div className="mb-1.5 flex items-center gap-2">
-                {/* Bullet laranja pulsante */}
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-primary-500)] opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-primary-500)]" />
-                </span>
-                <span className="font-mono text-[10px] font-semibold tracking-wider text-[var(--color-primary-600)] uppercase">
-                  Novidades — {CURRENT_VERSION}
-                </span>
-              </div>
-              <DialogHeader className="space-y-1">
-                <DialogTitle className="text-base font-bold text-[var(--color-gray-900)] leading-snug">
-                  Atualizações desta semana
-                </DialogTitle>
-                <p className="text-xs text-[var(--color-gray-500)] leading-relaxed">
-                  Novas capacidades, melhorias e compatibilidades disponíveis agora.
-                </p>
-              </DialogHeader>
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E8511A] opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#E8511A]" />
+              </span>
+              <span className="font-mono text-[10px] font-bold tracking-wider text-[#E8511A] uppercase">
+                NOVIDADES — {CURRENT_VERSION}
+              </span>
             </div>
+
+            <DialogHeader className="space-y-1">
+              <DialogTitle className="text-lg font-extrabold text-neutral-900 leading-snug">
+                Atualizações desta semana
+              </DialogTitle>
+              <p className="text-xs text-neutral-500 font-normal leading-relaxed">
+                Módulo Multi-Empresas e Nova Agenda Inteligente disponíveis agora.
+              </p>
+            </DialogHeader>
           </div>
         </div>
 
-        {/* Lista de Highlights */}
-        <div className="divide-y divide-[var(--border-subtle)] px-5 py-1">
+        {/* Lista de Destaques com Ícones Alinhados */}
+        <div className="divide-y divide-neutral-100 px-5 py-2 max-h-[60vh] overflow-y-auto">
           {HIGHLIGHTS.map((item, i) => (
-            <div key={i} className="flex items-start gap-4 py-3.5">
-              <span
-                className={`update-type-visual update-type-visual--compact ${item.gradient}`}
-                role="img"
-                aria-label={item.type}
-              >
-                {item.icon}
-              </span>
-              <p className="min-w-0 pt-0.5 text-xs leading-relaxed text-[var(--color-gray-700)]">
-                <span className="sr-only">{item.type}: </span>
-                {item.text}
-              </p>
+            <div key={i} className="flex items-center gap-3.5 py-3.5 group">
+              {/* Ícone PNG Oficial em Tamanho Total da Box */}
+              <img
+                src={item.icon}
+                alt={item.type}
+                className="w-14 h-14 shrink-0 object-contain select-none drop-shadow-xs"
+                draggable={false}
+              />
+
+              {/* Texto e Badges */}
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 text-[9px] font-mono font-bold uppercase rounded border ${item.badgeBg}`}>
+                    {item.type}
+                  </span>
+                  <span className="text-[10px] font-mono text-neutral-400 font-semibold">
+                    {item.tag}
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-700 leading-relaxed font-normal">
+                  {item.text}
+                </p>
+              </div>
             </div>
           ))}
         </div>
 
         {/* Footer com ações */}
-        <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] bg-[var(--color-bg-subtle)] px-5 py-4">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-neutral-100 bg-[#faf9f6] px-5 py-4">
           <Button
             variant="ghost"
             size="sm"
             onClick={dismiss}
-            className="text-xs text-[var(--color-gray-500)] hover:text-[var(--color-gray-800)]"
+            className="text-xs text-neutral-500 hover:text-neutral-900 font-mono w-full sm:w-auto"
           >
             Dispensar
           </Button>
-          <Button
-            size="sm"
-            onClick={goToUpdates}
-            className="gap-1.5 bg-[var(--color-primary-500)] text-white hover:bg-[var(--color-primary-600)] text-xs"
-          >
-            Ver todas as novidades
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </Button>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToGuide}
+              className="gap-1.5 border-[#E8511A] text-[#E8511A] bg-[#FFF3EE] hover:bg-[#FFE2D0] text-xs font-mono font-bold w-full sm:w-auto"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Guia em Fotos
+            </Button>
+
+            <Button
+              size="sm"
+              onClick={goToUpdates}
+              className="gap-1.5 bg-[#E8511A] text-white hover:bg-[#FF6848] text-xs font-mono font-bold w-full sm:w-auto shadow-sm"
+            >
+              Ver todas
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

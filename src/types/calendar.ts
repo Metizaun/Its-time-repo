@@ -30,6 +30,16 @@ export interface CalendarEvent {
   meeting_url: string | null;
   lead_id: string;
   opportunity_id: string | null;
+  empresa_id: string | null;
+  professional_id: string | null;
+  professional_location_id: string | null;
+  service_id: string | null;
+  booking_origin: "manual" | "ai" | "api" | "import" | "external";
+  duration_minutes_snapshot: number | null;
+  price_cents_snapshot: number | null;
+  buffer_before_minutes_snapshot: number;
+  buffer_after_minutes_snapshot: number;
+  idempotency_key: string | null;
   followup_1h_enabled: boolean;
   followup_1h_status: CalendarFollowupStatus;
   followup_1h_last_attempt_at: string | null;
@@ -39,6 +49,21 @@ export interface CalendarEvent {
   deleted_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProfessionalAppointmentInput {
+  leadId: string;
+  professionalLocationId: string;
+  serviceId: string;
+  startTime: string;
+  title: string;
+  opportunityId?: string | null;
+  status?: "scheduled" | "confirmed";
+  description?: string | null;
+  location?: string | null;
+  meetingUrl?: string | null;
+  followupEnabled?: boolean;
+  idempotencyKey?: string | null;
 }
 
 export interface CalendarEventInput {

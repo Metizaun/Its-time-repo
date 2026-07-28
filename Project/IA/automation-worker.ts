@@ -154,7 +154,7 @@ class AutomationDispatchError extends Error {
 
 const HOLIDAY_COUNTRY_CODE = "BR";
 const PLACEHOLDER_PATTERN = /(\{|\[)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(\}|\])/g;
-const UNRESOLVED_PLACEHOLDER_PATTERN = /[\{\[]\s*[a-zA-Z_][a-zA-Z0-9_]*\s*[\}\]]/;
+const UNRESOLVED_PLACEHOLDER_PATTERN = /(?:\{|\[)\s*[a-zA-Z_][a-zA-Z0-9_]*\s*(?:\}|\])/;
 const TRANSIENT_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const PERMANENT_HTTP_STATUS_CODES = new Set([400]);
 const TRANSIENT_NETWORK_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"]);
@@ -204,7 +204,7 @@ function normalizeTextForComparison(value: string) {
 
 function cleanBusinessNamePart(value: string) {
   return value
-    .replace(/[\u0000-\u001f]+/g, " ")
+    .replace(/\p{Cc}+/gu, " ")
     .replace(/\s+/g, " ")
     .replace(/\s+([,.])/g, "$1")
     .replace(/^[\s.,;:|\-\u2013\u2014]+|[\s.,;:|\-\u2013\u2014]+$/gu, "")

@@ -29,6 +29,16 @@ const PIPELINE_ATTENDANCE_MIGRATION =
   "supabase/migrations/20260717190747_pipeline_attendance_cycles_and_controls.sql";
 const GUPSHUP_CHAT_WINDOW_MIGRATION =
   "supabase/migrations/20260720180517_backfill_gupshup_chat_window.sql";
+const COMPANIES_CALENDAR_FOUNDATION_MIGRATION =
+  "supabase/migrations/20260724202355_create_companies_access_and_calendar_foundation.sql";
+const PROFESSIONAL_BOOKING_MIGRATION =
+  "supabase/migrations/20260724203650_create_professional_booking_engine.sql";
+const COMPANY_FORWARDING_MIGRATION =
+  "supabase/migrations/20260724205521_extend_forwarding_for_company_queues.sql";
+const STRUCTURED_PERSONALITY_MIGRATION =
+  "supabase/migrations/20260724210256_add_structured_agent_personality.sql";
+const FEATURE_CLOSING_MIGRATION =
+  "supabase/migrations/20260727133949_close_companies_calendar_routing_v1.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -447,6 +457,100 @@ async function validateConfigureAgentAudioRpc(agentsClient: SupabaseClient<any, 
   );
 }
 
+function isMissingRpcError(error: PostgrestError) {
+  const normalized = normalizePostgrestError(error);
+  return normalized.code === "PGRST202"
+    || /schema cache|function .* does not exist/i.test(normalized.message);
+}
+
+async function validateCompaniesCalendarRoutingRpcs(
+  serviceClient: SupabaseClient<any, any, any>,
+  calendarClient: SupabaseClient<any, any, any>
+) {
+  const today = new Date().toISOString().slice(0, 10);
+  const probes = [
+    serviceClient.rpc("lookup_company_directory", {
+      p_query: "schema-preflight",
+      p_service_query: null,
+      p_professional_query: null,
+      p_limit: 1,
+      p_aces_id: -1,
+    }),
+    serviceClient.rpc("rpc_list_routing_queue", {
+      p_status: null,
+      p_limit: 1,
+      p_before: null,
+    }),
+    calendarClient.rpc("list_available_slots", {
+      p_professional_location_id: NIL_UUID,
+      p_service_id: NIL_UUID,
+      p_date_from: today,
+      p_date_until: today,
+      p_period: null,
+      p_limit: 1,
+      p_exclude_event_id: null,
+      p_aces_id: -1,
+    }),
+    calendarClient.rpc("cancel_professional_appointment", {
+      p_event_id: NIL_UUID,
+      p_reason: "schema-preflight",
+    }),
+    calendarClient.rpc("service_reschedule_professional_appointment", {
+      p_event_id: NIL_UUID,
+      p_start_time: new Date().toISOString(),
+      p_aces_id: -1,
+    }),
+  ];
+
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => error && isMissingRpcError(error));
+
+  return missing?.error
+    ? buildSchemaFailure(
+        "RPCs de Empresas, Agenda e Encaminhamento",
+        FEATURE_CLOSING_MIGRATION,
+        missing.error
+      )
+    : null;
+}
+
+async function validateCalendarToolDefinition(agentsClient: SupabaseClient<any, any, any>) {
+  const { data, error } = await agentsClient
+    .from("tool_definitions")
+    .select("tool_key, version, display_name, config_schema, is_active")
+    .eq("tool_key", "calendar")
+    .eq("version", 1)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error) {
+    return buildSchemaFailure(
+      "agents.tool_definitions calendar",
+      FEATURE_CLOSING_MIGRATION,
+      error
+    );
+  }
+
+  if (!data) {
+    return buildManualSchemaFailure(
+      "agents.tool_definitions calendar",
+      FEATURE_CLOSING_MIGRATION,
+      "Definicao ativa da Tool Agenda nao encontrada"
+    );
+  }
+
+  const properties = data.config_schema?.properties ?? {};
+  const requiredFlags = ["queryAvailability", "create", "reschedule", "cancel"];
+  const missingFlags = requiredFlags.filter((flag) => !properties[flag]);
+  return missingFlags.length === 0
+    ? null
+    : buildManualSchemaFailure(
+        "agents.tool_definitions calendar",
+        FEATURE_CLOSING_MIGRATION,
+        `Permissoes ausentes: ${missingFlags.join(", ")}`
+      );
+}
+
 async function validateOpticsTemplate(agentsClient: SupabaseClient<any, any, any>) {
   const { data: template, error: templateError } = await agentsClient
     .from("agent_templates")
@@ -633,6 +737,220 @@ export async function assertRuntimeSchemaCompatibility(
   const checks = await Promise.all([
     validateChatAttachmentsStorage(serviceClient),
     validateAutomationMediaStorage(serviceClient),
+    validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
+    validateCalendarToolDefinition(agentsClient),
+    validateSelectedColumns(
+      serviceClient,
+      "empresas",
+      [
+        "id",
+        "aces_id",
+        "cnpj",
+        "legal_name",
+        "name",
+        "phone",
+        "email",
+        "address",
+        "city",
+        "state",
+        "postal_code",
+        "timezone",
+        "is_active",
+        "search_key",
+      ],
+      "crm.empresas",
+      FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "empresa_memberships",
+      ["id", "aces_id", "empresa_id", "crm_user_id", "is_active"],
+      "crm.empresa_memberships",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "leads",
+      ["id", "empresa_id"],
+      "crm.leads.empresa_id",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "v_lead_details",
+      ["id", "empresa_id", "empresa_name", "empresa_cnpj"],
+      "crm.v_lead_details (empresa)",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "routing_events",
+      [
+        "id",
+        "aces_id",
+        "lead_id",
+        "forwarding_destination_id",
+        "empresa_id",
+        "destination_mode",
+        "status",
+        "queue_status",
+        "claimed_by_user_id",
+        "claimed_at",
+        "closed_at",
+        "seller_ids_snapshot",
+      ],
+      "crm.routing_events",
+      FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "routing_event_recipients",
+      ["routing_event_id", "aces_id", "crm_user_id", "created_at"],
+      "crm.routing_event_recipients",
+      FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "company_calendar_operational_alerts",
+      ["aces_id", "alert_key", "severity", "metric", "threshold", "detected_at", "metadata"],
+      "crm.company_calendar_operational_alerts",
+      FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "notifications",
+      ["id", "routing_event_id"],
+      "crm.notifications.routing_event_id",
+      FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "settings",
+      [
+        "aces_id",
+        "timezone",
+        "minimum_notice_minutes",
+        "booking_horizon_days",
+        "slot_interval_minutes",
+        "ai_booking_enabled",
+      ],
+      "calendar.settings",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "professionals",
+      ["id", "aces_id", "name", "specialty", "is_active"],
+      "calendar.professionals",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "professional_locations",
+      ["id", "aces_id", "professional_id", "empresa_id", "is_active", "is_ai_visible"],
+      "calendar.professional_locations",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "services",
+      [
+        "id",
+        "aces_id",
+        "name",
+        "duration_minutes",
+        "price_cents",
+        "buffer_before_minutes",
+        "buffer_after_minutes",
+        "is_active",
+        "is_ai_visible",
+      ],
+      "calendar.services",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "professional_services",
+      [
+        "id",
+        "aces_id",
+        "professional_location_id",
+        "service_id",
+        "is_active",
+        "is_ai_visible",
+      ],
+      "calendar.professional_services",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "availability_rules",
+      ["id", "aces_id", "professional_location_id", "weekday", "start_time", "end_time"],
+      "calendar.availability_rules",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "availability_exceptions",
+      [
+        "id",
+        "aces_id",
+        "empresa_id",
+        "professional_location_id",
+        "exception_type",
+        "starts_at",
+        "ends_at",
+      ],
+      "calendar.availability_exceptions",
+      COMPANIES_CALENDAR_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      calendarClient,
+      "events",
+      [
+        "id",
+        "empresa_id",
+        "professional_id",
+        "professional_location_id",
+        "service_id",
+        "booking_origin",
+        "duration_minutes_snapshot",
+        "price_cents_snapshot",
+        "occupied_range",
+        "idempotency_key",
+        "cancel_reason",
+      ],
+      "calendar.events (agenda profissional)",
+      PROFESSIONAL_BOOKING_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "ai_agents",
+      ["id", "personality_profile"],
+      "agents.ai_agents.personality_profile",
+      STRUCTURED_PERSONALITY_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "ai_lead_state",
+      ["agent_id", "lead_id", "agenda_context", "agenda_context_expires_at"],
+      "agents.ai_lead_state.agenda_context",
+      FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "forwarding_destinations",
+      ["id", "aces_id", "agent_tool_id", "mode", "empresa_id", "target_agent_id"],
+      "agents.forwarding_destinations (empresa)",
+      COMPANY_FORWARDING_MIGRATION
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "forwarding_destination_sellers",
+      ["id", "aces_id", "forwarding_destination_id", "crm_user_id"],
+      "agents.forwarding_destination_sellers",
+      COMPANY_FORWARDING_MIGRATION
+    ),
     validateSelectedColumns(
       serviceClient,
       "chat_read_states",

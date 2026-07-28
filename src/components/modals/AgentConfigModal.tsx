@@ -12,48 +12,42 @@ import { toast } from "sonner";
 
 const PERSONALITY_LEVELS = [
   {
+    key: "surgical",
     label: "Cirurgico",
-    description: "Seco, direto e objetivo. Respostas curtas sem rodeios.",
-    temperature: 0.1,
-    promptSuffix:
-      "Mantenha um estilo de comunicacao seco, objetivo e extremamente direto. Sem saudacoes excessivas, sem elogios e sem rodeios. Foco total na informacao.",
+    description: "Breve, direto e preciso. Resolve com o menor esforco possivel sem parecer frio ou rispido.",
   },
   {
+    key: "consultative",
     label: "Consultivo",
-    description: "Profissional e embasado. Transmite confianca e expertise.",
-    temperature: 0.25,
-    promptSuffix:
-      "Mantenha postura consultiva e profissional. Seja claro e embasado, transmitindo confianca e expertise sem excesso de informalidade.",
+    description: "Seguro, profissional e explicativo na medida certa. Orienta a decisao sem dar uma palestra.",
   },
   {
+    key: "balanced",
     label: "Equilibrado",
-    description: "Tom neutro. Amigavel sem exageros.",
-    temperature: 0.4,
-    promptSuffix:
-      "Use tom equilibrado e amigavel. Seja cordial e acessivel, mas sem excesso de entusiasmo ou informalidade.",
+    description: "Natural, cordial e objetivo. Adapta-se bem a diferentes clientes sem formalidade ou entusiasmo excessivo.",
   },
   {
+    key: "dynamic",
     label: "Dinamico",
-    description: "Energetico e persuasivo. Cria rapport com facilidade.",
-    temperature: 0.6,
-    promptSuffix:
-      "Seja energetico, descontraido e persuasivo. Crie rapport de forma espontanea, use uma linguagem mais proxima e envolvente para engajar o lead.",
+    description: "Proximo, fluido e proativo. Mantem a conversa avancando com energia positiva e persuasao sem artificialidade.",
   },
   {
+    key: "enthusiastic",
     label: "Entusiasta",
-    description: "Alta energia e impacto emocional. Ideal para vendas ativas.",
-    temperature: 0.75,
-    promptSuffix:
-      "Seja altamente entusiasta e empatico. Use linguagem animada, valorize o lead, crie alto impacto emocional e urgencia positiva para conduzir a conversao.",
+    description: "Caloroso, expressivo e motivador. Celebra momentos positivos sem pressao, euforia constante ou urgencia artificial.",
   },
 ] as const;
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
-const PERSONALITY_SECTION_TITLE = "## Estilo de Comunicacao";
 const PERSONALITY_SECTION_PATTERN = /\n*## Estilo de Comunica(?:cao|\u00e7\u00e3o)\n[\s\S]*$/u;
+const MANAGED_TONE_PATTERN = /\n*\[ARQUEM_MANAGED_TONE_START\][\s\S]*?\[ARQUEM_MANAGED_TONE_END\]\n*/u;
 
 function stripPersonalityInstructions(prompt: string) {
-  return prompt.trim().replace(PERSONALITY_SECTION_PATTERN, "").trimEnd();
+  return prompt
+    .trim()
+    .replace(MANAGED_TONE_PATTERN, "\n")
+    .replace(PERSONALITY_SECTION_PATTERN, "")
+    .trim();
 }
 
 interface AgentConfigModalProps {
@@ -115,13 +109,15 @@ export function AgentConfigModal({
       setHandoffConfigOpen(false);
       setRbTokenApi("");
 
-      const idx = PERSONALITY_LEVELS.reduce((best, level, index) => {
-        return Math.abs(level.temperature - agent.temperature) <
-          Math.abs(PERSONALITY_LEVELS[best].temperature - agent.temperature)
-          ? index
-          : best;
-      }, 2);
-      setPersonalityLevel(idx);
+      const profileIndex = PERSONALITY_LEVELS.findIndex((level) => level.key === agent.personality_profile);
+      const legacyIndex = agent.temperature < 0.18
+        ? 0
+        : agent.temperature < 0.33
+          ? 1
+          : agent.temperature < 0.5
+            ? 2
+            : agent.temperature < 0.68 ? 3 : 4;
+      setPersonalityLevel(profileIndex >= 0 ? profileIndex : legacyIndex);
     } else {
       setName("");
       setInstanceName("");
@@ -205,16 +201,15 @@ export function AgentConfigModal({
 
     const personality = PERSONALITY_LEVELS[personalityLevel];
     const basePrompt = stripPersonalityInstructions(systemPrompt);
-    const finalPrompt = `${basePrompt}\n\n${PERSONALITY_SECTION_TITLE}\n${personality.promptSuffix}`;
 
     await upsertAgent(
       {
         name: name.trim(),
         instance_name: instanceName,
-        system_prompt: finalPrompt,
+        system_prompt: basePrompt,
         model,
         is_active: true,
-        temperature: personality.temperature,
+        personality_profile: personality.key,
         buffer_wait_ms: 45000,
         human_pause_minutes: 60,
         handoff_enabled: handoffEnabled,
@@ -395,7 +390,7 @@ export function AgentConfigModal({
                     {currentPersonality.description}
                   </p>
                   <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-                    Temperatura: {currentPersonality.temperature}
+                    Aplicado automaticamente em todas as respostas, fora do prompt comercial.
                   </p>
                 </div>
               </div>
@@ -479,7 +474,7 @@ export function AgentConfigModal({
                   onChange={(event) => setSystemPrompt(event.target.value)}
                   onDrop={handleDropOnTextarea}
                   onDragOver={handleDragOver}
-                  placeholder="Descreva como o agente deve se comportar, quais sao suas regras, script de abertura, etc."
+                  placeholder="Descreva regras comerciais, produtos, limites, fluxos e informacoes da operacao. A personalidade e aplicada automaticamente."
                   required
                   className={cn(
                     "w-full resize-none rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm leading-relaxed text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none",

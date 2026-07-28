@@ -39,7 +39,11 @@ export function AgentToolsDialog({
         </DialogHeader>
 
         <div className="min-w-0 overflow-y-auto pr-1">
-          <AgentToolsPanel agentId={agentId} toolFilterKey={toolKey} />
+          <AgentToolsPanel
+            agentId={agentId}
+            toolFilterKey={toolKey}
+            onRequestClose={() => onOpenChange(false)}
+          />
         </div>
       </DialogContent>
     </Dialog>
