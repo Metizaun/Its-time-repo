@@ -152,6 +152,7 @@ require_env_value GEMINI_API_KEY
 require_env_value EVOLUTION_API_URL
 require_env_value EVOLUTION_API_KEY
 require_env_value GUPSHUP_WEBHOOK_SECRET
+require_env_value RB_WEBHOOK_JWT_SECRET
 require_env_value WEBHOOK_PUBLIC_BASE_URL
 require_env_value CORS_ORIGINS
 
@@ -212,6 +213,8 @@ export AUTOMATION_WORKER_POLL_MS
 export AUTOMATION_WORKER_BATCH_SIZE
 export RB_BILLING_WORKER_ENABLED
 export RB_BILLING_WORKER_POLL_MS
+export RB_WEBHOOK_JWT_SECRET
+export RB_API_BASE_URL="${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}"
 export BI_PROJECTION_WORKER_ENABLED
 export BI_PROJECTION_BATCH_SIZE
 export BACKEND_IMAGE

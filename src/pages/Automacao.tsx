@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Filter, Plus, Workflow, Wallet } from "lucide-react";
-import { toast } from "sonner";
+import { Filter, Plus, Workflow } from "lucide-react";
 
 import { AutomationBoard } from "@/components/automation/AutomationBoard";
 import { AutomationMessageModal } from "@/components/modals/AutomationMessageModal";
@@ -26,19 +25,12 @@ import { useLeads } from "@/hooks/useLeads";
 import { usePipelines } from "@/hooks/usePipelines";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { listAgentTools } from "@/services/agentToolsService";
-import {
-  RB_BILLING_MESSAGE_BLUEPRINTS,
-  RB_BILLING_STAGE_BLUEPRINTS,
-  buildRbBillingJourneyPayload,
-  buildRbBillingStagePayload,
-  buildRbBillingStepPayload,
-} from "@/lib/rbBillingBlueprint";
 
 export default function Automacao() {
   const { userRole } = useAuth();
   const automationEnabled = userRole === "ADMIN";
   const showAutomationDebug = import.meta.env.DEV || import.meta.env.VITE_SHOW_AUTOMATION_DEBUG === "true";
-  const { pipelines, loading: loadingPipelines, createPipeline } = usePipelines();
+  const { pipelines, loading: loadingPipelines } = usePipelines();
   const { instances, loading: loadingInstances } = useInstances();
   const { agents } = useAgents();
   const { owners, tags, leadSources, loading: loadingCatalog } = useAutomationCatalog(automationEnabled);
@@ -61,12 +53,11 @@ export default function Automacao() {
   const [pendingStageId, setPendingStageId] = useState<string | null>(null);
   const [automationModalOpen, setAutomationModalOpen] = useState(false);
   const [rbEnabledInstanceNames, setRbEnabledInstanceNames] = useState<string[]>([]);
-  const [seedingRbBlueprint, setSeedingRbBlueprint] = useState(false);
 
   const selectedInstanceName = instanceFilter === "all" ? null : instanceFilter;
   const effectivePipelineId =
     selectedPipelineId || pipelines.find((pipeline) => pipeline.is_default)?.id || pipelines[0]?.id || "";
-  const { stages, loading: loadingStages, createStage } = usePipelineStages(effectivePipelineId || null);
+  const { stages, loading: loadingStages } = usePipelineStages(effectivePipelineId || null);
   const stageIdsInPipeline = useMemo(() => new Set(stages.map((stage) => stage.id)), [stages]);
 
   const normalizedStageLookup = useMemo(() => {
@@ -122,116 +113,6 @@ export default function Automacao() {
       setInstanceFilter(instances[0].instancia);
     }
   }, [instanceFilter, instances]);
-
-  const handleSeedRbBlueprint = async () => {
-    if (!selectedInstanceName) {
-      toast.error("Selecione uma instancia antes de gerar o pacote RB.");
-      return;
-    }
-
-    const confirmMessage =
-      "Isso vai criar um pipeline dedicado de cobranca com as etapas e os 6 disparos RB padrao. Continuar?";
-    if (!window.confirm(confirmMessage)) {
-      return;
-    }
-
-    try {
-      setSeedingRbBlueprint(true);
-
-      // 1) Localizar ou criar o pipeline dedicado "Cobranca"
-      const cobrancaPipelineName = "Cobranca";
-      let cobrancaPipeline = pipelines.find(
-        (pipeline) => pipeline.name.trim().toLowerCase() === cobrancaPipelineName.toLowerCase(),
-      );
-
-      if (!cobrancaPipeline) {
-        const { data: newPipeline, error: createError } = await createPipeline({
-          name: cobrancaPipelineName,
-          description: "Pipeline dedicado para etapas de cobranca e automacoes RB.",
-        });
-
-        if (createError || !newPipeline) {
-          throw new Error("Nao foi possivel criar o pipeline de cobranca.");
-        }
-
-        cobrancaPipeline = newPipeline;
-      }
-
-      const targetPipelineId = cobrancaPipeline.id;
-
-      // 2) Construir lookup das etapas já existentes (unificando todas as etapas visíveis)
-      const allStagesLookup = new Map(stages.map((stage) => [stage.name.trim().toLowerCase(), stage]));
-
-      const journeyLookup = new Set(
-        journeys.map((journey) => `${journey.instance_name.trim().toLowerCase()}::${journey.name.trim().toLowerCase()}`),
-      );
-
-      const ensureStage = async (stageBlueprint: (typeof RB_BILLING_STAGE_BLUEPRINTS)[number]) => {
-        const existingStage = allStagesLookup.get(stageBlueprint.stageName.trim().toLowerCase());
-        if (existingStage) {
-          return existingStage;
-        }
-
-        const result = await createStage({
-          ...buildRbBillingStagePayload(stageBlueprint),
-          pipeline_id: targetPipelineId,
-        });
-
-        if (!result.data) {
-          throw new Error(`Nao foi possivel criar a etapa ${stageBlueprint.stageName}.`);
-        }
-
-        allStagesLookup.set(result.data.name.trim().toLowerCase(), result.data);
-        return result.data;
-      };
-
-      for (const stageBlueprint of RB_BILLING_STAGE_BLUEPRINTS) {
-        await ensureStage(stageBlueprint);
-      }
-
-      const atendimentoStage =
-        allStagesLookup.get("atendimento") ??
-        allStagesLookup.get("finalizado") ??
-        null;
-
-      if (!atendimentoStage) {
-        throw new Error("Nao foi possivel localizar a etapa de Atendimento.");
-      }
-
-      for (const messageBlueprint of RB_BILLING_MESSAGE_BLUEPRINTS) {
-        const triggerStage = allStagesLookup.get(messageBlueprint.stageName.trim().toLowerCase());
-        if (!triggerStage) {
-          throw new Error(`Etapa nao encontrada para ${messageBlueprint.stageName}.`);
-        }
-
-        const journeyKey = `${selectedInstanceName.trim().toLowerCase()}::${messageBlueprint.journeyName.trim().toLowerCase()}`;
-        if (journeyLookup.has(journeyKey)) {
-          continue;
-        }
-
-        await createJourney(
-          buildRbBillingJourneyPayload({
-            triggerStageId: triggerStage.id,
-            instanceName: selectedInstanceName,
-            replyTargetStageId: atendimentoStage.id,
-            journeyName: messageBlueprint.journeyName,
-          }),
-          buildRbBillingStepPayload(messageBlueprint),
-        );
-        journeyLookup.add(journeyKey);
-      }
-
-      // 3) Mudar a seleção para o pipeline de cobrança
-      setSelectedPipelineId(targetPipelineId);
-      toast.success("Pacote RB criado no pipeline \"Cobranca\".");
-    } catch (error) {
-      toast.error("Nao foi possivel criar o pacote RB.", {
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setSeedingRbBlueprint(false);
-    }
-  };
 
   useEffect(() => {
     if (!automationEnabled || agents.length === 0) {
@@ -304,14 +185,6 @@ export default function Automacao() {
           >
             <Plus className="h-4 w-4" />
             Nova automacao
-          </button>
-          <button
-            onClick={handleSeedRbBlueprint}
-            disabled={seedingRbBlueprint || loadingStages || loadingJourneys}
-            className="flex items-center gap-2 rounded-xl border border-[var(--color-primary-200)] bg-[var(--color-primary-50)] px-4 py-2 text-sm font-semibold text-[var(--color-primary-700)] shadow-sm transition-all duration-200 hover:bg-[var(--color-primary-100)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Wallet className="h-4 w-4" />
-            {seedingRbBlueprint ? "Gerando RB..." : "Gerar pacote RB"}
           </button>
         </div>
       </div>

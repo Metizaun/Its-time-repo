@@ -117,7 +117,6 @@ const RB_PILOT_ACES_ID = 5;
 const RB_PILOT_DEFAULTS = {
   rb_mode: "live",
   rb_base_url: "https://app.registrobase.com.br:32077",
-  rb_token_api: "E9B31429DBD012D5A9C8060AB290268C",
   rb_empresa_ids: ["1", "2"],
   trigger_time: "10:00",
   timezone: "America/Sao_Paulo",
@@ -381,6 +380,10 @@ type VisagismCatalogItemRow = {
   recommendation_description: string;
   attributes: JsonRecord;
   source_url: string;
+  storage_bucket: string | null;
+  storage_path: string | null;
+  mime_type: string | null;
+  file_size: number | null;
   is_active: boolean;
   display_order: number;
   created_at: string;
@@ -980,52 +983,6 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function asConfigString(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-
-  return "";
-}
-
-function asConfigStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((item) => asConfigString(item)).filter(Boolean);
-  }
-
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  return [];
-}
-
-function isRbBillingToolConfigReady(value: JsonRecord): boolean {
-  const mode = value.rb_mode === "mock" ? "mock" : "live";
-  const hasRuntimeConfig = Boolean(
-    asConfigString(value.rb_base_url) &&
-      asConfigString(value.trigger_time) &&
-      asConfigString(value.timezone)
-  );
-
-  if (!hasRuntimeConfig) {
-    return false;
-  }
-
-  if (mode === "mock") {
-    return true;
-  }
-
-  return Boolean(asConfigString(value.rb_token_api) && asConfigStringArray(value.rb_empresa_ids).length > 0);
 }
 
 function buildInternalHandoffNote(reason: string, summary: string) {
@@ -3458,7 +3415,7 @@ export class AgentManager {
   private async refreshRbBillingToolReadiness(acesId: number, bindingId: string) {
     const { data: binding, error } = await this.agentsClient
       .from("agent_tools")
-      .select("id, config, is_enabled")
+      .select("id, agent_id, is_enabled")
       .eq("id", bindingId)
       .eq("aces_id", acesId)
       .eq("tool_key", "rb_billing")
@@ -3472,7 +3429,7 @@ export class AgentManager {
       return;
     }
 
-    const ready = isRbBillingToolConfigReady(asRecord(binding.config));
+    const ready = await this.isRbBillingConnected(acesId);
     const { error: updateError } = await this.agentsClient
       .from("agent_tools")
       .update({
@@ -3557,12 +3514,11 @@ export class AgentManager {
     }
   }
 
-  buildInitialRbBillingConfig(acesId: number, rbTokenApi: string): JsonRecord {
+  buildInitialRbBillingConfig(acesId: number): JsonRecord {
     const usePilotDefaults = acesId === RB_PILOT_ACES_ID;
     return {
       rb_mode: "live",
       rb_base_url: "https://app.registrobase.com.br:32077",
-      rb_token_api: rbTokenApi.trim(),
       rb_empresa_ids: usePilotDefaults ? RB_PILOT_DEFAULTS.rb_empresa_ids : [],
       pix_mapping_by_store: usePilotDefaults ? RB_PILOT_DEFAULTS.pix_mapping_by_store : {},
       gupshup_defaults: usePilotDefaults ? RB_PILOT_DEFAULTS.gupshup_defaults : {},
@@ -3573,7 +3529,7 @@ export class AgentManager {
     };
   }
 
-  async seedRbBillingToolConfig(acesId: number, agentId: string, rbTokenApi: string) {
+  async seedRbBillingToolConfig(acesId: number, agentId: string) {
     const { data: currentTool, error: currentToolError } = await this.agentsClient
       .from("agent_tools")
       .select("id, config")
@@ -3594,7 +3550,7 @@ export class AgentManager {
       .update({
         config: {
           ...asRecord(currentTool.config),
-          ...this.buildInitialRbBillingConfig(acesId, rbTokenApi),
+          ...this.buildInitialRbBillingConfig(acesId),
         },
       })
       .eq("id", currentTool.id)
@@ -3638,10 +3594,6 @@ export class AgentManager {
 
     if (input.templateKey?.trim()) {
       const templateKey = input.templateKey.trim();
-      if (templateKey === "cobranca_rb" && !input.rbTokenApi?.trim()) {
-        throw new HttpError(400, "Token API do Registro Base e obrigatorio para o template de cobranca");
-      }
-
       const { data, error } = await this.agentsClient
         .rpc("create_agent_from_template", {
           p_aces_id: context.acesId,
@@ -3661,8 +3613,8 @@ export class AgentManager {
       }
 
       let agent = data as AgentRow;
-      if (templateKey === "cobranca_rb" && input.rbTokenApi?.trim()) {
-        await this.seedRbBillingToolConfig(context.acesId, agent.id, input.rbTokenApi.trim());
+      if (templateKey === "cobranca_rb") {
+        await this.seedRbBillingToolConfig(context.acesId, agent.id);
       }
 
       if (input.unansweredFollowupEnabled !== undefined || input.personalityProfile !== undefined) {
@@ -3746,6 +3698,36 @@ export class AgentManager {
     return { success: true };
   }
 
+  private async isRbBillingConnected(acesId: number) {
+    const { data, error } = await this.rbClient
+      .from("connections")
+      .select("rb_empresa_ids")
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .not("rb_token_api", "is", null);
+    if (error) throw new HttpError(500, "Nao foi possivel validar a conexao Via RB", error);
+    return (data ?? []).some((connection) => Array.isArray(connection.rb_empresa_ids) && connection.rb_empresa_ids.length > 0);
+  }
+
+  private async isVisagismReady(acesId: number) {
+    const [{ data: connections, error: connectionError }, { count, error: catalogError }] = await Promise.all([
+      this.rbClient
+        .from("connections")
+        .select("id")
+        .eq("aces_id", acesId)
+        .eq("is_active", true)
+        .limit(1),
+      this.agentsClient
+        .from("visagism_catalog_items")
+        .select("id", { count: "exact", head: true })
+        .eq("aces_id", acesId)
+        .eq("is_active", true),
+    ]);
+    const error = connectionError ?? catalogError;
+    if (error) throw new HttpError(500, "Nao foi possivel validar a conexao de visagismo", error);
+    return (connections?.length ?? 0) > 0 || Number(count ?? 0) > 0;
+  }
+
   private async ensureCalendarToolBinding(agentId: string, acesId: number) {
     const { error } = await this.agentsClient
       .from("agent_tools")
@@ -3809,6 +3791,8 @@ export class AgentManager {
       const definition = definitionMap.get(
         `${String(binding.tool_key)}:${Number(binding.tool_version)}`
       );
+      const publicConfig = { ...asRecord(binding.config) };
+      if (binding.tool_key === "rb_billing") delete publicConfig.rb_token_api;
       return {
         id: String(binding.id),
         key: String(binding.tool_key),
@@ -3818,7 +3802,7 @@ export class AgentManager {
         icon: String(definition?.icon ?? "wrench"),
         enabled: Boolean(binding.is_enabled),
         readiness: String(binding.readiness),
-        config: asRecord(binding.config),
+        config: publicConfig,
         lastValidatedAt: binding.last_validated_at ? String(binding.last_validated_at) : null,
       };
     });
@@ -3938,7 +3922,14 @@ export class AgentManager {
       nextConfig.voiceId = voiceId;
     }
     const isRbBillingTool = toolKey === "rb_billing";
-    const rbBillingReady = isRbBillingTool ? isRbBillingToolConfigReady(nextConfig) : false;
+    if (isRbBillingTool) delete nextConfig.rb_token_api;
+    const rbBillingReady = isRbBillingTool
+      ? await this.isRbBillingConnected(context.acesId)
+      : false;
+    const isVisagismTool = toolKey === "visagism";
+    const visagismReady = isVisagismTool
+      ? await this.isVisagismReady(context.acesId)
+      : false;
     const isCalendarTool = toolKey === "calendar";
     if (isCalendarTool) {
       nextConfig.queryAvailability = nextConfig.queryAvailability === true;
@@ -3959,6 +3950,8 @@ export class AgentManager {
     if (input.isEnabled === true && (
       isRbBillingTool
         ? !rbBillingReady
+        : isVisagismTool
+          ? !visagismReady
         : isCalendarTool
           ? !calendarReady
           : current.readiness !== "ready"
@@ -3973,6 +3966,12 @@ export class AgentManager {
       payload.last_validated_at = new Date().toISOString();
       payload.is_enabled =
         input.isEnabled !== undefined ? Boolean(input.isEnabled && rbBillingReady) : Boolean(current.is_enabled && rbBillingReady);
+    } else if (isVisagismTool) {
+      payload.readiness = visagismReady ? "ready" : "needs_config";
+      payload.last_validated_at = new Date().toISOString();
+      payload.is_enabled = input.isEnabled !== undefined
+        ? Boolean(input.isEnabled && visagismReady)
+        : Boolean(current.is_enabled && visagismReady);
     } else if (isCalendarTool) {
       payload.readiness = calendarReady ? "ready" : "needs_config";
       payload.last_validated_at = new Date().toISOString();
@@ -4495,7 +4494,6 @@ export class AgentManager {
     if (!isPilotAccount) {
       nextConfig.rb_mode = "mock";
       nextConfig.rb_base_url = "https://app.registrobase.com.br:32077";
-      nextConfig.rb_token_api = "";
       nextConfig.rb_empresa_ids = [];
       nextConfig.pix_mapping_by_store = {};
       nextConfig.gupshup_defaults = {};
@@ -4509,13 +4507,15 @@ export class AgentManager {
     if (currentToolError || !currentTool) {
       throw new HttpError(500, "Nao foi possivel carregar a configuracao atual da Tool RB", currentToolError);
     }
+    const mergedConfig = {
+      ...asRecord(currentTool.config),
+      ...nextConfig,
+    };
+    delete mergedConfig.rb_token_api;
     const { error: updateError } = await this.agentsClient
       .from("agent_tools")
       .update({
-        config: {
-          ...asRecord(currentTool.config),
-          ...nextConfig,
-        },
+        config: mergedConfig,
       })
       .eq("id", binding.id)
       .eq("aces_id", context.acesId);
@@ -4624,6 +4624,19 @@ export class AgentManager {
   async deactivateVisagismCatalogItem(context: AuthContext, agentId: string, itemId: string) {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data: item, error: itemError } = await this.agentsClient
+      .from("visagism_catalog_items")
+      .select("storage_bucket, storage_path")
+      .eq("id", itemId)
+      .eq("aces_id", context.acesId)
+      .maybeSingle();
+    if (itemError) throw new HttpError(500, "Nao foi possivel carregar o item do catalogo", itemError);
+    if (item?.storage_bucket && item.storage_path) {
+      const { error: storageError } = await this.serviceClient.storage
+        .from(String(item.storage_bucket))
+        .remove([String(item.storage_path)]);
+      if (storageError) throw new HttpError(500, "Nao foi possivel apagar a imagem do catalogo", storageError);
+    }
     const { error } = await this.agentsClient
       .from("visagism_catalog_items")
       .update({ is_active: false })

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
+  Cable,
   Check,
   Copy,
   Eraser,
@@ -23,16 +24,19 @@ import { cn } from "@/lib/utils";
 import {
   createInstanceConnection,
   deleteInstance,
+  deleteRbConnection,
   disconnectInstance,
   fetchInstanceStatus,
   listAdminInstances,
   listGupshupChannels,
   listMetaChannels,
   listMetaTemplates,
+  listRbConnections,
   reconnectInstanceWithQr,
   refreshInstanceQrCode,
   syncInstanceStatus,
   syncMetaTemplates,
+  saveRbConnection,
   upsertGupshupChannel,
   upsertMetaChannel,
   type AdminGupshupChannel,
@@ -41,6 +45,7 @@ import {
   type AdminInstanceSetupStatus,
   type AdminMetaChannelSummary,
   type AdminMetaTemplate,
+  type AdminRbConnection,
   type InstanceConnectionMode,
   type MetaChannelStatus,
 } from "@/services/instanceService";
@@ -73,10 +78,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
-type ExternalConnectionType = "selection" | "webhook" | "gupshup";
+type ExternalConnectionType = "selection" | "webhook" | "gupshup" | "rb";
 
 function setupStatusLabel(setupStatus: AdminInstanceSetupStatus) {
   switch (setupStatus) {
@@ -109,6 +115,7 @@ function statusBadge(status: AdminInstance["status"]) {
 
 export function InstanceManager() {
   const [instances, setInstances] = useState<AdminInstance[]>([]);
+  const [rbConnections, setRbConnections] = useState<AdminRbConnection[]>([]);
   const [metaChannels, setMetaChannels] = useState<Record<string, AdminMetaChannelSummary>>({});
   const [gupshupChannels, setGupshupChannels] = useState<Record<string, AdminGupshupChannelSummary>>({});
   const [metaTemplates, setMetaTemplates] = useState<Record<string, AdminMetaTemplate[]>>({});
@@ -131,6 +138,13 @@ export function InstanceManager() {
     appId: "",
     apiKey: "",
     phoneNumber: "",
+  });
+  const [rbSaving, setRbSaving] = useState(false);
+  const [rbForm, setRbForm] = useState({
+    id: "",
+    rbTokenApi: "",
+    rbEmpresaIds: "",
+    active: true,
   });
   const [creatingInstance, setCreatingInstance] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
@@ -235,9 +249,10 @@ export function InstanceManager() {
       const result = await listAdminInstances({ accessToken });
       setInstances(result.instances ?? []);
       try {
-        const [metaResult, gupshupResult] = await Promise.all([
+        const [metaResult, gupshupResult, rbResult] = await Promise.all([
           listMetaChannels({ accessToken }),
           listGupshupChannels({ accessToken }),
+          listRbConnections({ accessToken }),
         ]);
         setMetaChannels(
           Object.fromEntries((metaResult.channels ?? []).map((item) => [item.instanceName, item]))
@@ -245,9 +260,11 @@ export function InstanceManager() {
         setGupshupChannels(
           Object.fromEntries((gupshupResult.channels ?? []).map((item) => [item.instanceName, item]))
         );
+        setRbConnections(rbResult.connections ?? []);
       } catch (metaErr: any) {
         setMetaChannels({});
         setGupshupChannels({});
+        setRbConnections([]);
         setMetaError(metaErr?.message ?? "Nao foi possivel carregar canais Meta");
       }
     } catch (err: any) {
@@ -356,7 +373,7 @@ export function InstanceManager() {
     }
   };
 
-  const checkCurrentInstanceStatus = async (nameFromAction?: string) => {
+  const checkCurrentInstanceStatus = useCallback(async (nameFromAction?: string) => {
     const instanceName = nameFromAction ?? createdInstanceName;
     if (!instanceName) return;
 
@@ -389,7 +406,7 @@ export function InstanceManager() {
     } finally {
       setCheckingStatus(false);
     }
-  };
+  }, [createdInstanceName, getAccessToken, loadInstances]);
 
   const handleCreateInstance = async () => {
     const instanceName = instanceNameInput.trim();
@@ -573,6 +590,69 @@ export function InstanceManager() {
     }
   };
 
+  const handleSaveRbConnection = async () => {
+    const empresaIds = rbForm.rbEmpresaIds.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+    if (!rbForm.id && !rbForm.rbTokenApi.trim()) {
+      toast.error("Informe o Token API.");
+      return;
+    }
+    if (empresaIds.length === 0) {
+      toast.error("Informe ao menos uma empresa.");
+      return;
+    }
+
+    try {
+      setRbSaving(true);
+      const accessToken = await getAccessToken();
+      await saveRbConnection({
+        accessToken,
+        id: rbForm.id || null,
+        rbTokenApi: rbForm.rbTokenApi.trim() || null,
+        rbEmpresaIds: empresaIds,
+        status: rbForm.active ? "active" : "inactive",
+      });
+      await loadInstances();
+      toast.success("Conexão Via RB salva");
+      resetCreateDialog();
+    } catch (err: unknown) {
+      toast.error("Falha ao salvar conexão Via RB", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setRbSaving(false);
+    }
+  };
+
+  const openRbConnection = (connection: AdminRbConnection) => {
+    setRbForm({
+      id: connection.id,
+      rbTokenApi: "",
+      rbEmpresaIds: connection.rbEmpresaIds.join(", "),
+      active: connection.status === "active",
+    });
+    setConnectWebhookEnabled(true);
+    setCreateConnectionMode("external_webhook");
+    setExternalConnectionType("rb");
+    setCreateDialogOpen(true);
+  };
+
+  const handleDeleteRbConnection = async (connection: AdminRbConnection) => {
+    if (!window.confirm("Excluir a conexão Via RB?")) return;
+    try {
+      setBusyAction(`delete-rb:${connection.id}`);
+      const accessToken = await getAccessToken();
+      await deleteRbConnection({ accessToken, connectionId: connection.id });
+      await loadInstances();
+      toast.success("Conexão Via RB excluída");
+    } catch (err: unknown) {
+      toast.error("Falha ao excluir conexão Via RB", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const handleDisconnect = async (instanceName: string) => {
     const confirmed = window.confirm(`Desconectar a instancia "${instanceName}" agora?`);
     if (!confirmed) return;
@@ -649,7 +729,7 @@ export function InstanceManager() {
 
   const resetCreateDialog = () => {
     if (createdInstanceName && connectionState !== "connected" && createConnectionMode !== "external_webhook") {
-      toast.warning("Configuracao incompleta; voce pode continuar depois em Gerenciar Instancias.");
+      toast.warning("Configuração incompleta; você pode continuar depois em Gerenciar conexões.");
     }
 
     setCreateDialogOpen(false);
@@ -664,6 +744,12 @@ export function InstanceManager() {
       appId: "",
       apiKey: "",
       phoneNumber: "",
+    });
+    setRbForm({
+      id: "",
+      rbTokenApi: "",
+      rbEmpresaIds: "",
+      active: true,
     });
     setGupshupSaving(false);
     setCreatedInstanceName(null);
@@ -704,7 +790,7 @@ export function InstanceManager() {
     }, 5000);
 
     return () => clearInterval(timer);
-  }, [createDialogOpen, createdInstanceName, connectionState]);
+  }, [checkCurrentInstanceStatus, createDialogOpen, createdInstanceName, connectionState]);
 
   const isExternalConnectionPicker =
     activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "selection";
@@ -712,6 +798,8 @@ export function InstanceManager() {
     activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "webhook";
   const isGupshupConnectionForm =
     activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "gupshup";
+  const isRbConnectionForm =
+    activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "rb";
 
   if (loading) {
     return (
@@ -730,9 +818,9 @@ export function InstanceManager() {
           <div className="flex items-center gap-2">
             <Settings2 className="w-5 h-5 text-primary" />
             <div>
-              <h2 className="text-xl font-semibold">Gerenciar Instancias</h2>
+              <h2 className="text-xl font-semibold">Gerenciar conexões</h2>
               <p className="text-sm text-muted-foreground">
-                Controle o ciclo de vida completo: criar, retomar setup, reconectar, sincronizar, desconectar e excluir.
+                Gerencie instâncias de atendimento e integrações externas.
               </p>
             </div>
           </div>
@@ -744,14 +832,14 @@ export function InstanceManager() {
               className="flex-1 gap-2 sm:flex-none"
             >
               <QrCode className="h-4 w-4" />
-              Nova Conexão
+              Integrações
             </Button>
             <Button
               onClick={() => openCreateDialog("external_webhook")}
               className="flex-1 gap-2 sm:flex-none"
             >
               <Link2 className="h-4 w-4" />
-              Conexão Externa
+              Conexões externas
             </Button>
           </div>
         </div>
@@ -992,6 +1080,60 @@ export function InstanceManager() {
             })}
           </div>
         )}
+
+        {rbConnections.length > 0 ? (
+          <div className="mt-6 border-t border-[var(--border-default)] pt-5">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="h-0.5 w-5 bg-[var(--color-primary-500)]" />
+              <span className="font-mono text-xs font-semibold uppercase tracking-wider text-[var(--color-gray-600)]">
+                Via RB
+              </span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {rbConnections.map((connection) => (
+                <div
+                  key={connection.id}
+                  className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-[var(--color-gray-900)]">Via RB</p>
+                      <p className="mt-1 text-xs text-[var(--color-gray-500)]">
+                        {connection.rbEmpresaIds.length} {connection.rbEmpresaIds.length === 1 ? "empresa configurada" : "empresas configuradas"}
+                      </p>
+                      <div className="mt-3 flex items-center gap-2 text-xs text-[var(--color-gray-600)]">
+                        <span
+                          className={cn(
+                            "h-2 w-2 rounded-full",
+                            connection.status === "active"
+                              ? "bg-[var(--color-success-500)]"
+                              : "bg-[var(--color-gray-300)]",
+                          )}
+                        />
+                        {connection.status === "active" ? "Conexão ativa" : "Conexão inativa"}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openRbConnection(connection)} aria-label="Editar conexão Via RB">
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive hover:text-destructive"
+                        disabled={Boolean(busyAction)}
+                        onClick={() => handleDeleteRbConnection(connection)}
+                        aria-label="Excluir conexão Via RB"
+                      >
+                        {busyAction === `delete-rb:${connection.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </Card>
 
       <Dialog open={metaDialogOpen} onOpenChange={setMetaDialogOpen}>
@@ -1255,6 +1397,8 @@ export function InstanceManager() {
               {activeCreateMode === "external_webhook" ? (
                 isGupshupConnectionForm ? (
                   <MessageCircle className="h-5 w-5" />
+                ) : isRbConnectionForm ? (
+                  <Cable className="h-5 w-5" />
                 ) : (
                   <Link2 className="h-5 w-5" />
                 )
@@ -1263,11 +1407,13 @@ export function InstanceManager() {
               )}
               {activeCreateMode === "external_webhook"
                 ? isExternalConnectionPicker
-                  ? "Conexao Externa"
+                  ? "Conexões externas"
                   : isGupshupConnectionForm
                     ? "Via Gupshup"
-                    : "Via webhook"
-                : "Nova Conexao"}
+                    : isRbConnectionForm
+                      ? "Via RB"
+                      : "Via webhook"
+                : "Integrações"}
             </DialogTitle>
           </DialogHeader>
 
@@ -1290,10 +1436,18 @@ export function InstanceManager() {
                   <span className="text-sm font-semibold text-[var(--color-gray-900)]">Via webhook</span>
                   <Link2 className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setExternalConnectionType("rb")}
+                  className="group flex items-center justify-between rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--color-primary-200)] hover:bg-[var(--color-surface-1)] hover:shadow-md"
+                >
+                  <span className="text-sm font-semibold text-[var(--color-gray-900)]">Via RB</span>
+                  <Cable className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
+                </button>
               </div>
             ) : (
               <>
-                <div className="space-y-2">
+                {!isRbConnectionForm ? <div className="space-y-2">
                   <Label htmlFor="instance-name">
                     {activeCreateMode === "external_webhook" ? "Nome da instancia" : "Nome da instancia"}
                   </Label>
@@ -1304,7 +1458,7 @@ export function InstanceManager() {
                     onChange={(event) => setInstanceNameInput(event.target.value)}
                     disabled={creatingInstance || gupshupSaving || Boolean(createdInstanceName)}
                   />
-                </div>
+                </div> : null}
 
                 {isWebhookConnectionForm ? (
                   <div className="grid gap-4 rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] p-4 shadow-sm">
@@ -1452,6 +1606,31 @@ export function InstanceManager() {
                     </div>
                   </div>
                 ) : null}
+
+                {isRbConnectionForm ? (
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="rb-token-api">Token API</Label>
+                        <Input
+                          id="rb-token-api"
+                          type="password"
+                          value={rbForm.rbTokenApi}
+                          onChange={(event) => setRbForm((current) => ({ ...current, rbTokenApi: event.target.value }))}
+                          placeholder={rbForm.id ? "Mantido se ficar em branco" : "API key fornecida pelo RB"}
+                          autoComplete="new-password"
+                          disabled={rbSaving}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="rb-company-ids">Empresas</Label>
+                        <Input id="rb-company-ids" value={rbForm.rbEmpresaIds} onChange={(event) => setRbForm((current) => ({ ...current, rbEmpresaIds: event.target.value }))} placeholder="1, 2" disabled={rbSaving} />
+                      </div>
+                      <div className="flex items-center justify-between gap-4 border-t border-[var(--border-default)] pt-4">
+                        <Label htmlFor="rb-active">Conexão ativa</Label>
+                        <Switch id="rb-active" checked={rbForm.active} onCheckedChange={(active) => setRbForm((current) => ({ ...current, active }))} disabled={rbSaving} />
+                      </div>
+                    </div>
+                ) : null}
               </>
             )}
 
@@ -1531,25 +1710,25 @@ export function InstanceManager() {
               </>
             ) : (
               <>
-                <Button variant="ghost" onClick={resetCreateDialog} disabled={creatingInstance}>
+                <Button variant="ghost" onClick={resetCreateDialog} disabled={creatingInstance || rbSaving}>
                   Cancelar
                 </Button>
-                {(isWebhookConnectionForm || isGupshupConnectionForm) && (
+                {(isWebhookConnectionForm || isGupshupConnectionForm || isRbConnectionForm) && (
                   <Button
                     variant="outline"
                     onClick={() => setExternalConnectionType("selection")}
-                    disabled={creatingInstance || gupshupSaving}
+                    disabled={creatingInstance || gupshupSaving || rbSaving}
                   >
                     Trocar
                   </Button>
                 )}
                 {!isExternalConnectionPicker && (
                   <Button
-                    onClick={isGupshupConnectionForm ? handleSaveGupshupChannel : handleCreateInstance}
-                    disabled={creatingInstance || gupshupSaving}
+                    onClick={isRbConnectionForm ? handleSaveRbConnection : isGupshupConnectionForm ? handleSaveGupshupChannel : handleCreateInstance}
+                    disabled={creatingInstance || gupshupSaving || rbSaving}
                   >
-                    {creatingInstance || gupshupSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                    {isGupshupConnectionForm ? "Conectar" : activeCreateMode === "external_webhook" ? "Conectar" : "Criar e gerar QR"}
+                    {creatingInstance || gupshupSaving || rbSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                    {isRbConnectionForm ? "Salvar conexão" : isGupshupConnectionForm ? "Conectar" : activeCreateMode === "external_webhook" ? "Conectar" : "Criar e gerar QR"}
                   </Button>
                 )}
               </>

@@ -1160,6 +1160,13 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       rbClient,
+      "connections",
+      ["id", "aces_id", "rb_aces_id", "rb_base_url", "rb_token_api", "rb_empresa_ids", "is_active"],
+      "rb.connections",
+      "supabase/migrations/20260728185300_add_rb_connections_and_visagism_storage.sql"
+    ),
+    validateSelectedColumns(
+      rbClient,
       "lead_metadata",
       [
         "lead_id",
@@ -1181,9 +1188,9 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       agentsClient,
       "visagism_catalog_items",
-      ["id", "aces_id", "product_code", "recommendation_description", "attributes", "source_url", "is_active", "display_order"],
+      ["id", "aces_id", "product_code", "recommendation_description", "attributes", "source_url", "storage_bucket", "storage_path", "is_active", "display_order"],
       "agents.visagism_catalog_items",
-      "supabase/migrations/20260622233000_add_visagism_backend_foundation.sql"
+      "supabase/migrations/20260728185300_add_rb_connections_and_visagism_storage.sql"
     ),
     validateSelectedColumns(
       serviceClient,

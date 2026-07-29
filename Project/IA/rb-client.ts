@@ -79,14 +79,50 @@ function flattenEnvelope(envelope: RbApiEnvelope | null | undefined, sourceBucke
   return rows;
 }
 
-function matchesRule(row: RbBillingRecord, kind: RbBillingJourneyKind, qtdeDias: number) {
-  const diasVenc = RbClient.normalizeMoney(row.DiasVenc);
+function parseRuleDate(value: unknown) {
+  const raw = asString(value)?.trim();
+  if (!raw) return null;
 
-  if (kind === "reminder") {
-    return qtdeDias === 0 ? diasVenc === 0 : diasVenc === -Math.abs(qtdeDias);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
   }
 
-  return diasVenc === Math.abs(qtdeDias);
+  const brDate = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!brDate) return null;
+  return `${brDate[3]}-${brDate[2]}-${brDate[1]}`;
+}
+
+function shiftIsoDate(value: string, days: number) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function resolveRbApiDays(kind: RbBillingJourneyKind, qtdeDias: number) {
+  const normalizedDays = Math.max(0, Math.trunc(qtdeDias));
+  return kind === "reminder" && normalizedDays > 0 ? -normalizedDays : normalizedDays;
+}
+
+export function rbRecordMatchesRule(
+  row: RbBillingRecord,
+  kind: RbBillingJourneyKind,
+  qtdeDias: number,
+  referenceDate?: string
+) {
+  const normalizedDays = Math.max(0, Math.trunc(qtdeDias));
+  const diasVenc = RbClient.normalizeMoney(row.DiasVenc);
+  const expectedDays = kind === "reminder" ? -normalizedDays : normalizedDays;
+  if (diasVenc !== expectedDays) return false;
+
+  if (!referenceDate) return true;
+  const expectedDate = shiftIsoDate(
+    referenceDate,
+    kind === "reminder" ? normalizedDays : -normalizedDays
+  );
+  return expectedDate !== null && parseRuleDate(row.DtVencimento) === expectedDate;
 }
 
 function buildLegacySampleRows(): RbBillingRecord[] {
@@ -246,7 +282,7 @@ export class RbClient {
 
     const token = await this.authenticateLive();
     const [due2, dueToday, overdue1, overdue4, overdue15] = await Promise.all([
-      this.fetchLiveBucket(token, "/apiIA/listardocreceber", 2, "due_in_2_days"),
+      this.fetchLiveBucket(token, "/apiIA/listardocreceber", -2, "due_in_2_days"),
       this.fetchLiveBucket(token, "/apiIA/listardocreceber", 0, "due_today"),
       this.fetchLiveBucket(token, "/apiIA/listardocvencidos", 1, "overdue_1_day"),
       this.fetchLiveBucket(token, "/apiIA/listardocvencidos", 4, "overdue_4_days"),
@@ -256,13 +292,13 @@ export class RbClient {
     return [...due2, ...dueToday, ...overdue1, ...overdue4, ...overdue15];
   }
 
-  async fetchTitlesForRule(kind: RbBillingJourneyKind, qtdeDias: number) {
+  async fetchTitlesForRule(kind: RbBillingJourneyKind, qtdeDias: number, referenceDate?: string) {
     const normalizedDays = Math.max(0, Math.trunc(qtdeDias));
 
     if (this.config.mode === "mock") {
       const rows = await this.loadMockRows();
       return rows
-        .filter((row) => matchesRule(row, kind, normalizedDays))
+        .filter((row) => rbRecordMatchesRule(row, kind, normalizedDays, referenceDate))
         .map((row) => ({
           ...row,
           sourceBucket: kind === "reminder" ? `reminder_${normalizedDays}` : `charge_${normalizedDays}`,
@@ -270,12 +306,30 @@ export class RbClient {
     }
 
     const token = await this.authenticateLive();
-    return this.fetchLiveBucket(
+    const requestDays = resolveRbApiDays(kind, normalizedDays);
+    const rows = await this.fetchLiveBucket(
       token,
       kind === "reminder" ? "/apiIA/listardocreceber" : "/apiIA/listardocvencidos",
-      normalizedDays,
+      requestDays,
       kind === "reminder" ? `reminder_${normalizedDays}` : `charge_${normalizedDays}`,
     );
+    const acceptedRows = rows.filter((row) =>
+      rbRecordMatchesRule(row, kind, normalizedDays, referenceDate)
+    );
+
+    if (acceptedRows.length !== rows.length) {
+      console.warn("[rb-client] Registros fora da regra foram descartados", {
+        kind,
+        daysOffset: normalizedDays,
+        requestDays,
+        referenceDate: referenceDate ?? null,
+        received: rows.length,
+        accepted: acceptedRows.length,
+        discarded: rows.length - acceptedRows.length,
+      });
+    }
+
+    return acceptedRows;
   }
 
   static normalizeMoney(value: unknown) {

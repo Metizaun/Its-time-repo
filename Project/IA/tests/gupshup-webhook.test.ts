@@ -122,6 +122,26 @@ test("normaliza mensagens e status no formato Meta v3", () => {
   assert.equal(status?.kind === "status" ? status.rawStatus : null, "delivered");
 });
 
+test("status v2 usa o id retornado no envio em vez do gsId interno", () => {
+  const event = parseGupshupWebhookPayload({
+    app: "DemoApp",
+    version: 2,
+    type: "message-event",
+    payload: {
+      id: "79000373-59f2-4f85-9838-0cce399c7d05",
+      gsId: "033XiQlSPhSwDZCIlMYq97",
+      type: "delivered",
+      destination: "5511999999999",
+    },
+  })[0];
+
+  assert.equal(event?.kind, "status");
+  assert.equal(
+    event?.kind === "status" ? event.providerMessageId : null,
+    "79000373-59f2-4f85-9838-0cce399c7d05",
+  );
+});
+
 test("preserva resposta rapida e contexto no formato Gupshup v2", () => {
   const event = parseGupshupWebhookPayload({
     app: "DemoApp",

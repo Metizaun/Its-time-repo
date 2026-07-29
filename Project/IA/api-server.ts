@@ -16,6 +16,8 @@ import { assertRuntimeSchemaCompatibility } from "./schema-preflight.js";
 import { startAutomationWorker } from "./automation-worker.js";
 import { startPipelineWorker } from "./pipeline-worker.js";
 import { RbBillingWorker } from "./rb-billing-worker.js";
+import { RbConnectionService } from "./rb-connection-service.js";
+import { RbVisagismService } from "./rb-visagism-service.js";
 import { MetaWebhookProcessor } from "./meta-webhook.js";
 import { MetaTemplateService } from "./meta-template-service.js";
 import { MetaAdminService } from "./meta-admin-service.js";
@@ -428,11 +430,30 @@ const metaAdminService = new MetaAdminService({
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
 });
 
+const rbConnectionService = new RbConnectionService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  jwtSecret: requireEnv("RB_WEBHOOK_JWT_SECRET"),
+  rbApiBaseUrl: process.env.RB_API_BASE_URL,
+});
+
+const rbVisagismService = new RbVisagismService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  model: process.env.VISAGISM_CATALOG_ANALYSIS_MODEL,
+  maxSourceBytes: Number(process.env.VISAGISM_CATALOG_MAX_SOURCE_BYTES ?? 10 * 1024 * 1024),
+  maxStoredBytes: Number(process.env.VISAGISM_CATALOG_MAX_STORED_BYTES ?? 1_500_000),
+  ffmpegPath: process.env.FFMPEG_PATH,
+});
+
 const rbBillingWorker = new RbBillingWorker({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   mockFixturePath: process.env.RB_BILLING_MOCK_FIXTURE_PATH,
   pollMs: Number(process.env.RB_BILLING_WORKER_POLL_MS ?? 60000),
+  resolveConnection: (acesId, agentId) =>
+    rbConnectionService.resolveBillingConfig(acesId, agentId),
 });
 
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
@@ -448,6 +469,15 @@ const gupshupAdminService = new GupshupAdminService({
 });
 
 const app = express();
+app.use("/webhook/image", (req, res, next) => {
+  const contentLength = Number(req.headers["content-length"] ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > 15 * 1024 * 1024) {
+    res.status(413).json({ error: "Imagem acima do limite aceito" });
+    return;
+  }
+  next();
+});
+app.use("/webhook/image", express.json({ limit: "15mb" }));
 app.use(
   express.json({
     limit:
@@ -652,6 +682,107 @@ app.head("/api/webhook/gupshup", gupshupWebhookProbeHandler);
 app.post("/api/webhook/gupshup", gupshupWebhookHandler);
 app.post("/webhook/evolution", webhookHandler);
 app.post("/api/webhook/evolution", webhookHandler);
+
+function getRbBearerToken(req: Request) {
+  const authorization = req.headers.authorization?.replace(/%20/gi, " ") ?? "";
+  const [scheme, token] = authorization.split(/\s+/, 2);
+  return scheme?.toLowerCase() === "bearer" && token ? token : null;
+}
+
+function getRbApiKey(req: Request) {
+  const headerValue = req.headers.apikey ?? req.headers["x-api-key"];
+  const headerKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  return asString(headerKey) || asString(req.body.apiKey) || asString(req.body.apikey);
+}
+
+app.post(
+  "/webhook/login",
+  asyncHandler(async (req, res) => {
+    const apiKey = getRbApiKey(req);
+    const rbAcesId = Number(req.body.aces_id);
+    const empId = Number(req.body.emp_id);
+    if (!apiKey || !Number.isInteger(rbAcesId) || !Number.isInteger(empId)) {
+      throw new HttpError(400, "apikey, aces_id e emp_id sao obrigatorios");
+    }
+
+    const connection = await rbConnectionService.authenticate({ rbAcesId, apiKey });
+    if (!connection) throw new HttpError(401, "API key invalida");
+    const { token, exp } = rbConnectionService.signWebhookToken(connection, empId);
+    res.json({ token, aces_id: rbAcesId, exp: String(exp) });
+  }),
+);
+
+app.post(
+  "/webhook/image",
+  asyncHandler(async (req, res) => {
+    const token = getRbBearerToken(req);
+    const auth = token ? await rbConnectionService.verifyWebhookToken(token) : null;
+    if (!auth) throw new HttpError(401, "HTTP 401 Unauthorized");
+    const base64 = asString(req.body.base64);
+    const modelo = asString(req.body.modelo);
+    if (!base64 || !modelo) throw new HttpError(400, "base64 e modelo sao obrigatorios");
+
+    const result = await rbVisagismService.analyzeAndSave({
+      connection: auth.connection,
+      base64,
+      modelo,
+    });
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/webhook/delete",
+  asyncHandler(async (req, res) => {
+    const token = getRbBearerToken(req);
+    const auth = token ? await rbConnectionService.verifyWebhookToken(token) : null;
+    if (!auth) throw new HttpError(401, "HTTP 401 Unauthorized");
+    const modelo = asString(req.body.modelo);
+    if (!modelo) throw new HttpError(400, "modelo e obrigatorio");
+    res.json(await rbVisagismService.deleteByModel(auth.connection, modelo));
+  }),
+);
+
+app.get(
+  "/api/rb/connections",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") throw new HttpError(403, "Apenas administradores podem consultar conexoes RB");
+    const connections = await rbConnectionService.listConnections(context.acesId);
+    res.json({ success: true, connections });
+  }),
+);
+
+app.post(
+  "/api/rb/connections",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") throw new HttpError(403, "Apenas administradores podem configurar conexoes RB");
+    const rbEmpresaIds = Array.isArray(req.body.rbEmpresaIds)
+      ? req.body.rbEmpresaIds.map((item: unknown) => String(item).trim()).filter(Boolean)
+      : [];
+    const connection = await rbConnectionService.saveConnection({
+      id: asString(req.body.id),
+      acesId: context.acesId,
+      rbTokenApi: asString(req.body.rbTokenApi),
+      rbEmpresaIds,
+      status: req.body.status === "inactive" ? "inactive" : "active",
+    });
+    res.status(req.body.id ? 200 : 201).json({ success: true, connection });
+  }),
+);
+
+app.delete(
+  "/api/rb/connections/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") throw new HttpError(403, "Apenas administradores podem excluir conexoes RB");
+    res.json(await rbConnectionService.deleteConnection(context.acesId, getSingleParam(req.params.id)));
+  }),
+);
 
 app.post(
   "/api/meta/templates/sync",

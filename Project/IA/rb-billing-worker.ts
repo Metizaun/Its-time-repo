@@ -113,6 +113,14 @@ type WorkerConfig = {
   supabaseServiceRoleKey: string;
   mockFixturePath?: string | null;
   pollMs?: number;
+  resolveConnection?: (
+    acesId: number,
+    agentId: string,
+  ) => Promise<{
+    rb_base_url: string;
+    rb_token_api: string;
+    rb_empresa_ids: string[];
+  } | null>;
 };
 
 const RB_PAYMENT_TYPE_LABELS: Record<string, string> = {
@@ -1075,7 +1083,13 @@ export class RbBillingWorker {
   }
 
   private async runTool(binding: RbToolBinding, options: { forceSchedule: boolean }) {
-    const config = parseRbConfig(binding.config);
+    const storedConfig = parseRbConfig(binding.config);
+    const connection = storedConfig.rb_mode === "mock"
+      ? null
+      : await this.config.resolveConnection?.(binding.aces_id, binding.agent_id);
+    const config: RbBillingToolConfig = connection
+      ? { ...storedConfig, ...connection }
+      : storedConfig;
     if (!binding.is_enabled || binding.readiness !== "ready" || !isConfigReady(config)) {
       return { skipped: true, reason: "tool_not_ready" };
     }
@@ -1143,7 +1157,11 @@ export class RbBillingWorker {
           continue;
         }
 
-        const rawRows = await client.fetchTitlesForRule(journeyItem.rbMessageKind, journeyItem.rbDaysOffset);
+        const rawRows = await client.fetchTitlesForRule(
+          journeyItem.rbMessageKind,
+          journeyItem.rbDaysOffset,
+          localDate
+        );
         const allowedPaymentTypeIds = new Set(journeyItem.rbPaymentTypeIds.map((item) => normalizePaymentTypeId(item)));
         const rows = rawRows.filter((row) => {
           if (!allowedPaymentTypeIds.size) {

@@ -17,9 +17,6 @@ const labelClass =
   "font-mono text-[10px] font-semibold uppercase tracking-wider text-[var(--color-gray-600)]";
 const inputClass =
   "h-10 w-full rounded-[var(--radius-md)] border border-[var(--border-input)] bg-[var(--color-surface-1)] px-3 text-sm shadow-inset outline-none transition-shadow focus:shadow-focus";
-const RB_DEFAULT_BASE_URL = "https://app.registrobase.com.br:32077";
-const RB_DEFAULT_TRIGGER_TIME = "10:00";
-const RB_DEFAULT_TIMEZONE = "America/Sao_Paulo";
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -76,7 +73,6 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
   const [saving, setSaving] = useState(false);
   const [tool, setTool] = useState<AgentTool | null>(null);
   const [integrationEnabled, setIntegrationEnabled] = useState(false);
-  const [tokenApi, setTokenApi] = useState("");
   const [empresaIdsText, setEmpresaIdsText] = useState("");
   const [pixMappingByStore, setPixMappingByStore] = useState<Record<string, string>>({});
 
@@ -89,7 +85,6 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
 
       const config = asRecord(currentTool?.config);
       setIntegrationEnabled(Boolean(currentTool?.enabled));
-      setTokenApi(asString(config.rb_token_api));
       setEmpresaIdsText(parseCompanyIds(config.rb_empresa_ids));
       setPixMappingByStore(parsePixMapping(config.pix_mapping_by_store));
     } catch (error) {
@@ -117,17 +112,10 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
           .filter(([, pix]) => pix.length > 0),
       );
       const currentConfig = asRecord(tool?.config);
-      const hasLiveCredentials = tokenApi.trim().length > 0 || companyIds.length > 0;
-
       const updated = await updateAgentTool(agentId, "rb_billing", {
         isEnabled: integrationEnabled,
         config: {
-          rb_mode: hasLiveCredentials ? "live" : asString(currentConfig.rb_mode) || "live",
-          rb_base_url: asString(currentConfig.rb_base_url) || RB_DEFAULT_BASE_URL,
-          rb_token_api: tokenApi.trim(),
-          rb_empresa_ids: companyIds,
-          trigger_time: asString(currentConfig.trigger_time) || RB_DEFAULT_TRIGGER_TIME,
-          timezone: asString(currentConfig.timezone) || RB_DEFAULT_TIMEZONE,
+          ...currentConfig,
           pix_mapping_by_store: nextPixMapping,
         },
       });
@@ -163,7 +151,7 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
           <div className="min-w-0">
             <p className="text-sm font-bold text-[var(--color-gray-900)]">Cobranca RB</p>
             <p className="text-xs text-[var(--color-gray-600)]">
-              Configure a conexao com o Registro Base. As mensagens e estagios ficam na automacao.
+              A conexao e os agentes vinculados sao gerenciados em Admin &gt; Conexoes.
             </p>
           </div>
         </div>
@@ -177,39 +165,17 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
         </button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="space-y-1.5 md:col-span-2">
-          <span className={labelClass}>Token API</span>
-          <Input
-            className={inputClass}
-            value={tokenApi}
-            onChange={(event) => setTokenApi(event.target.value)}
-            placeholder="Cole o token do Registro Base"
-          />
-        </label>
-
-        <label className="space-y-1.5 md:col-span-2">
-          <span className={labelClass}>Empresa IDs</span>
-          <Input
-            className={inputClass}
-            value={empresaIdsText}
-            onChange={(event) => setEmpresaIdsText(event.target.value)}
-            placeholder="1,2"
-          />
-        </label>
-      </div>
-
-      <div className="mt-5 rounded-[20px] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-4">
+      <div className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-4">
         <div className="mb-3">
           <Label className={labelClass}>Pix por loja</Label>
           <p className="mt-1 text-xs text-[var(--color-gray-600)]">
-            O Pix e vinculado por empresa. Edite apenas as lojas informadas em Empresa IDs.
+            O Pix é vinculado por empresa na conexão Via RB.
           </p>
         </div>
 
         {companyIds.length === 0 ? (
           <div className="rounded-[16px] border border-dashed border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-5 text-sm text-[var(--color-gray-600)]">
-            Informe os IDs das empresas para liberar a tabela de Pix por loja.
+            Vincule este agente a uma conexão Via RB para configurar o Pix por loja.
           </div>
         ) : (
           <div className="overflow-x-auto rounded-[16px] border border-[var(--border-default)]">

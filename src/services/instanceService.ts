@@ -89,6 +89,15 @@ export type AdminGupshupChannelSummary = {
   gupshupChannel: AdminGupshupChannel | null;
 };
 
+export type AdminRbConnection = {
+  id: string;
+  rbEmpresaIds: string[];
+  status: "active" | "inactive";
+  hasTokenApi: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type BackendResponse<T> = T & {
   error?: string;
 };
@@ -348,6 +357,42 @@ export async function upsertGupshupChannel({
     success: boolean;
     channel: AdminGupshupChannel;
   }>(response);
+}
+
+export async function listRbConnections({ accessToken }: AuthHeadersInput) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/rb/connections`, {
+    method: "GET",
+    headers: buildHeaders(accessToken),
+  });
+  return parseResponse<{ success: boolean; connections: AdminRbConnection[] }>(response);
+}
+
+export async function saveRbConnection({
+  accessToken,
+  ...input
+}: AuthHeadersInput & {
+  id?: string | null;
+  rbTokenApi?: string | null;
+  rbEmpresaIds: string[];
+  status: "active" | "inactive";
+}) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/rb/connections`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify(input),
+  });
+  return parseResponse<{ success: boolean; connection: AdminRbConnection }>(response);
+}
+
+export async function deleteRbConnection({
+  accessToken,
+  connectionId,
+}: AuthHeadersInput & { connectionId: string }) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/rb/connections/${encodeURIComponent(connectionId)}`, {
+    method: "DELETE",
+    headers: buildHeaders(accessToken),
+  });
+  return parseResponse<{ success: boolean }>(response);
 }
 
 export async function upsertMetaChannel({

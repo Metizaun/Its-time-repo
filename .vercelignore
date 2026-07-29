@@ -1,0 +1,6 @@
+referencias/
+supabase/snippets/
+DEPLOY_ENV_VPS.local.md
+.env.local
+.env.*.local
+.codex-*

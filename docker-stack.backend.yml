@@ -43,6 +43,12 @@ services:
       AUTOMATION_WORKER_BATCH_SIZE: ${AUTOMATION_WORKER_BATCH_SIZE}
       RB_BILLING_WORKER_ENABLED: ${RB_BILLING_WORKER_ENABLED:-false}
       RB_BILLING_WORKER_POLL_MS: ${RB_BILLING_WORKER_POLL_MS:-60000}
+      RB_WEBHOOK_JWT_SECRET: ${RB_WEBHOOK_JWT_SECRET}
+      RB_API_BASE_URL: ${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}
+      VISAGISM_CATALOG_ANALYSIS_MODEL: ${VISAGISM_CATALOG_ANALYSIS_MODEL:-gemini-2.5-flash}
+      VISAGISM_CATALOG_MAX_SOURCE_BYTES: ${VISAGISM_CATALOG_MAX_SOURCE_BYTES:-10485760}
+      VISAGISM_CATALOG_MAX_STORED_BYTES: ${VISAGISM_CATALOG_MAX_STORED_BYTES:-1500000}
+      FFMPEG_PATH: ${FFMPEG_PATH:-ffmpeg}
       BI_PROJECTION_WORKER_ENABLED: ${BI_PROJECTION_WORKER_ENABLED:-false}
       BI_PROJECTION_BATCH_SIZE: ${BI_PROJECTION_BATCH_SIZE:-100}
       CALENDAR_FOLLOWUP_ENABLED: ${CALENDAR_FOLLOWUP_ENABLED:-false}
@@ -69,6 +75,12 @@ services:
         - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.tls=true"
         - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
         - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.service=${TRAEFIK_SERVICE_NAME}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.rule=Host(`${RB_WEBHOOK_DOMAIN:-hook.rbline.com.br}`) && (Path(`/webhook/login`) || Path(`/webhook/image`) || Path(`/webhook/delete`))"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.entrypoints=${TRAEFIK_ENTRYPOINTS}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.tls=true"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.priority=100"
+        - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.service=${TRAEFIK_SERVICE_NAME}"
         - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.server.port=${API_PORT}"
         - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.passhostheader=true"
 

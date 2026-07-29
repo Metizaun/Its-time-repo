@@ -75,6 +75,10 @@ export type VisagismCatalogItem = {
   recommendation_description: string;
   attributes: Record<string, unknown>;
   source_url: string;
+  storage_bucket?: string | null;
+  storage_path?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
   is_active: boolean;
   display_order: number;
 };
@@ -197,6 +201,7 @@ export async function saveVisagismCatalogItem(
     id?: string;
     productCode: string;
     recommendationDescription: string;
+    attributes?: Record<string, unknown>;
     sourceUrl: string;
     displayOrder: number;
     isActive: boolean;

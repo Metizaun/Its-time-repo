@@ -22,6 +22,12 @@ services:
     environment:
       - SUPABASE_URL=http://host.docker.internal:54321
       - REDIS_URL=redis://redis:6379
+      - RB_WEBHOOK_JWT_SECRET=${RB_WEBHOOK_JWT_SECRET:-local-only-rb-webhook-secret}
+      - RB_API_BASE_URL=${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}
+      - VISAGISM_CATALOG_ANALYSIS_MODEL=${VISAGISM_CATALOG_ANALYSIS_MODEL:-gemini-2.5-flash}
+      - VISAGISM_CATALOG_MAX_SOURCE_BYTES=${VISAGISM_CATALOG_MAX_SOURCE_BYTES:-10485760}
+      - VISAGISM_CATALOG_MAX_STORED_BYTES=${VISAGISM_CATALOG_MAX_STORED_BYTES:-1500000}
+      - FFMPEG_PATH=${FFMPEG_PATH:-ffmpeg}
       - NODE_ENV=development
     extra_hosts:
       - "host.docker.internal:host-gateway"

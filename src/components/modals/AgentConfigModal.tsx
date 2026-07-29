@@ -76,7 +76,6 @@ export function AgentConfigModal({
   const [handoffEnabled, setHandoffEnabled] = useState(false);
   const [handoffPrompt, setHandoffPrompt] = useState("");
   const [handoffConfigOpen, setHandoffConfigOpen] = useState(false);
-  const [rbTokenApi, setRbTokenApi] = useState("");
 
   const [studioExpanded, setStudioExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -107,7 +106,6 @@ export function AgentConfigModal({
       setHandoffEnabled(Boolean(agent.handoff_enabled));
       setHandoffPrompt(agent.handoff_prompt ?? "");
       setHandoffConfigOpen(false);
-      setRbTokenApi("");
 
       const profileIndex = PERSONALITY_LEVELS.findIndex((level) => level.key === agent.personality_profile);
       const legacyIndex = agent.temperature < 0.18
@@ -126,7 +124,6 @@ export function AgentConfigModal({
       setHandoffEnabled(false);
       setHandoffPrompt("");
       setHandoffConfigOpen(false);
-      setRbTokenApi("");
     }
 
     setStudioExpanded(false);
@@ -188,11 +185,6 @@ export function AgentConfigModal({
       return;
     }
 
-    if (!agent && templateKey === "cobranca_rb" && !rbTokenApi.trim()) {
-      toast.error("Informe o Token API do Registro Base para criar o agente de cobranca.");
-      return;
-    }
-
     if (handoffEnabled && !handoffPrompt.trim()) {
       setHandoffConfigOpen(true);
       toast.error("Defina quando a IA deve fazer o handoff.");
@@ -215,7 +207,6 @@ export function AgentConfigModal({
         handoff_enabled: handoffEnabled,
         handoff_prompt: handoffPrompt.trim() || null,
         templateKey: agent ? null : templateKey,
-        rb_token_api: agent ? null : rbTokenApi.trim() || null,
       },
       agent?.id
     );
@@ -325,24 +316,6 @@ export function AgentConfigModal({
                   </p>
                 ) : null}
               </div>
-
-              {!agent && templateKey === "cobranca_rb" ? (
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                    Token API RB
-                  </label>
-                  <input
-                    type="text"
-                    value={rbTokenApi}
-                    onChange={(event) => setRbTokenApi(event.target.value)}
-                    placeholder="Cole o token do Registro Base"
-                    className="w-full rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-2.5 text-sm text-foreground placeholder-[var(--color-text-muted)] transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
-                  />
-                  <p className="text-[11px] text-[var(--color-text-secondary)]">
-                    Esse token habilita a integracao inicial. Empresas e Pix por loja continuam na Tool Cobranca RB.
-                  </p>
-                </div>
-              ) : null}
 
               <div className={cn("flex flex-col gap-3", studioExpanded && "xl:col-span-2")}>
                 <div>

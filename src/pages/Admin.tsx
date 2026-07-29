@@ -124,7 +124,7 @@ export default function Admin() {
           </TabsTrigger>
           <TabsTrigger value="instances" className="gap-2">
             <Cable />
-            Instâncias
+            Conexões
           </TabsTrigger>
         </TabsList>
 

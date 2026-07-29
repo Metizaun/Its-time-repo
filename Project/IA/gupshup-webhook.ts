@@ -319,7 +319,10 @@ function parseV2InboundEvent(root: Record<string, unknown>): ParsedInboundEvent 
 function parseV2StatusEvent(root: Record<string, unknown>): ParsedStatusEvent | null {
   const event = asRecord(root.payload);
   const details = asRecord(event.payload);
-  const providerMessageId = asString(event.gsId) ?? asString(event.id);
+  // O POST de envio devolve `messageId`, que reaparece como `payload.id` no
+  // callback v2. `gsId` e o identificador interno da Gupshup e nao corresponde
+  // ao valor persistido em message_history.provider_message_id.
+  const providerMessageId = asString(event.id) ?? asString(event.gsId);
   const rawStatus = asString(event.type);
   if (!providerMessageId || !rawStatus) return null;
 
