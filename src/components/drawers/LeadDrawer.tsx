@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useLeads, Lead, notifyLeadsUpdated } from "@/hooks/useLeads";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { useCalendarEvents } from "@/hooks/useCalendarEvents";
@@ -19,7 +19,6 @@ import {
   User,
   Calendar,
   FileText,
-  Hash,
   MessageSquare,
   DollarSign,
   Signal,
@@ -46,30 +45,6 @@ export function LeadDrawer() {
   const { stages } = usePipelineStages();
   const navigate = useNavigate();
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
-  const [rbClieId, setRbClieId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const leadId = ui.drawerLeadId;
-    let cancelled = false;
-
-    setRbClieId(null);
-    if (!leadId) return undefined;
-
-    void supabase
-      .rpc("get_lead_rb_clie_id", { p_lead_id: leadId })
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          console.warn("[LeadDrawer] Não foi possível consultar o Código RB", error);
-          return;
-        }
-        setRbClieId(typeof data === "string" && data.trim() ? data.trim() : null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [ui.drawerLeadId]);
 
   const lead = leads.find((l) => l.id === ui.drawerLeadId);
   const calendarRange = useMemo(() => {
@@ -245,16 +220,6 @@ export function LeadDrawer() {
                 </p>
               </div>
             </div>
-
-            {rbClieId && (
-              <div className="flex items-start gap-3">
-                <Hash className="w-5 h-5 text-muted-foreground mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium">Código RB</p>
-                  <p className="text-sm text-muted-foreground">{rbClieId}</p>
-                </div>
-              </div>
-            )}
 
             {lead.notes && (
               <div className="flex items-start gap-3">

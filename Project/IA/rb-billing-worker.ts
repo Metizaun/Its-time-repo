@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { normalizePhoneIdentity } from "./phone-normalization.js";
+import { upsertRbLeadNote } from "./rb-lead-note.js";
 
 import {
   RbClient,
@@ -786,7 +787,7 @@ export class RbBillingWorker {
     debt: GroupedDebt,
     enforcedOwnerId: string | null
   ) {
-    const { error: leadError } = await this.serviceClient
+    const { data: updatedLead, error: leadError } = await this.serviceClient
       .from("leads")
       .update({
         name: debt.customerName || null,
@@ -796,7 +797,9 @@ export class RbBillingWorker {
         updated_at: new Date().toISOString(),
       })
       .eq("id", leadId)
-      .eq("aces_id", acesId);
+      .eq("aces_id", acesId)
+      .select("notes")
+      .single();
 
     if (leadError) {
       throw new Error(`Nao foi possivel atualizar lead base no CRM: ${leadError.message}`);
@@ -822,6 +825,41 @@ export class RbBillingWorker {
 
     if (metaError) {
       throw new Error(`Nao foi possivel salvar metadados RB no lead: ${metaError.message}`);
+    }
+
+    let companyName: string | null = null;
+    if (debt.storeEmpCpfCnpj) {
+      const { data: company, error: companyError } = await this.serviceClient
+        .from("empresas")
+        .select("name")
+        .eq("aces_id", acesId)
+        .eq("cnpj", debt.storeEmpCpfCnpj)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (companyError) {
+        throw new Error(`Nao foi possivel resolver a empresa RB do lead: ${companyError.message}`);
+      }
+      companyName = company?.name ?? null;
+    }
+
+    const nextNotes = upsertRbLeadNote(updatedLead?.notes ?? null, {
+      clieId: debt.clieId,
+      companyName,
+      storeEmpId: debt.storeEmpId,
+      storeCnpj: debt.storeEmpCpfCnpj,
+    });
+
+    if (nextNotes !== (updatedLead?.notes ?? null)) {
+      const { error: noteError } = await this.serviceClient
+        .from("leads")
+        .update({ notes: nextNotes, updated_at: new Date().toISOString() })
+        .eq("id", leadId)
+        .eq("aces_id", acesId);
+
+      if (noteError) {
+        throw new Error(`Nao foi possivel salvar os dados RB nas observacoes: ${noteError.message}`);
+      }
     }
   }
 
