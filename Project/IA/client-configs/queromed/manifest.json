@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 3,
+  "clientKey": "queromed",
+  "parentAgent": {
+    "name": "Henrique - QueroMed Consultas",
+    "templateKey": "optics-consultant",
+    "systemPromptFile": "agent-principal.md",
+    "model": "gemini-3.1-flash-lite",
+    "temperature": 0.2,
+    "personalityProfile": "consultative",
+    "handoffPrompt": "Encaminhe para atendimento humano quando: o paciente solicitar falar com uma pessoa; a duvida envolver informacao medica nao prevista no prompt; o paciente fizer uma reclamacao; ou solicitar suporte, cancelamento ou alteracao que nao possa ser realizada pela ferramenta do sistema.",
+    "ragEnabled": false,
+    "active": true
+  },
+  "companies": [
+    {
+      "cnpj": "12341114000184",
+      "legalName": "QUEROMED CONSULTAS MEDICAS LTDA",
+      "name": "QueroMed - Curitiba Centro",
+      "address": "Praca Rui Barbosa, 827 - Sala 101 - Centro (Acima da Casa China)",
+      "city": "Curitiba",
+      "state": "PR",
+      "postalCode": "80010030",
+      "phone": "(41) 3193-0123",
+      "email": null,
+      "timezone": "America/Sao_Paulo",
+      "active": true
+    },
+    {
+      "cnpj": "12341114000265",
+      "legalName": "QUEROMED CONSULTAS MEDICAS LTDA",
+      "name": "QueroMed - Pinheirinho Curitiba",
+      "address": "Avenida Winston Churchill, 2730 - Sala 16 - Pinheirinho",
+      "city": "Curitiba",
+      "state": "PR",
+      "postalCode": "81150050",
+      "phone": "(41) 3193-0123",
+      "email": null,
+      "timezone": "America/Sao_Paulo",
+      "active": true
+    },
+    {
+      "cnpj": "12341114000346",
+      "legalName": "QUEROMED CONSULTAS MEDICAS LTDA",
+      "name": "QueroMed - Pinhais",
+      "address": "Rua Europa, 543 - Lojas 15 e 16 - Terminal de Pinhais",
+      "city": "Pinhais",
+      "state": "PR",
+      "postalCode": "83323010",
+      "phone": "(41) 3193-0123",
+      "email": null,
+      "timezone": "America/Sao_Paulo",
+      "active": true
+    },
+    {
+      "cnpj": "12341114000508",
+      "legalName": "QUEROMED CONSULTAS MEDICAS LTDA",
+      "name": "QueroMed - Fazenda Rio Grande",
+      "address": "Rua Francisco Claudino dos Santos, 245 - Sala 02 - Iguacu (Abaixo do Salao Marly)",
+      "city": "Fazenda Rio Grande",
+      "state": "PR",
+      "postalCode": "83833070",
+      "phone": "(41) 3193-0123",
+      "email": null,
+      "timezone": "America/Sao_Paulo",
+      "active": true
+    }
+  ],
+  "calendar": {
+    "timezone": "America/Sao_Paulo",
+    "aiBookingEnabled": false
+  }
+}

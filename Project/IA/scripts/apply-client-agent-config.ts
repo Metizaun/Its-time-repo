@@ -22,7 +22,7 @@ type ClientAgentManifest = {
   clientKey: string;
   parentAgent: Omit<AgentManifest, "key" | "routingInstruction" | "tools"> & { templateKey: string };
   companies: CompanyManifest[];
-  subagents: AgentManifest[];
+  subagents?: AgentManifest[];
   calendar: { timezone: string; aiBookingEnabled: false };
 };
 type CliOptions = { configPath: string; acesId: number; instanceName: string; dryRun: boolean };
@@ -55,14 +55,18 @@ function assertManifest(value: unknown): asserts value is ClientAgentManifest {
   const manifest = value as Partial<ClientAgentManifest>;
   if (manifest.schemaVersion !== 3 || !manifest.clientKey?.trim()) throw new Error("Manifesto invalido ou desatualizado.");
   if (!manifest.parentAgent?.name?.trim() || !manifest.parentAgent.systemPromptFile?.trim() || !manifest.parentAgent.templateKey?.trim()) throw new Error("parentAgent incompleto.");
-  if (!Array.isArray(manifest.subagents) || manifest.subagents.length === 0) throw new Error("Declare ao menos um subagente completo.");
   if (!Array.isArray(manifest.companies) || manifest.companies.length === 0) throw new Error("Declare as empresas atendidas.");
   if (manifest.calendar?.aiBookingEnabled !== false) throw new Error("aiBookingEnabled deve permanecer false.");
-  for (const subagent of manifest.subagents) {
-    if (!subagent.key?.trim() || !subagent.routingInstruction?.trim() || !subagent.systemPromptFile?.trim()) throw new Error("Subagente incompleto.");
-    if (subagent.ragEnabled !== false) throw new Error(`RAG deve permanecer desativado em ${subagent.key}.`);
-    const tool = subagent.tools?.calendar;
-    if (!tool || tool.create !== false || tool.reschedule !== false || tool.cancel !== false) throw new Error(`Mutacoes de agenda devem permanecer bloqueadas em ${subagent.key}.`);
+  if (!Array.isArray(manifest.subagents) && manifest.clientKey !== "queromed") {
+    throw new Error("Somente a QueroMed pode operar sem subagentes.");
+  }
+  if (Array.isArray(manifest.subagents)) {
+    for (const subagent of manifest.subagents) {
+      if (!subagent.key?.trim() || !subagent.routingInstruction?.trim() || !subagent.systemPromptFile?.trim()) throw new Error("Subagente incompleto.");
+      if (subagent.ragEnabled !== false) throw new Error(`RAG deve permanecer desativado em ${subagent.key}.`);
+      const tool = subagent.tools?.calendar;
+      if (!tool || tool.create !== false || tool.reschedule !== false || tool.cancel !== false) throw new Error(`Mutacoes de agenda devem permanecer bloqueadas em ${subagent.key}.`);
+    }
   }
   const cnpjs = manifest.companies.map((company) => company.cnpj.replace(/\D/g, ""));
   if (new Set(cnpjs).size !== cnpjs.length) throw new Error("CNPJs duplicados.");
@@ -83,7 +87,9 @@ async function main() {
   assertManifest(raw);
   const manifest = raw;
   const parentPrompt = await loadPrompt(directory, manifest.parentAgent.systemPromptFile);
-  const subagents = await Promise.all(manifest.subagents.map(async (item) => ({ ...item, systemPrompt: await loadPrompt(directory, item.systemPromptFile) })));
+  const subagentItems = Array.isArray(manifest.subagents) ? manifest.subagents : [];
+  const subagents = await Promise.all(subagentItems.map(async (item) => ({ ...item, systemPrompt: await loadPrompt(directory, item.systemPromptFile) })));
+  const allowsCalendarMutations = manifest.clientKey === "queromed";
 
   const shared = { auth: { persistSession: false, autoRefreshToken: false } };
   const url = requiredEnv("SUPABASE_URL");
@@ -120,7 +126,7 @@ async function main() {
     subagents: subagents.map((item) => item.key),
     companies: manifest.companies.map(({ cnpj, name }) => ({ cnpj, name })),
     createsWhatsAppInstance: false, usesRag: false, writesCompanyRegistrationData: true,
-    automaticCalendarMutations: false,
+    automaticCalendarMutations: allowsCalendarMutations,
   };
   if (options.dryRun) { process.stdout.write(`${JSON.stringify({ dryRun: true, plan }, null, 2)}\n`); return; }
 
@@ -192,11 +198,29 @@ async function main() {
   }
 
   const { error: settingsError } = await calendar.from("settings").upsert({
-    aces_id: options.acesId, timezone: manifest.calendar.timezone, ai_booking_enabled: false,
+    aces_id: options.acesId, timezone: manifest.calendar.timezone, ai_booking_enabled: allowsCalendarMutations,
   }, { onConflict: "aces_id" });
   if (settingsError) throw new Error(`Falha ao bloquear agenda da conta: ${settingsError.message}`);
 
-  await agentsDb.from("agent_tools").update({ is_enabled: false }).eq("agent_id", parent.id).eq("tool_key", "calendar");
+  if (allowsCalendarMutations) {
+    // A QueroMed agenda pelo agente principal; os demais clientes permanecem somente em consulta.
+    await agentsDb.from("agent_tools").upsert([
+      {
+        aces_id: options.acesId, agent_id: parent.id, tool_key: "calendar", tool_version: 1,
+        is_enabled: true, readiness: "ready",
+        config: { queryAvailability: true, create: true, reschedule: true, cancel: true },
+        last_validated_at: new Date().toISOString(),
+      },
+      {
+        aces_id: options.acesId, agent_id: parent.id, tool_key: "forwarding", tool_version: 1,
+        is_enabled: true, readiness: "ready",
+        config: {},
+        last_validated_at: new Date().toISOString(),
+      }
+    ], { onConflict: "agent_id,tool_key" });
+  } else {
+    await agentsDb.from("agent_tools").update({ is_enabled: false }).eq("agent_id", parent.id).eq("tool_key", "calendar");
+  }
 
   process.stdout.write(`${JSON.stringify({ applied: true, plan, parentAgentId: parent.id, subagentIds, companyIds }, null, 2)}\n`);
 }

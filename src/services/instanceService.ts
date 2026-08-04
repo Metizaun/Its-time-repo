@@ -91,6 +91,7 @@ export type AdminGupshupChannelSummary = {
 
 export type AdminRbConnection = {
   id: string;
+  rbAcesId: number | null;
   rbEmpresaIds: string[];
   status: "active" | "inactive";
   hasTokenApi: boolean;
@@ -372,6 +373,7 @@ export async function saveRbConnection({
   ...input
 }: AuthHeadersInput & {
   id?: string | null;
+  rbAcesId: number;
   rbTokenApi?: string | null;
   rbEmpresaIds: string[];
   status: "active" | "inactive";

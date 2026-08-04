@@ -1,0 +1,31 @@
+Tabela de Médicos Conveniados com a Ótica na cidade de Santa cruz do capibaribe - PE 
+Nome  Especialidade  Dias  Valor (com desconto da ótica) 
+Dra. Clarissa  Glaucoma  Clín. Geral  Seg-Sáb  R$130 (espécie)  R$140 (cartãopix)
+Glaucoma sem desconto R$180
+Dr. Tiago  Clín. Geral  Seg-Sáb  R$260 (qualquer forma)
+Agendamento direto na clínica
+Dra. Erika Leite  Oft. Pediatra  —  R$230 (sem desconto)
+Dr. Rodrigo Reny  Oftalmologista  Seg-Sáb  R$130 (espécie)
+Dr. Pedro Caluête  Glaucoma  Oftalmo  Seg-Sáb  R$130 (espécie)
+Dra. Camila Regina  Clín. Geral  Seg-Sáb  R$130 (espécie)
+Dr. Daniel Guerra  Clín. Geral  Quarta  R$130
+Dr. Adolfo  Clín. Geral  Sábado  R$130
+Dr. Gilvando  Clín. Geral  Quinta  R$180 (sem desconto)
+Dr. Eder (Coocap)  Clín. Geral  Seg, Qua, Qui, Sex  R$150
+Dr. Itamar (Coocap)  Clín. Geral  Ter e Sáb  R$150
+Dra. Lorena (Centro de Olhos - Avenida Padre Zuzinha(rua grande), 262 na mesma calçada 
+da loterica)  Clín. Geral  Seg, Ter, Qua, Sex (manhã)  R$110
+Dra. Vitória (Oftale)  EspecialistaCirurgiã  Seg e Sáb (alternado)  R$130 (espéciepix c 
+encaminhamento) 
+Dra. Leilane (Oftale)  EspecialistaCirurgiã  Terça  R$130 (espéciepix c encaminhamento)
+Dra. Marcella Motta (Oftale)  EspecialistaCirurgiã  Quarta  R$130 (espéciepix c 
+encaminhamento)
+Dra. Fabyanna (Oftale)  EspecialistaCirurgiã  Quinta  R$130 (espéciepix c 
+encaminhamento)
+Dr. Túlio Ivo (Oftale)  EspecialistaCirurgião  Sexta  R$130 (espéciepix c 
+encaminhamento)
+Dr. Pedro Henrique (Oftale)  EspecialistaCirurgião  Sáb (revez.)  R$130 (espéciepix c 
+encaminhamento) 
+Dra. Isabella (Oftale)  EspecialistaCirurgiã  Sáb (revez.)  R$130 (espéciepix c 
+encaminhamento) 
+Dr. Thiago (OftVista)  Clín. Geral  — (agendamento na clínica)  R$130 (cartãopix)

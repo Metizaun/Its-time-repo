@@ -29,6 +29,7 @@ export type RbConnectionServiceConfig = {
 export type SaveRbConnectionInput = {
   id?: string | null;
   acesId: number;
+  rbAcesId: number;
   rbTokenApi?: string | null;
   rbEmpresaIds: string[];
   status: RbConnectionStatus;
@@ -61,6 +62,7 @@ function encodeJson(value: unknown) {
 function normalizeConnection(row: RbConnectionRow) {
   return {
     id: row.id,
+    rbAcesId: row.rb_aces_id,
     rbEmpresaIds: normalizeStringArray(row.rb_empresa_ids),
     status: row.is_active ? ("active" as const) : ("inactive" as const),
     hasTokenApi: Boolean(row.rb_token_api),
@@ -101,6 +103,9 @@ export class RbConnectionService {
   }
 
   async saveConnection(input: SaveRbConnectionInput) {
+    if (!Number.isInteger(input.rbAcesId) || input.rbAcesId <= 0) {
+      throw new Error("ID RB deve ser um numero inteiro positivo");
+    }
     const existing = input.id
       ? await this.findById(input.id, input.acesId)
       : await this.findByAccount(input.acesId);
@@ -111,6 +116,7 @@ export class RbConnectionService {
     const row = {
       id: existing?.id ?? undefined,
       aces_id: input.acesId,
+      rb_aces_id: input.rbAcesId,
       rb_base_url: this.rbApiBaseUrl,
       rb_token_api: tokenApi,
       rb_empresa_ids: input.rbEmpresaIds,
@@ -140,35 +146,17 @@ export class RbConnectionService {
     return { success: true };
   }
 
-  async authenticate(input: { rbAcesId: number; apiKey: string }) {
+  async authenticate(input: { rbAcesId: number }) {
     const { data, error } = await this.rbClient
       .from("connections")
       .select("*")
-      .eq("rb_token_api", input.apiKey)
+      .eq("rb_aces_id", input.rbAcesId)
       .eq("is_active", true)
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
 
-    const connection = data as RbConnectionRow;
-    if (!safeEquals(input.apiKey, connection.rb_token_api)) return null;
-    if (connection.rb_aces_id !== null) {
-      return connection.rb_aces_id === input.rbAcesId ? connection : null;
-    }
-
-    const { data: boundConnection, error: bindError } = await this.rbClient
-      .from("connections")
-      .update({ rb_aces_id: input.rbAcesId, updated_at: new Date().toISOString() })
-      .eq("id", connection.id)
-      .is("rb_aces_id", null)
-      .select("*")
-      .maybeSingle();
-    if (bindError?.code === "23505") return null;
-    if (bindError) throw bindError;
-    if (boundConnection) return boundConnection as RbConnectionRow;
-
-    const refreshed = await this.findById(connection.id, connection.aces_id);
-    return refreshed?.rb_aces_id === input.rbAcesId ? refreshed : null;
+    return data as RbConnectionRow;
   }
 
   signWebhookToken(connection: RbConnectionRow, empId: number) {
