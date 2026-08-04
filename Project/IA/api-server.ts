@@ -470,6 +470,7 @@ const gupshupAdminService = new GupshupAdminService({
 });
 
 const app = express();
+app.use("/webhook/login", express.urlencoded({ extended: false }));
 app.use("/webhook/image", (req, res, next) => {
   const contentLength = Number(req.headers["content-length"] ?? 0);
   if (Number.isFinite(contentLength) && contentLength > 15 * 1024 * 1024) {
@@ -690,24 +691,17 @@ function getRbBearerToken(req: Request) {
   return scheme?.toLowerCase() === "bearer" && token ? token : null;
 }
 
-function getRbApiKey(req: Request) {
-  const headerValue = req.headers.apikey ?? req.headers["x-api-key"];
-  const headerKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  return asString(headerKey) || asString(req.body.apiKey) || asString(req.body.apikey);
-}
-
 app.post(
   "/webhook/login",
   asyncHandler(async (req, res) => {
-    const apiKey = getRbApiKey(req);
     const rbAcesId = Number(req.body.aces_id);
     const empId = Number(req.body.emp_id);
-    if (!apiKey || !Number.isInteger(rbAcesId) || !Number.isInteger(empId)) {
-      throw new HttpError(400, "apikey, aces_id e emp_id sao obrigatorios");
+    if (!Number.isInteger(rbAcesId) || rbAcesId <= 0 || !Number.isInteger(empId) || empId <= 0) {
+      throw new HttpError(400, "aces_id e emp_id sao obrigatorios e devem ser validos");
     }
 
-    const connection = await rbConnectionService.authenticate({ rbAcesId, apiKey });
-    if (!connection) throw new HttpError(401, "API key invalida");
+    const connection = await rbConnectionService.authenticate({ rbAcesId });
+    if (!connection) throw new HttpError(404, "aces_id RB nao cadastrado");
     const { token, exp } = rbConnectionService.signWebhookToken(connection, empId);
     res.json({ token, aces_id: rbAcesId, exp: String(exp) });
   }),
@@ -764,9 +758,14 @@ app.post(
     const rbEmpresaIds = Array.isArray(req.body.rbEmpresaIds)
       ? req.body.rbEmpresaIds.map((item: unknown) => String(item).trim()).filter(Boolean)
       : [];
+    const rbAcesId = Number(req.body.rbAcesId);
+    if (!Number.isInteger(rbAcesId) || rbAcesId <= 0) {
+      throw new HttpError(400, "rbAcesId e obrigatorio e deve ser um numero inteiro positivo");
+    }
     const connection = await rbConnectionService.saveConnection({
       id: asString(req.body.id),
       acesId: context.acesId,
+      rbAcesId,
       rbTokenApi: asString(req.body.rbTokenApi),
       rbEmpresaIds,
       status: req.body.status === "inactive" ? "inactive" : "active",

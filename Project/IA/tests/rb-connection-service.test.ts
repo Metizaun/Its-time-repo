@@ -57,6 +57,52 @@ test("recusa emitir token sem segredo configurado", () => {
   assert.throws(() => service.signWebhookToken(connection, 1), /RB_WEBHOOK_JWT_SECRET/);
 });
 
+test("autentica a conexao somente pelo aces_id do RB", async () => {
+  const filters: Array<[string, number | boolean]> = [];
+  const query = {
+    select() {
+      return this;
+    },
+    eq(field: string, value: number | boolean) {
+      filters.push([field, value]);
+      return this;
+    },
+    maybeSingle: async () => ({ data: connection, error: null }),
+  };
+  const service = new RbConnectionService({
+    supabaseUrl: "http://127.0.0.1:54321",
+    supabaseServiceRoleKey: "service-role-test",
+  });
+  (service as any).rbClient = { from: () => query };
+
+  const result = await service.authenticate({ rbAcesId: 50 });
+
+  assert.equal(result, connection);
+  assert.deepEqual(filters, [
+    ["rb_aces_id", 50],
+    ["is_active", true],
+  ]);
+});
+
+test("retorna nulo quando o aces_id do RB nao esta cadastrado", async () => {
+  const query = {
+    select() {
+      return this;
+    },
+    eq() {
+      return this;
+    },
+    maybeSingle: async () => ({ data: null, error: null }),
+  };
+  const service = new RbConnectionService({
+    supabaseUrl: "http://127.0.0.1:54321",
+    supabaseServiceRoleKey: "service-role-test",
+  });
+  (service as any).rbClient = { from: () => query };
+
+  assert.equal(await service.authenticate({ rbAcesId: 123 }), null);
+});
+
 test("usa somente a URL oficial configurada no backend para cobranca", async () => {
   const service = new RbConnectionService({
     supabaseUrl: "http://127.0.0.1:54321",

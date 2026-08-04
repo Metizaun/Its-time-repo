@@ -142,6 +142,7 @@ export function InstanceManager() {
   const [rbSaving, setRbSaving] = useState(false);
   const [rbForm, setRbForm] = useState({
     id: "",
+    rbAcesId: "",
     rbTokenApi: "",
     rbEmpresaIds: "",
     active: true,
@@ -592,6 +593,11 @@ export function InstanceManager() {
 
   const handleSaveRbConnection = async () => {
     const empresaIds = rbForm.rbEmpresaIds.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+    const rbAcesId = Number(rbForm.rbAcesId.trim());
+    if (!Number.isInteger(rbAcesId) || rbAcesId <= 0) {
+      toast.error("Informe um ID RB válido.");
+      return;
+    }
     if (!rbForm.id && !rbForm.rbTokenApi.trim()) {
       toast.error("Informe o Token API.");
       return;
@@ -607,6 +613,7 @@ export function InstanceManager() {
       await saveRbConnection({
         accessToken,
         id: rbForm.id || null,
+        rbAcesId,
         rbTokenApi: rbForm.rbTokenApi.trim() || null,
         rbEmpresaIds: empresaIds,
         status: rbForm.active ? "active" : "inactive",
@@ -626,6 +633,7 @@ export function InstanceManager() {
   const openRbConnection = (connection: AdminRbConnection) => {
     setRbForm({
       id: connection.id,
+      rbAcesId: connection.rbAcesId === null ? "" : String(connection.rbAcesId),
       rbTokenApi: "",
       rbEmpresaIds: connection.rbEmpresaIds.join(", "),
       active: connection.status === "active",
@@ -747,6 +755,7 @@ export function InstanceManager() {
     });
     setRbForm({
       id: "",
+      rbAcesId: "",
       rbTokenApi: "",
       rbEmpresaIds: "",
       active: true,
@@ -1609,6 +1618,19 @@ export function InstanceManager() {
 
                 {isRbConnectionForm ? (
                     <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="rb-aces-id">ID RB</Label>
+                        <Input
+                          id="rb-aces-id"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={rbForm.rbAcesId}
+                          onChange={(event) => setRbForm((current) => ({ ...current, rbAcesId: event.target.value }))}
+                          placeholder="608"
+                          disabled={rbSaving}
+                        />
+                      </div>
                       <div className="space-y-2">
                         <Label htmlFor="rb-token-api">Token API</Label>
                         <Input

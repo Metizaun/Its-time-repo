@@ -1,0 +1,22 @@
+🎯 Missão (Para o Agente Principal "Bento")
+Esta é a sua ferramenta prioritária para converter leads de alta intenção que já possuem uma prescrição.
+
+🚨 Quando Usar (Gatilho de Acionamento)
+Use esta ferramenta IMEDIATAMENTE e com PRIORIDADE MÁXIMA em uma das seguintes situações:
+
+Quando o lead enviar uma [IMAGEM DE RECEITA] ocular.
+
+Quando o lead perguntar "Quanto custa?" ou "Quero um orçamento" e anexar a foto da receita.
+
+REGRA DE OURO: Esta ferramenta SOBREPÕE a ferramenta Callhuman para qualquer pedido de "orçamento" onde uma receita ocular (imagem) esteja presente.
+
+🧠 O Que Esta Ferramenta Faz (O Processo)
+Ao ser acionada, esta ferramenta (um sub-agente especialista) assume temporariamente o raciocínio da conversa para executar um fluxo de vendas consultivo:
+
+Análise (Visão): Ela "lê" a imagem da receita para extrair o tipo de lente (Visão Simples ou Multifocal) e os diagnósticos.
+
+Consulta (Conhecimento): Ela consulta a tabela de preços interna e identifica a lente mais barata que atende à receita (ex: "MF Simples a partir de R$ 330").
+
+Qualificação (Engajamento): Ela apresenta o preço base ao cliente e imediatamente inicia a qualificação, fazendo perguntas estratégicas sobre o estilo de vida do lead (ex: "Para eu te indicar a lente ideal, você passa muito tempo no computador?").
+
+Recomendação (Upsell/Valor): Com base nas respostas, ela recomenda a lente de maior valor agregado (ex: "MF Blue Cut"), explicando o benefício (menos cansaço visual) e não apenas o preço.
