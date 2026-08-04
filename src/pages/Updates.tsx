@@ -26,6 +26,47 @@ interface Release {
 
 const releasesData: Release[] = [
   {
+    version: "v2.5.0",
+    date: "04 de Agosto, 2026",
+    type: "minor",
+    status: "active",
+    headline: "Agentes mais claros. Operação mais conectada.",
+    description:
+      "Uma nova forma de organizar agentes, subagentes e ferramentas para tornar cada fluxo de atendimento mais claro e operacional.",
+    items: [
+      {
+        type: "feature",
+        tag: "AGENTES",
+        description:
+          "Nova visão de agentes: veja agentes principais, subagentes e ferramentas em um único fluxo.",
+      },
+      {
+        type: "feature",
+        tag: "CONFIGURAÇÃO",
+        description:
+          "Ferramentas por agente: configure agenda, encaminhamentos e capacidades específicas para cada agente.",
+      },
+      {
+        type: "feature",
+        tag: "ATENDIMENTO",
+        description:
+          "Encaminhamento inteligente: direcione conversas para agentes especializados com regras de atendimento mais claras.",
+      },
+      {
+        type: "feature",
+        tag: "VISAGISMO",
+        description:
+          "Catálogo de visagismo: organize armações, análises e simulações diretamente pelo CRM.",
+      },
+      {
+        type: "improvement",
+        tag: "CHAT",
+        description:
+          "Mais estabilidade no chat: melhorias nas atualizações em tempo real e na contagem de mensagens não lidas.",
+      },
+    ],
+  },
+  {
     version: "v2.4.0",
     date: "28 de Julho, 2026",
     type: "major",
