@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 3,
+  "clientKey": "cardeal",
+  "parentAgent": {
+    "name": "Silvana - Oticas Cardeal",
+    "templateKey": "optics-consultant",
+    "systemPromptFile": "agent-principal.md",
+    "model": "gemini-3.1-flash-lite",
+    "temperature": 0.2,
+    "personalityProfile": "consultative",
+    "handoffPrompt": "Encaminhe ao atendimento humano quando houver intencao de agendamento, remarcacao, cancelamento, orcamento detalhado, negociacao, financeiro, status de pedido, indisponibilidade de informacao segura ou solicitacao expressa de uma pessoa.",
+    "ragEnabled": false,
+    "active": true
+  },
+  "companies": [
+    {
+      "cnpj": "07970626000170",
+      "legalName": "Xavier & Araujo LTDA",
+      "name": "Oticas Cardeal - Santa Cruz",
+      "address": "Rua Graciliano Arruda, 31 - Centro",
+      "city": "Santa Cruz do Capibaribe",
+      "state": "PE",
+      "postalCode": "55192065",
+      "phone": null,
+      "email": null,
+      "timezone": "America/Recife",
+      "active": true
+    },
+    {
+      "cnpj": "10321627000106",
+      "legalName": "Carlos A Xavier",
+      "name": "Oticas Cardeal - Jatauba",
+      "address": "Rua Sao Sebastiao, 168 - Centro",
+      "city": "Jatauba",
+      "state": "PE",
+      "postalCode": "55180000",
+      "phone": null,
+      "email": null,
+      "timezone": "America/Recife",
+      "active": true
+    },
+    {
+      "cnpj": "54668929000112",
+      "legalName": "Carlos Alberto Xavier Ltda",
+      "name": "Oticas Cardeal - Sume",
+      "address": "Rua Alice Japiassu de Queiroz, 37 - Centro",
+      "city": "Sume",
+      "state": "PB",
+      "postalCode": "58540000",
+      "phone": null,
+      "email": null,
+      "timezone": "America/Recife",
+      "active": true
+    }
+  ],
+  "subagents": [{
+      "key": "cardeal_clinical_assistant",
+      "name": "Atendimento Clinico Cardeal",
+      "systemPromptFile": "agente-clinico.md",
+      "model": "gemini-3.1-flash-lite",
+      "temperature": 0.1,
+      "personalityProfile": "consultative",
+      "routingInstruction": "Assuma conversas sobre consultas, clinicas, profissionais, especialidades, servicos, valores e disponibilidade. Nao assuma assuntos de otica, armacoes, lentes, pedidos ou financeiro.",
+      "handoffPrompt": "Encaminhe ao atendimento humano em todo pedido ou intencao clara de agendar, remarcar ou cancelar consulta. Nunca crie, altere ou cancele eventos.",
+      "ragEnabled": false,
+      "active": true,
+      "tools": {
+        "calendar": {
+          "enabled": true,
+          "queryAvailability": true,
+          "create": false,
+          "reschedule": false,
+          "cancel": false
+        }
+      }
+  }],
+  "calendar": {
+    "timezone": "America/Sao_Paulo",
+    "aiBookingEnabled": false
+  }
+}

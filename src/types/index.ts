@@ -23,7 +23,11 @@ export interface Lead {
 export interface AIAgent {
   id: string;
   aces_id: number;
-  instance_name: string;
+  instance_name: string | null;
+  agent_type: "primary" | "subagent";
+  parent_agent_id: string | null;
+  agent_key: string | null;
+  routing_instruction: string | null;
   name: string;
   system_prompt: string;
   provider: "gemini";

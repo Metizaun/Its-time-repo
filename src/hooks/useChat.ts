@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import {
   createAttachmentUploadUrl,
   getTemplateRequiredPolicyFromError,
@@ -146,7 +147,7 @@ export function useChat(leadId: string | null) {
     fetchMessages();
 
     const channel = supabase
-      .channel(`chat-${leadId}`)
+      .channel(createRealtimeChannelName(`chat-${leadId}`))
       .on(
         "postgres_changes",
         {

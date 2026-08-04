@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import { toast } from "sonner";
 
 export const LEADS_UPDATED_EVENT = "leads-updated";
@@ -318,7 +319,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
 
     const pendingRealtimeLeadIds = pendingRealtimeLeadIdsRef.current;
     const channel = supabase
-      .channel("leads-changes-sorting")
+      .channel(createRealtimeChannelName("leads-changes-sorting"))
       .on(
         "postgres_changes",
         {

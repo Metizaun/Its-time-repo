@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   AudioLines,
+  CalendarDays,
   Files,
   Loader2,
   Plus,
@@ -13,6 +14,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { listAgentTools, type AgentTool } from "@/services/agentToolsService";
+import { AgentToolConfigurationDialog } from "@/components/agents/AgentToolConfigurationDialog";
 import { AgentToolsDialog } from "@/components/agents/AgentToolsDialog";
 
 type AgentToolRailProps = {
@@ -21,6 +23,7 @@ type AgentToolRailProps = {
 
 const TOOL_ICONS = {
   ai_audio: AudioLines,
+  calendar: CalendarDays,
   forwarding: Route,
   send_media: Files,
   rb_billing: Wallet,
@@ -38,8 +41,8 @@ function toolStateLabel(tool: AgentTool) {
 export function AgentToolRail({ agentId }: AgentToolRailProps) {
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [selectedToolKey, setSelectedToolKey] = useState<AgentTool["key"] | null>(null);
+  const [toolsDialogOpen, setToolsDialogOpen] = useState(false);
+  const [configurationToolKey, setConfigurationToolKey] = useState<AgentTool["key"] | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -61,9 +64,13 @@ export function AgentToolRail({ agentId }: AgentToolRailProps) {
     };
   }, [agentId]);
 
-  function openToolsDialog(toolKey: AgentTool["key"] | null = null) {
-    setSelectedToolKey(toolKey);
-    setDialogOpen(true);
+  function openToolsDialog() {
+    setToolsDialogOpen(true);
+  }
+
+  function openToolConfiguration(toolKey: AgentTool["key"]) {
+    setToolsDialogOpen(false);
+    setConfigurationToolKey(toolKey);
   }
 
   return (
@@ -81,7 +88,7 @@ export function AgentToolRail({ agentId }: AgentToolRailProps) {
 
           <button
             type="button"
-            onClick={() => openToolsDialog(null)}
+            onClick={openToolsDialog}
             className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-600)] shadow-sm transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:shadow-focus"
             aria-label="Adicionar ou configurar Tools"
             title="Adicionar ou configurar Tools"
@@ -97,7 +104,7 @@ export function AgentToolRail({ agentId }: AgentToolRailProps) {
               <button
                 key={tool.id}
                 type="button"
-                onClick={() => openToolsDialog(tool.key)}
+                onClick={() => openToolConfiguration(tool.key)}
                 className={cn(
                   "relative grid h-9 w-9 shrink-0 place-items-center rounded-full border bg-[var(--color-surface-1)] shadow-sm transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:shadow-focus",
                   tool.enabled
@@ -118,9 +125,18 @@ export function AgentToolRail({ agentId }: AgentToolRailProps) {
 
       <AgentToolsDialog
         agentId={agentId}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        toolKey={selectedToolKey}
+        open={toolsDialogOpen}
+        onOpenChange={setToolsDialogOpen}
+        onConfigure={openToolConfiguration}
+      />
+
+      <AgentToolConfigurationDialog
+        agentId={agentId}
+        open={Boolean(configurationToolKey)}
+        onOpenChange={(open) => {
+          if (!open) setConfigurationToolKey(null);
+        }}
+        toolKey={configurationToolKey}
       />
     </>
   );

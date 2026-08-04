@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import { getCrmBackend } from "@/services/crmBackend";
 import type { Pipeline } from "@/types";
 
@@ -92,7 +93,7 @@ export function usePipelines() {
     if (!isAuthenticated) return;
 
     const channel = supabase
-      .channel("pipelines-changes")
+      .channel(createRealtimeChannelName("pipelines-changes"))
       .on(
         "postgres_changes",
         {

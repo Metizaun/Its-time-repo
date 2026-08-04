@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import {
   claimRoutingEvent,
   closeRoutingEvent,
@@ -29,7 +30,7 @@ export function useRoutingQueue() {
   useEffect(() => {
     void refetch();
     const channel = supabase
-      .channel("routing-queue-chat")
+      .channel(createRealtimeChannelName("routing-queue-chat"))
       .on(
         "postgres_changes",
         { event: "*", schema: "crm", table: "routing_events" },

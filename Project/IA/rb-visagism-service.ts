@@ -13,7 +13,7 @@ import type { RbConnectionRecord } from "./rb-connection-service.js";
 const execFileAsync = promisify(execFile);
 const VISAGISM_BUCKET = "visagism-catalog";
 
-type ReverseVisagismAnalysis = {
+export type ReverseVisagismAnalysis = {
   product_name: string;
   color: string;
   shape: string;
@@ -24,6 +24,12 @@ type ReverseVisagismAnalysis = {
   recommended_perception: string[];
   recommended_style_profiles: string[];
   recommendation_description: string;
+};
+
+export type VisagismCatalogDraft = {
+  draftId: string;
+  previewUrl: string;
+  analysis: ReverseVisagismAnalysis;
 };
 
 type VisagismCatalogRow = {
@@ -135,6 +141,32 @@ export class RbVisagismService {
     base64: string;
     modelo: string;
   }) {
+    const draft = await this.analyzeDraft({
+      acesId: input.connection.aces_id,
+      base64: input.base64,
+      modelo: input.modelo,
+    });
+    const content = buildDescription(input.modelo.trim(), draft.analysis);
+    await this.saveDraft({
+      acesId: input.connection.aces_id,
+      draftId: draft.draftId,
+      modelo: input.modelo,
+      recommendationDescription: content,
+      attributes: {
+        source: "rb_ai",
+        analysis_type: "reverse_visagism",
+        analyzed_at: new Date().toISOString(),
+        ...draft.analysis,
+      },
+    });
+    return { content };
+  }
+
+  async analyzeDraft(input: {
+    acesId: number;
+    base64: string;
+    modelo: string;
+  }): Promise<VisagismCatalogDraft> {
     const modelo = input.modelo.trim();
     if (!modelo) throw new Error("modelo e obrigatorio");
     const source = decodeBase64Image(input.base64);
@@ -144,10 +176,8 @@ export class RbVisagismService {
 
     const compressed = await this.compressImage(source);
     const analysis = await this.analyzeImage(compressed, modelo);
-    const content = buildDescription(modelo, analysis);
-    const objectPath = `${input.connection.aces_id}/${safePathSegment(modelo)}/${randomUUID()}.webp`;
-    const existing = await this.findCatalogItem(input.connection.aces_id, modelo);
-
+    const draftId = randomUUID();
+    const objectPath = `${input.acesId}/drafts/${draftId}.webp`;
     const { error: uploadError } = await this.supabase.storage
       .from(VISAGISM_BUCKET)
       .upload(objectPath, compressed, {
@@ -157,41 +187,69 @@ export class RbVisagismService {
       });
     if (uploadError) throw uploadError;
 
-    const { data: publicUrl } = this.supabase.storage
+    const { data: signed, error: signedError } = await this.supabase.storage
       .from(VISAGISM_BUCKET)
-      .getPublicUrl(objectPath);
-    const attributes = {
-      source: "rb_ai",
-      analysis_type: "reverse_visagism",
-      analyzed_at: new Date().toISOString(),
-      ...analysis,
-    };
+      .createSignedUrl(objectPath, 15 * 60);
+    if (signedError || !signed?.signedUrl) {
+      await this.supabase.storage.from(VISAGISM_BUCKET).remove([objectPath]);
+      throw signedError ?? new Error("Nao foi possivel gerar a previa da armacao");
+    }
 
-    const { error: catalogError } = await this.agentsClient
+    return { draftId, previewUrl: signed.signedUrl, analysis };
+  }
+
+  async saveDraft(input: {
+    acesId: number;
+    draftId: string;
+    modelo: string;
+    recommendationDescription: string;
+    attributes: Record<string, unknown>;
+    displayOrder?: number;
+  }) {
+    const modelo = input.modelo.trim();
+    const description = input.recommendationDescription.trim();
+    if (!modelo || !description) throw new Error("modelo e descricao sao obrigatorios");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.draftId)) {
+      throw new Error("rascunho de visagismo invalido");
+    }
+
+    const objectPath = `${input.acesId}/drafts/${input.draftId}.webp`;
+    const { data: storedFile, error: downloadError } = await this.supabase.storage
+      .from(VISAGISM_BUCKET)
+      .download(objectPath);
+    if (downloadError || !storedFile) {
+      throw downloadError ?? new Error("Imagem analisada nao encontrada no Storage");
+    }
+    const fileSize = storedFile.size;
+    const existing = await this.findCatalogItem(input.acesId, modelo);
+    const { data, error: catalogError } = await this.agentsClient
       .from("visagism_catalog_items")
       .upsert(
         {
-          aces_id: input.connection.aces_id,
+          aces_id: input.acesId,
           product_code: modelo,
-          recommendation_description: content,
-          attributes,
-          source_url: publicUrl.publicUrl,
+          recommendation_description: description,
+          attributes: input.attributes,
+          source_url: "",
           storage_bucket: VISAGISM_BUCKET,
           storage_path: objectPath,
           mime_type: "image/webp",
-          file_size: compressed.length,
-          display_order: existing?.display_order ?? 0,
+          file_size: fileSize,
+          display_order: input.displayOrder ?? existing?.display_order ?? 0,
           is_active: true,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "aces_id,product_code" },
-      );
-    if (catalogError) {
-      await this.supabase.storage.from(VISAGISM_BUCKET).remove([objectPath]);
-      throw catalogError;
-    }
+      )
+      .select("*")
+      .single();
+    if (catalogError) throw catalogError;
 
-    if (existing?.storage_bucket && existing.storage_path) {
+    if (
+      existing?.storage_bucket &&
+      existing.storage_path &&
+      existing.storage_path !== objectPath
+    ) {
       const { error: cleanupError } = await this.supabase.storage
         .from(existing.storage_bucket)
         .remove([existing.storage_path]);
@@ -199,8 +257,7 @@ export class RbVisagismService {
         console.warn("[rb-visagism] Falha ao remover imagem substituida:", cleanupError.message);
       }
     }
-
-    return { content };
+    return data;
   }
 
   async deleteByModel(connection: RbConnectionRecord, modelo: string) {

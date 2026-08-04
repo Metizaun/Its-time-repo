@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import {
   getLeadAiState,
   updateLeadAiState,
@@ -140,7 +141,7 @@ export function useLeadAiControl(
     }
 
     const messageChannel = supabase
-      .channel(`lead-ai-control:messages:${leadId}`)
+      .channel(createRealtimeChannelName(`lead-ai-control:messages:${leadId}`))
       .on(
         "postgres_changes",
         {

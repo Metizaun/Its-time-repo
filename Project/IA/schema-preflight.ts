@@ -84,6 +84,7 @@ type SchemaFailure = {
   label: string;
   reason: string;
   migration: string;
+  transient: boolean;
 };
 
 type NormalizedPostgrestError = {
@@ -140,6 +141,7 @@ function buildSchemaFailure(
     label,
     migration,
     reason: parts.join(" | "),
+    transient: isTransientSupabaseFailure(normalized.code, parts.join(" | ")),
   };
 }
 
@@ -170,6 +172,24 @@ function formatSchemaFailures(failures: SchemaFailure[]) {
   ].join("\n");
 }
 
+function isTransientSupabaseFailure(code: string | null, message: string) {
+  if (code === "PGRST002") {
+    return true;
+  }
+
+  return /could not query the database for the schema cache|invalid response.*upstream|upstream server|fetch failed|econnrefused|connection refused|\b50[23]\b/i.test(
+    message
+  );
+}
+
+function formatTransientFailures(failures: SchemaFailure[]) {
+  return [
+    "[schema-preflight] Supabase temporariamente indisponivel durante a inicializacao.",
+    ...failures.map((failure) => `- ${failure.label}: ${failure.reason}`),
+    "Aguarde o PostgREST carregar o schema cache e tente novamente; este erro nao indica migration ausente.",
+  ].join("\n");
+}
+
 function buildManualSchemaFailure(
   label: string,
   migration: string,
@@ -179,6 +199,7 @@ function buildManualSchemaFailure(
     label,
     migration,
     reason,
+    transient: isTransientSupabaseFailure(null, reason),
   };
 }
 
@@ -739,6 +760,37 @@ export async function assertRuntimeSchemaCompatibility(
     validateAutomationMediaStorage(serviceClient),
     validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
     validateCalendarToolDefinition(agentsClient),
+    validateSelectedColumns(
+      agentsClient,
+      "ai_agents",
+      ["id", "instance_name", "agent_type", "parent_agent_id", "agent_key", "routing_instruction", "rag_enabled"],
+      "agents.ai_agents subagentes completos",
+      "supabase/migrations/20260730183452_promote_subagents_to_full_agents.sql",
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "agent_transfer_sessions",
+      [
+        "id",
+        "aces_id",
+        "lead_id",
+        "source_agent_id",
+        "target_agent_id",
+        "status",
+        "context_snapshot",
+        "started_at",
+        "ended_at",
+      ],
+      "agents.agent_transfer_sessions",
+      "supabase/migrations/20260730183452_promote_subagents_to_full_agents.sql",
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "message_history",
+      ["id", "sender_agent_id"],
+      "crm.message_history.sender_agent_id",
+      "supabase/migrations/20260730183452_promote_subagents_to_full_agents.sql",
+    ),
     validateSelectedColumns(
       serviceClient,
       "empresas",
@@ -1486,6 +1538,11 @@ export async function assertRuntimeSchemaCompatibility(
   ]);
 
   const failures = checks.filter((check): check is SchemaFailure => check !== null);
+  const transientFailures = failures.filter((failure) => failure.transient);
+  if (transientFailures.length > 0) {
+    throw new Error(formatTransientFailures(transientFailures));
+  }
+
   if (failures.length > 0) {
     throw new Error(formatSchemaFailures(failures));
   }

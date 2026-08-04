@@ -1,16 +1,7 @@
 import { useEffect, useState } from "react";
-import {
-  AudioLines,
-  Bot,
-  Files,
-  Loader2,
-  Route,
-  ScanFace,
-  ScanLine,
-  Wallet,
-  Wrench,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 
+import { AgentBotIcon, ToolGlyph } from "@/components/agents/AgentCapabilityFlow";
 import {
   Dialog,
   DialogContent,
@@ -32,22 +23,15 @@ type AgentCreationDialogProps = {
   onSelect: (template: AgentTemplate | null) => void;
 };
 
-const TOOL_ICONS = {
-  ai_audio: AudioLines,
-  forwarding: Route,
-  send_media: Files,
-  rb_billing: Wallet,
-  prescription_analyst: ScanLine,
-  visagism: ScanFace,
-} as const;
-
 function TemplateTool({ tool }: { tool: AgentTemplateTool }) {
-  const Icon = TOOL_ICONS[tool.key as keyof typeof TOOL_ICONS] ?? Wrench;
-
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-bg-subtle)] px-2.5 py-1 font-mono text-[11px] font-medium text-[var(--color-gray-600)]">
-      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      {tool.name}
+    <span
+      className="grid h-10 w-10 place-items-center rounded-[var(--radius-lg)] border border-[var(--color-gray-100)] bg-[var(--color-surface-1)] shadow-sm"
+      title={tool.name}
+      role="img"
+      aria-label={tool.name}
+    >
+      <ToolGlyph tool={tool} className="h-5 w-5" />
     </span>
   );
 }
@@ -124,8 +108,8 @@ export function AgentCreationDialog({ open, onOpenChange, onSelect }: AgentCreat
                           {template.name}
                         </h3>
                       </div>
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-lg)] bg-[var(--color-primary-50)] text-[var(--color-primary-600)] shadow-sm">
-                        <Bot className="h-5 w-5" aria-hidden="true" />
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-lg)] border border-[var(--color-gray-100)] bg-[var(--color-surface-1)] shadow-sm">
+                        <AgentBotIcon className="h-6 w-6" />
                       </div>
                     </div>
 
@@ -133,7 +117,7 @@ export function AgentCreationDialog({ open, onOpenChange, onSelect }: AgentCreat
                       {template.description}
                     </p>
 
-                    <div className="mt-4 flex flex-wrap gap-2" aria-label="Tools incluidas">
+                    <div className="mt-4 flex flex-wrap gap-2" aria-label="Ferramentas incluídas">
                       {template.tools.map((tool) => (
                         <TemplateTool key={tool.key} tool={tool} />
                       ))}
@@ -150,8 +134,8 @@ export function AgentCreationDialog({ open, onOpenChange, onSelect }: AgentCreat
 
           <TabsContent value="blank" className="mt-5">
             <div className="flex min-h-64 flex-col items-center justify-center rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-8 text-center shadow-sm">
-              <div className="grid h-14 w-14 place-items-center rounded-[var(--radius-xl)] bg-[var(--color-bg-subtle)] text-[var(--color-gray-600)] shadow-sm">
-                <Bot className="h-6 w-6" aria-hidden="true" />
+              <div className="grid h-14 w-14 place-items-center rounded-[var(--radius-xl)] border border-[var(--color-gray-100)] bg-[var(--color-surface-1)] shadow-sm">
+                <AgentBotIcon className="h-7 w-7" />
               </div>
               <h3 className="mt-4 text-lg font-bold text-[var(--color-gray-900)]">Agente em branco</h3>
               <p className="mt-2 max-w-sm text-sm leading-relaxed text-[var(--color-gray-600)]">

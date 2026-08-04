@@ -1,304 +1,225 @@
-import { useEffect, useMemo, useState } from "react";
-import { Bot, Plus, Edit2, Loader2, Power, PowerOff, Trash2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useMemo, useState } from "react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
+
+import { AgentCapabilityFlow } from "@/components/agents/AgentCapabilityFlow";
+import { AgentCreationDialog } from "@/components/agents/AgentCreationDialog";
+import { AgentToolConfigurationDialog } from "@/components/agents/AgentToolConfigurationDialog";
+import { AgentToolsDialog } from "@/components/agents/AgentToolsDialog";
+import { AgentConfigModal } from "@/components/modals/AgentConfigModal";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { useAgents } from "@/hooks/useAgents";
 import { AIAgent } from "@/types";
-import { AgentConfigModal } from "@/components/modals/AgentConfigModal";
-import { AgentCreationDialog } from "@/components/agents/AgentCreationDialog";
-import { AgentToolRail } from "@/components/agents/AgentToolRail";
-import { AGENT_TOOLS_UI_ENABLED } from "@/lib/featureFlags";
-import type { AgentTemplate } from "@/services/agentToolsService";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import type { AgentTemplate, AgentTool } from "@/services/agentToolsService";
+
+type ModalMode = { type: "primary" | "subagent"; parentId: string | null };
 
 export default function Agentes() {
-  const { agents, loading, toggleAgentStatus, deleteAgent, statusAgentId, deletingAgentId } = useAgents();
+  const {
+    agents,
+    loading,
+    statusAgentId,
+    deletingAgentId,
+    refetch,
+    toggleAgentStatus,
+    deleteAgent,
+  } = useAgents();
   const [modalOpen, setModalOpen] = useState(false);
   const [creationPickerOpen, setCreationPickerOpen] = useState(false);
   const [creationTemplate, setCreationTemplate] = useState<AgentTemplate | null>(null);
   const [editingAgent, setEditingAgent] = useState<AIAgent | null>(null);
+  const [modalMode, setModalMode] = useState<ModalMode>({ type: "primary", parentId: null });
+  const [toolsDialogAgent, setToolsDialogAgent] = useState<AIAgent | null>(null);
+  const [toolConfigDialog, setToolConfigDialog] = useState<{ agent: AIAgent; toolKey: AgentTool["key"] } | null>(null);
+  const [toolsRevision, setToolsRevision] = useState(0);
   const [agentToDelete, setAgentToDelete] = useState<AIAgent | null>(null);
-  const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
 
-  function openCreate() {
+  const primaryAgents = useMemo(
+    () => agents.filter((agent) => agent.agent_type === "primary"),
+    [agents]
+  );
+
+  function openCreatePrimary() {
     setEditingAgent(null);
     setCreationTemplate(null);
-    if (AGENT_TOOLS_UI_ENABLED) {
-      setCreationPickerOpen(true);
-      return;
-    }
-
-    setModalOpen(true);
+    setModalMode({ type: "primary", parentId: null });
+    setCreationPickerOpen(true);
   }
 
   function selectCreationMode(template: AgentTemplate | null) {
     setCreationTemplate(template);
     setCreationPickerOpen(false);
+    setModalMode({ type: "primary", parentId: null });
+    setModalOpen(true);
+  }
+
+  function openCreateSubagent(parent: AIAgent) {
+    setEditingAgent(null);
+    setCreationTemplate(null);
+    setModalMode({ type: "subagent", parentId: parent.id });
     setModalOpen(true);
   }
 
   function openEdit(agent: AIAgent) {
     setEditingAgent(agent);
+    setCreationTemplate(null);
+    setModalMode({ type: agent.agent_type, parentId: agent.parent_agent_id });
     setModalOpen(true);
   }
 
-  function handleClose() {
+  function closeModal() {
     setModalOpen(false);
     setEditingAgent(null);
     setCreationTemplate(null);
+    void refetch();
   }
 
-  function openDelete(agent: AIAgent) {
-    setAgentToDelete(agent);
-    setDeleteConfirmationName("");
-  }
+  async function confirmDeleteAgent() {
+    if (!agentToDelete) return;
 
-  function closeDeleteModal() {
-    if (deletingAgentId) return;
-
-    setAgentToDelete(null);
-    setDeleteConfirmationName("");
-  }
-
-  const isDeleteConfirmationValid = useMemo(() => {
-    return deleteConfirmationName.trim() === (agentToDelete?.name ?? "");
-  }, [agentToDelete?.name, deleteConfirmationName]);
-
-  useEffect(() => {
-    if (!agentToDelete || deletingAgentId) return;
-
-    const stillExists = agents.some((agent) => agent.id === agentToDelete.id);
-    if (!stillExists) {
+    try {
+      await deleteAgent(agentToDelete.id, agentToDelete.name);
       setAgentToDelete(null);
-      setDeleteConfirmationName("");
+    } catch {
+      // O hook ja exibe o erro e restaura a lista.
     }
-  }, [agentToDelete, agents, deletingAgentId]);
-
-  async function handleDeleteAgent() {
-    if (!agentToDelete || !isDeleteConfirmationValid) return;
-
-    await deleteAgent(agentToDelete.id, agentToDelete.name);
-    setAgentToDelete(null);
-    setDeleteConfirmationName("");
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[var(--color-accent)]" />
-      </div>
-    );
+    return <div className="flex min-h-64 items-center justify-center text-sm text-[var(--color-text-secondary)]">Carregando agentes...</div>;
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="agents-page space-y-7">
+      <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Agentes de IA</h1>
-          <p className="text-[var(--color-text-secondary)] mt-1 text-sm">
+          <h1 className="text-3xl font-bold tracking-tight text-[var(--color-text-primary)] sm:text-4xl">Agentes de IA</h1>
+          <p className="mt-2 text-sm font-medium text-[var(--color-text-secondary)] sm:text-base">
             Configure seus agentes para prospectar, atender e vender automaticamente.
           </p>
         </div>
-        {agents.length > 0 && (
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-accent)] hover:brightness-110 text-white text-sm font-semibold rounded-xl transition-all duration-200"
-          >
-            <Plus className="w-4 h-4" />
-            Novo Agente
-          </button>
-        )}
-      </div>
+        <Button type="button" onClick={openCreatePrimary} className="gap-2 self-start sm:self-auto">
+          <Plus className="h-4 w-4" /> Novo agente
+        </Button>
+      </header>
 
-      {/* Empty State */}
-      {agents.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-24 gap-6">
-          <div className="w-20 h-20 rounded-full bg-transparent border border-t-2 border-t-[var(--color-accent)] border-[var(--color-border-subtle)] flex items-center justify-center shadow-[0_8px_32px_rgba(229,57,58,0.08)]">
-            <Bot className="w-9 h-9 text-[var(--color-text-secondary)]" />
-          </div>
-          <div className="text-center space-y-1">
-            <h2 className="text-xl font-semibold text-foreground">Nenhum agente configurado</h2>
-            <p className="text-sm text-[var(--color-text-secondary)] max-w-xs">
-              Crie seu primeiro agente de IA e deixe ele trabalhar por você.
-            </p>
-          </div>
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 px-6 py-3 bg-[var(--color-accent)] hover:brightness-110 text-white font-semibold rounded-xl transition-all duration-200 shadow-[0_4px_24px_rgba(229,57,58,0.25)]"
-          >
-            <Plus className="w-4 h-4" />
-            Criar Agente
-          </button>
-        </div>
-      )}
-
-      {/* Agent Cards */}
-      {agents.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {agents.map((agent) => (
-            <div
-              key={agent.id}
-              className={cn(
-                "relative p-5 rounded-[24px] border border-[var(--color-border-subtle)] border-t-2 bg-transparent",
-                "shadow-[0_8px_32px_rgba(229,57,58,0.04)] transition-all duration-200 hover:shadow-[0_8px_32px_rgba(229,57,58,0.08)]",
-                agent.is_active ? "border-t-[var(--color-accent)]" : "border-t-[var(--color-border-medium)]"
-              )}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  {/* Instance badge */}
-                  <span className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-widest font-semibold">
-                    {agent.instance_name}
-                  </span>
-                  {/* Agent name */}
-                  <h3 className="text-base font-bold text-foreground mt-0.5 truncate">{agent.name}</h3>
-                  {/* Model tag */}
-                  <span className="inline-block mt-2 text-[10px] px-2 py-0.5 rounded-full bg-[var(--color-border-subtle)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]">
-                    Resposta: {agent.model}
-                  </span>
-                </div>
-
-                {/* Status indicator */}
-                <button
-                  type="button"
-                  onClick={() => toggleAgentStatus(agent.id, !agent.is_active)}
-                  disabled={statusAgentId === agent.id || deletingAgentId === agent.id}
-                  title={agent.is_active ? "Clique para pausar o agente" : "Clique para ativar o agente"}
-                  className={cn(
-                    "flex items-center justify-center w-8 h-8 rounded-full border flex-shrink-0 transition-colors duration-200",
-                    "hover:scale-105 disabled:cursor-not-allowed disabled:opacity-60",
-                    agent.is_active
-                      ? "bg-[var(--color-success)]/10 border-[var(--color-success)]/30"
-                      : "bg-[var(--color-border-subtle)] border-[var(--color-border-medium)]"
-                  )}
-                >
-                  {statusAgentId === agent.id ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-secondary)]" />
-                  ) : agent.is_active ? (
-                    <Power className="w-4 h-4 text-[var(--color-success)]" />
-                  ) : (
-                    <PowerOff className="w-4 h-4 text-[var(--color-text-secondary)]" />
-                  )}
-                </button>
-              </div>
-
-              {/* Footer actions */}
-              {AGENT_TOOLS_UI_ENABLED && (
-                <AgentToolRail agentId={agent.id} />
-              )}
-
-              <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--color-border-subtle)]">
-                <span
-                  className={cn(
-                    "text-xs font-medium",
-                    agent.is_active ? "text-[var(--color-success)]" : "text-[var(--color-text-secondary)]"
-                  )}
-                >
-                  {agent.is_active ? "Ativo" : "Pausado"}
-                </span>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openEdit(agent)}
-                    disabled={deletingAgentId === agent.id}
-                    className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-secondary)] hover:text-foreground transition-colors px-2 py-1 rounded-lg hover:bg-[var(--color-border-subtle)]"
-                  >
-                    <Edit2 className="w-3 h-3" />
-                    Editar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openDelete(agent)}
-                    disabled={statusAgentId === agent.id || deletingAgentId === agent.id}
-                    aria-label={`Apagar agente ${agent.name}`}
-                    title={`Apagar agente ${agent.name}`}
-                    className="flex items-center justify-center w-9 h-9 rounded-full text-destructive hover:text-destructive hover:bg-destructive/10 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {deletingAgentId === agent.id ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Trash2 className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
+      {primaryAgents.length === 0 ? (
+        <section className="cq-flow-canvas flex min-h-[28rem] flex-col items-center justify-center text-center">
+          <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Crie seu primeiro agente</h2>
+          <p className="mt-2 max-w-md text-sm text-[var(--color-text-secondary)]">Depois de conectar o canal, você poderá adicionar subagentes especializados e ferramentas próprias.</p>
+          <Button type="button" onClick={openCreatePrimary} className="mt-6 gap-2"><Plus className="h-4 w-4" /> Criar agente</Button>
+        </section>
+      ) : (
+        <div className="cq-agent-overview-grid">
+          {primaryAgents.map((primary) => (
+            <AgentCapabilityFlow
+              key={primary.id}
+              primary={primary}
+              subagents={agents.filter((agent) => agent.agent_type === "subagent" && agent.parent_agent_id === primary.id)}
+              onEditAgent={openEdit}
+              onConfigureTool={(agent, tool) => setToolConfigDialog({ agent, toolKey: tool.key })}
+              onManageTools={setToolsDialogAgent}
+              onToggleAgent={(agent) => void toggleAgentStatus(agent.id, !agent.is_active)}
+              onDeleteAgent={setAgentToDelete}
+              statusAgentId={statusAgentId}
+              deletingAgentId={deletingAgentId}
+              toolsRevision={toolsRevision}
+              compact
+            />
           ))}
         </div>
       )}
 
-      {/* Modal */}
-      {AGENT_TOOLS_UI_ENABLED && (
-        <AgentCreationDialog
-          open={creationPickerOpen}
-          onOpenChange={setCreationPickerOpen}
-          onSelect={selectCreationMode}
-        />
-      )}
+      <AgentCreationDialog
+        open={creationPickerOpen}
+        onOpenChange={setCreationPickerOpen}
+        onSelect={selectCreationMode}
+      />
 
       <AgentConfigModal
         open={modalOpen}
         agent={editingAgent}
-        templateKey={creationTemplate?.key ?? null}
-        templateName={creationTemplate?.name ?? null}
-        onClose={handleClose}
+        agentType={modalMode.type}
+        parentAgentId={modalMode.parentId}
+        templateKey={!editingAgent && modalMode.type === "primary" ? creationTemplate?.key ?? null : null}
+        templateName={!editingAgent && modalMode.type === "primary" ? creationTemplate?.name ?? null : null}
+        onClose={closeModal}
       />
 
-      <Dialog open={Boolean(agentToDelete)} onOpenChange={(open) => (!open ? closeDeleteModal() : undefined)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Apagar agente</DialogTitle>
-            <DialogDescription>
-              Essa ação não pode ser desfeita. Para confirmar, digite exatamente o nome do agente abaixo.
-            </DialogDescription>
-          </DialogHeader>
+      <AgentToolsDialog
+        open={Boolean(toolsDialogAgent)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setToolsDialogAgent(null);
+            setToolsRevision((value) => value + 1);
+          }
+        }}
+        agentId={toolsDialogAgent?.id ?? ""}
+        onConfigure={(toolKey) => {
+          if (!toolsDialogAgent) return;
+          const agent = toolsDialogAgent;
+          setToolsDialogAgent(null);
+          setToolConfigDialog({ agent, toolKey });
+        }}
+        onCreateSubagent={
+          toolsDialogAgent?.agent_type === "primary"
+          && agents.filter((agent) => agent.agent_type === "subagent" && agent.parent_agent_id === toolsDialogAgent.id).length < 2
+            ? () => {
+                const parent = toolsDialogAgent;
+                setToolsDialogAgent(null);
+                openCreateSubagent(parent);
+              }
+            : undefined
+        }
+      />
 
-          <div className="space-y-4">
-            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-              <p className="text-sm font-medium text-foreground">{agentToDelete?.name}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Instância vinculada: {agentToDelete?.instance_name ?? "N/A"}
-              </p>
-            </div>
+      <AgentToolConfigurationDialog
+        open={Boolean(toolConfigDialog)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setToolConfigDialog(null);
+            setToolsRevision((value) => value + 1);
+          }
+        }}
+        agentId={toolConfigDialog?.agent.id ?? ""}
+        toolKey={toolConfigDialog?.toolKey ?? null}
+      />
 
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Digite <span className="font-semibold">{agentToDelete?.name ?? ""}</span> para continuar
-              </p>
-              <Input
-                value={deleteConfirmationName}
-                onChange={(event) => setDeleteConfirmationName(event.target.value)}
-                placeholder={agentToDelete?.name ?? "Nome do agente"}
-                disabled={Boolean(deletingAgentId)}
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={closeDeleteModal} disabled={Boolean(deletingAgentId)}>
-              Cancelar
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDeleteAgent}
-              disabled={!isDeleteConfirmationValid || Boolean(deletingAgentId)}
+      <AlertDialog
+        open={Boolean(agentToDelete)}
+        onOpenChange={(open) => {
+          if (!open && !deletingAgentId) setAgentToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apagar agente?</AlertDialogTitle>
+            <AlertDialogDescription>
+              O agente <strong>{agentToDelete?.name}</strong> será removido permanentemente. Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(deletingAgentId)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmDeleteAgent()}
+              disabled={Boolean(deletingAgentId)}
+              className="gap-2 bg-[var(--color-error-500)] text-white hover:bg-[var(--color-error-600)]"
             >
-              {deletingAgentId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-              Apagar agente
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              {deletingAgentId ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+              Apagar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

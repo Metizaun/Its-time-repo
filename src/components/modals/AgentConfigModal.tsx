@@ -53,6 +53,8 @@ function stripPersonalityInstructions(prompt: string) {
 interface AgentConfigModalProps {
   open: boolean;
   agent: AIAgent | null;
+  agentType?: AIAgent["agent_type"];
+  parentAgentId?: string | null;
   templateKey?: string | null;
   templateName?: string | null;
   onClose: () => void;
@@ -61,6 +63,8 @@ interface AgentConfigModalProps {
 export function AgentConfigModal({
   open,
   agent,
+  agentType = "primary",
+  parentAgentId = null,
   templateKey = null,
   templateName = null,
   onClose,
@@ -70,6 +74,8 @@ export function AgentConfigModal({
 
   const [name, setName] = useState("");
   const [instanceName, setInstanceName] = useState("");
+  const [selectedParentId, setSelectedParentId] = useState("");
+  const [routingInstruction, setRoutingInstruction] = useState("");
   const [personalityLevel, setPersonalityLevel] = useState(2);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [model] = useState(DEFAULT_MODEL);
@@ -80,11 +86,16 @@ export function AgentConfigModal({
   const [studioExpanded, setStudioExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragBlockRef = useRef<string | null>(null);
+  const effectiveAgentType = agent?.agent_type ?? agentType;
+  const primaryAgents = useMemo(
+    () => agents.filter((item) => item.agent_type === "primary" && item.is_active),
+    [agents]
+  );
 
   const availableInstances = useMemo(() => {
     const blockedInstances = new Set(
       agents
-        .filter((existingAgent) => existingAgent.id !== agent?.id)
+        .filter((existingAgent) => existingAgent.agent_type === "primary" && existingAgent.id !== agent?.id)
         .map((existingAgent) => existingAgent.instance_name)
     );
 
@@ -101,7 +112,9 @@ export function AgentConfigModal({
 
     if (agent) {
       setName(agent.name);
-      setInstanceName(agent.instance_name);
+      setInstanceName(agent.instance_name ?? "");
+      setSelectedParentId(agent.parent_agent_id ?? "");
+      setRoutingInstruction(agent.routing_instruction ?? "");
       setSystemPrompt(stripPersonalityInstructions(agent.system_prompt));
       setHandoffEnabled(Boolean(agent.handoff_enabled));
       setHandoffPrompt(agent.handoff_prompt ?? "");
@@ -119,6 +132,8 @@ export function AgentConfigModal({
     } else {
       setName("");
       setInstanceName("");
+      setSelectedParentId(parentAgentId ?? (primaryAgents.length === 1 ? primaryAgents[0].id : ""));
+      setRoutingInstruction("");
       setSystemPrompt("");
       setPersonalityLevel(2);
       setHandoffEnabled(false);
@@ -127,10 +142,10 @@ export function AgentConfigModal({
     }
 
     setStudioExpanded(false);
-  }, [open, agent]);
+  }, [open, agent, parentAgentId, primaryAgents]);
 
   useEffect(() => {
-    if (!open || agent) {
+    if (!open || agent || effectiveAgentType === "subagent") {
       return;
     }
 
@@ -141,7 +156,13 @@ export function AgentConfigModal({
 
       return availableInstances[0]?.instancia ?? "";
     });
-  }, [agent, availableInstances, open]);
+  }, [agent, availableInstances, effectiveAgentType, open]);
+
+  useEffect(() => {
+    if (effectiveAgentType !== "subagent") return;
+    const parent = primaryAgents.find((item) => item.id === selectedParentId);
+    setInstanceName(parent?.instance_name ?? "");
+  }, [effectiveAgentType, primaryAgents, selectedParentId]);
 
   const handleDragStart = useCallback((content: string) => {
     dragBlockRef.current = content;
@@ -181,7 +202,12 @@ export function AgentConfigModal({
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
 
-    if (!name.trim() || !instanceName || !systemPrompt.trim()) {
+    if (
+      !name.trim()
+      || !systemPrompt.trim()
+      || (effectiveAgentType === "primary" && !instanceName)
+      || (effectiveAgentType === "subagent" && (!selectedParentId || !routingInstruction.trim()))
+    ) {
       return;
     }
 
@@ -197,7 +223,11 @@ export function AgentConfigModal({
     await upsertAgent(
       {
         name: name.trim(),
-        instance_name: instanceName,
+        instance_name: effectiveAgentType === "subagent" ? null : instanceName,
+        agent_type: effectiveAgentType,
+        parent_agent_id: effectiveAgentType === "subagent" ? selectedParentId : null,
+        agent_key: agent?.agent_key ?? undefined,
+        routing_instruction: effectiveAgentType === "subagent" ? routingInstruction.trim() : null,
         system_prompt: basePrompt,
         model,
         is_active: true,
@@ -235,18 +265,24 @@ export function AgentConfigModal({
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-6 py-4">
           <div>
             <h2 className="text-base font-bold text-foreground">
-              {agent ? "Editar Agente" : "Novo Agente"}
+              {agent
+                ? effectiveAgentType === "subagent" ? "Editar Subagente" : "Editar Agente"
+                : effectiveAgentType === "subagent" ? "Novo Subagente" : "Novo Agente"}
             </h2>
             <p className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
               {agent
                 ? `Editando: ${agent.name}`
                 : templateName
                   ? `Template: ${templateName}`
-                  : "Configure seu novo Agente de IA"}
+                  : effectiveAgentType === "subagent"
+                    ? "Configure o atendimento especializado"
+                    : "Configure seu novo Agente de IA"}
             </p>
           </div>
 
           <button
+            type="button"
+            aria-label="Fechar configuracao do agente"
             onClick={onClose}
             className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-border-medium)] transition-colors hover:bg-[var(--color-border-subtle)]"
           >
@@ -289,6 +325,46 @@ export function AgentConfigModal({
                 />
               </div>
 
+              {effectiveAgentType === "subagent" ? (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                      Agente principal
+                    </label>
+                    <select
+                      value={selectedParentId}
+                      onChange={(event) => setSelectedParentId(event.target.value)}
+                      required
+                      disabled={Boolean(agent) || primaryAgents.length === 1}
+                      className="w-full rounded-xl border border-[var(--color-border-medium)] bg-[var(--color-bg-surface)] px-4 py-2.5 text-sm text-foreground focus:border-[var(--color-accent)]/60 focus:outline-none disabled:opacity-70"
+                    >
+                      <option value="" disabled>Selecione o agente principal</option>
+                      {primaryAgents.map((parent) => (
+                        <option key={parent.id} value={parent.id}>{parent.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-[var(--color-text-secondary)]">
+                      O subagente usa o mesmo canal do agente principal e responde diretamente ao cliente.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
+                      Quando direcionar para este subagente
+                    </label>
+                    <textarea
+                      value={routingInstruction}
+                      onChange={(event) => setRoutingInstruction(event.target.value)}
+                      placeholder="Ex: dúvidas sobre consultas, médicos, especialidades, valores e disponibilidade clínica."
+                      required
+                      rows={3}
+                      className="w-full resize-none rounded-xl border border-[var(--color-border-medium)] bg-transparent px-4 py-3 text-sm text-foreground placeholder-[var(--color-text-muted)] focus:border-[var(--color-accent)]/60 focus:outline-none"
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              {effectiveAgentType === "primary" ? (
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
                   Instancia Vinculada
@@ -316,6 +392,7 @@ export function AgentConfigModal({
                   </p>
                 ) : null}
               </div>
+              ) : null}
 
               <div className={cn("flex flex-col gap-3", studioExpanded && "xl:col-span-2")}>
                 <div>
@@ -512,7 +589,11 @@ export function AgentConfigModal({
               disabled={saving}
               className="rounded-xl bg-[var(--color-primary-500)] px-5 py-2 text-sm font-semibold text-[var(--color-surface-1)] shadow-primary transition-all hover:bg-[var(--color-primary-600)] disabled:opacity-50"
             >
-              {saving ? "Salvando..." : agent ? "Salvar Alteracoes" : "Criar Agente"}
+              {saving
+                ? "Salvando..."
+                : agent
+                  ? "Salvar Alteracoes"
+                  : effectiveAgentType === "subagent" ? "Criar Subagente" : "Criar Agente"}
             </button>
           </div>
         </form>

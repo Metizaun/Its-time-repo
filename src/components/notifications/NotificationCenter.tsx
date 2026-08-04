@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import { cn } from "@/lib/utils";
 import {
   CURRENT_RELEASE_VERSION,
@@ -58,7 +59,7 @@ export function NotificationCenter() {
   useEffect(() => {
     void refresh();
     const channel = supabase
-      .channel("product-notifications")
+      .channel(createRealtimeChannelName("product-notifications"))
       .on("postgres_changes", { event: "INSERT", schema: "crm", table: "notifications" }, () => void refresh())
       .on("postgres_changes", { event: "*", schema: "crm", table: "notification_reads" }, () => void refresh())
       .subscribe((status) => {

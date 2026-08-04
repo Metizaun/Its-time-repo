@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import { wallDateToUtc } from "@/lib/calendarTimezone";
 import type {
   CalendarEvent,
@@ -123,7 +124,7 @@ export function useCalendarEvents(
     if (!enabled) return;
 
     const channel = supabase
-      .channel("calendar-events-changes")
+      .channel(createRealtimeChannelName("calendar-events-changes"))
       .on(
         "postgres_changes",
         {

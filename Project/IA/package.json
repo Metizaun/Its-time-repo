@@ -8,6 +8,7 @@
     "dev": "tsx watch api-server.ts",
     "automation:worker": "tsx automation-worker.ts",
     "rb:run-now": "tsx scripts/run-rb-billing-now.ts",
+    "client-config:apply": "tsx scripts/apply-client-agent-config.ts",
     "optics:ops": "tsx optics-template-ops.ts",
     "optics:ops:prod": "node dist/optics-template-ops.js",
     "schema:check": "tsx schema-preflight.ts",

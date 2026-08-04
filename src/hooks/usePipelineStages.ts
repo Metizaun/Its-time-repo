@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { PipelineStage } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
+import { createRealtimeChannelName } from "@/lib/realtime";
 import { notifyLeadsUpdated } from "./useLeads";
 import { getCrmBackend } from "@/services/crmBackend";
 
@@ -101,7 +102,7 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
     if (!isAuthenticated || !enabled) return;
 
     const channel = supabase
-      .channel("pipeline-stages-changes")
+      .channel(createRealtimeChannelName(`pipeline-stages-changes:${pipelineId ?? "all"}`))
       .on(
         "postgres_changes",
         {
@@ -128,7 +129,7 @@ export function usePipelineStages(pipelineId?: string | null, enabled = true) {
       document.removeEventListener("visibilitychange", handleResume);
       void supabase.removeChannel(channel);
     };
-  }, [enabled, fetchStages, isAuthenticated]);
+  }, [enabled, fetchStages, isAuthenticated, pipelineId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

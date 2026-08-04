@@ -6,6 +6,7 @@ import { isIP } from "node:net";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { RbVisagismService } from "./rb-visagism-service.js";
 
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
 import { tokenLineItems, tryRecordAiUsage } from "./ai-costs.js";
@@ -332,12 +333,29 @@ type AgentRow = {
   handoff_enabled: boolean;
   handoff_prompt: string | null;
   handoff_target_phone: string | null;
+  rag_enabled: boolean;
   unanswered_followup_enabled: boolean;
   template_key: string | null;
   template_version: number | null;
+  agent_type: "primary" | "subagent";
+  parent_agent_id: string | null;
+  agent_key: string | null;
+  routing_instruction: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type AgentTransferSessionRow = {
+  id: string;
+  aces_id: number;
+  lead_id: string;
+  source_agent_id: string;
+  target_agent_id: string;
+  status: "active" | "completed" | "cancelled" | "failed";
+  context_snapshot: JsonRecord;
+  started_at: string;
+  ended_at: string | null;
 };
 
 type PersonalityProfile = "surgical" | "consultative" | "balanced" | "dynamic" | "enthusiastic";
@@ -728,7 +746,11 @@ type WebhookContactIdentity = {
 
 type CreateAgentInput = {
   name: string;
-  instanceName: string;
+  instanceName?: string;
+  agentType?: "primary" | "subagent";
+  parentAgentId?: string | null;
+  agentKey?: string | null;
+  routingInstruction?: string | null;
   systemPrompt?: string;
   model?: string;
   provider?: "gemini";
@@ -855,6 +877,9 @@ type StructuredModelResponse = {
   should_handoff: boolean;
   handoff_reason: string;
   forwarding_destination_key: string | null;
+  subagent_key: string | null;
+  return_to_parent: boolean;
+  complete_after_reply: boolean;
   native_followup: NativeFollowupDecision;
   visagism: VisagismDecision;
   agenda_request: AgendaRequest;
@@ -959,6 +984,7 @@ type ServiceConfig = {
   chatSignedDownloadTtlSeconds?: number;
   chatAttachmentUploadIntentTtlMinutes?: number;
   instancePhoneAllowlists?: Record<string, string[]>;
+  rbVisagismService?: RbVisagismService;
 };
 
 export class HttpError extends Error {
@@ -1770,6 +1796,9 @@ function parseStructuredJson(text: string): StructuredModelResponse {
     forwarding_destination_key: parsed.forwarding_destination_key
       ? String(parsed.forwarding_destination_key).trim()
       : null,
+    subagent_key: parsed.subagent_key ? String(parsed.subagent_key).trim() : null,
+    return_to_parent: parsed.return_to_parent === true,
+    complete_after_reply: parsed.complete_after_reply === true,
     native_followup: {
       should_schedule: Boolean(nativeFollowup.should_schedule),
       needs_clarification: Boolean(nativeFollowup.needs_clarification),
@@ -2173,6 +2202,7 @@ export class AgentManager {
   private readonly toolMediaAllowedHosts: Set<string>;
   private readonly instancePhoneAllowlists: Record<string, string[]>;
   private readonly whatsAppProviders: WhatsAppProviderRegistry;
+  private readonly rbVisagismService: RbVisagismService | null;
 
   constructor(private readonly config: ServiceConfig) {
     void this.transferLeadToAgent;
@@ -2196,6 +2226,7 @@ export class AgentManager {
       auth: { persistSession: false, autoRefreshToken: false },
       db: { schema: "rb" },
     });
+    this.rbVisagismService = config.rbVisagismService ?? null;
 
     this.redis = config.redisUrl ? new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 }) : null;
     this.gemini = config.geminiApiKey ? new GoogleGenerativeAI(config.geminiApiKey) : null;
@@ -2997,16 +3028,21 @@ export class AgentManager {
       throw new HttpError(404, "Agente nao encontrado");
     }
 
+    const agent = data as AgentRow;
+    const channelAgent = agent.agent_type === "subagent"
+      ? await this.getChannelAgent(agent)
+      : agent;
+
     if (
       ownerId &&
-      data.created_by !== ownerId &&
+      channelAgent.created_by !== ownerId &&
       !isAdminRole(role) &&
-      !(await this.hasActiveInstanceAccessMembership(acesId, data.instance_name, ownerId))
+      !(await this.hasActiveInstanceAccessMembership(acesId, channelAgent.instance_name, ownerId))
     ) {
       throw new HttpError(404, "Agente nao encontrado");
     }
 
-    return data as AgentRow;
+    return agent;
   }
 
   private async getAgentById(agentId: string) {
@@ -3027,6 +3063,38 @@ export class AgentManager {
     return data as AgentRow;
   }
 
+  private async getChannelAgent(agent: AgentRow) {
+    if (agent.agent_type !== "subagent") {
+      if (!agent.instance_name) throw new HttpError(409, "Agente principal sem canal configurado");
+      return agent;
+    }
+    if (!agent.parent_agent_id) throw new HttpError(409, "Subagente sem agente principal");
+    const parent = await this.getAgentById(agent.parent_agent_id);
+    if (parent.agent_type !== "primary" || !parent.instance_name || parent.aces_id !== agent.aces_id) {
+      throw new HttpError(409, "Canal do subagente indisponivel");
+    }
+    return parent;
+  }
+
+  private async attachInheritedChannel(agent: AgentRow, channelAgent?: AgentRow) {
+    if (agent.agent_type !== "subagent") return agent;
+    const channel = channelAgent ?? await this.getChannelAgent(agent);
+    return { ...agent, instance_name: channel.instance_name };
+  }
+
+  private async listActiveSubagents(parent: AgentRow) {
+    const { data, error } = await this.agentsClient
+      .from("ai_agents")
+      .select("*")
+      .eq("aces_id", parent.aces_id)
+      .eq("parent_agent_id", parent.id)
+      .eq("agent_type", "subagent")
+      .eq("is_active", true)
+      .order("created_at", { ascending: true });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar os subagentes", error);
+    return (data ?? []) as AgentRow[];
+  }
+
   private async getAnyAgentByInstance(
     instanceName: string,
     acesId?: number,
@@ -3036,7 +3104,8 @@ export class AgentManager {
     let query = this.agentsClient
       .from("ai_agents")
       .select("*")
-      .eq("instance_name", instanceName);
+      .eq("instance_name", instanceName)
+      .eq("agent_type", "primary");
 
     if (typeof acesId === "number") {
       query = query.eq("aces_id", acesId);
@@ -3255,8 +3324,16 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel listar os agentes", error);
     }
 
-    return ((data ?? []) as AgentRow[]).filter(
-      (agent) => accessibleInstances.has(agent.instance_name)
+    const allAgents = (data ?? []) as AgentRow[];
+    const visiblePrimaryIds = new Set(
+      allAgents
+        .filter((agent) => agent.agent_type !== "subagent" && accessibleInstances.has(agent.instance_name))
+        .map((agent) => agent.id),
+    );
+    return allAgents.filter((agent) =>
+      agent.agent_type === "subagent"
+        ? Boolean(agent.parent_agent_id && visiblePrimaryIds.has(agent.parent_agent_id))
+        : visiblePrimaryIds.has(agent.id),
     );
   }
 
@@ -3584,11 +3661,99 @@ export class AgentManager {
       throw new HttpError(400, "Nome do agente e obrigatorio");
     }
 
+    const personalityProfile = input.personalityProfile ?? "balanced";
+    const agentType = input.agentType === "subagent" ? "subagent" : "primary";
+
+    if (agentType === "subagent") {
+      let parentAgentId = input.parentAgentId?.trim() || null;
+      if (!parentAgentId) {
+        const { data: parents, error: parentError } = await this.agentsClient
+          .from("ai_agents")
+          .select("id")
+          .eq("aces_id", context.acesId)
+          .eq("agent_type", "primary")
+          .eq("is_active", true)
+          .limit(2);
+        if (parentError) throw new HttpError(500, "Nao foi possivel localizar o agente principal", parentError);
+        if ((parents ?? []).length !== 1) {
+          throw new HttpError(400, "Selecione o agente principal deste subagente");
+        }
+        parentAgentId = String(parents![0].id);
+      }
+      const parent = await this.getAgentForAccount(
+        parentAgentId,
+        context.acesId,
+        context.crmUserId,
+        context.role,
+      );
+      if (parent.agent_type !== "primary") {
+        throw new HttpError(400, "O responsavel pelo subagente deve ser um agente principal");
+      }
+      const { count: subagentCount, error: subagentCountError } = await this.agentsClient
+        .from("ai_agents")
+        .select("id", { count: "exact", head: true })
+        .eq("aces_id", context.acesId)
+        .eq("parent_agent_id", parent.id)
+        .eq("agent_type", "subagent");
+      if (subagentCountError) {
+        throw new HttpError(500, "Nao foi possivel validar o limite de subagentes", subagentCountError);
+      }
+      if ((subagentCount ?? 0) >= 2) {
+        throw new HttpError(409, "Este agente principal ja possui o limite de dois subagentes");
+      }
+      const agentKey = (input.agentKey?.trim() || input.name)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLocaleLowerCase("pt-BR")
+        .replace(/[^a-z0-9_]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 64);
+      if (!/^[a-z][a-z0-9_]{1,63}$/.test(agentKey)) {
+        throw new HttpError(400, "Defina uma chave interna valida para o subagente");
+      }
+      const routingInstruction = input.routingInstruction?.trim();
+      if (!routingInstruction) {
+        throw new HttpError(400, "Defina quando o atendimento deve ser encaminhado ao subagente");
+      }
+      const { data, error } = await this.agentsClient
+        .from("ai_agents")
+        .insert({
+          aces_id: context.acesId,
+          instance_name: null,
+          name: input.name.trim(),
+          system_prompt: input.systemPrompt?.trim() || DEFAULT_SYSTEM_MESSAGE,
+          provider: input.provider ?? "gemini",
+          model: input.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL,
+          is_active: input.isActive ?? true,
+          temperature: input.temperature ?? 0.4,
+          personality_profile: personalityProfile,
+          buffer_wait_ms: input.bufferWaitMs ?? parent.buffer_wait_ms,
+          human_pause_minutes: input.humanPauseMinutes ?? parent.human_pause_minutes,
+          auto_apply_threshold: input.autoApplyThreshold ?? parent.auto_apply_threshold,
+          handoff_enabled: input.handoffEnabled ?? false,
+          handoff_prompt: input.handoffPrompt?.trim() || null,
+          handoff_target_phone: null,
+          rag_enabled: false,
+          unanswered_followup_enabled: input.unansweredFollowupEnabled ?? true,
+          created_by: context.crmUserId,
+          agent_type: "subagent",
+          parent_agent_id: parent.id,
+          agent_key: agentKey,
+          routing_instruction: routingInstruction,
+        })
+        .select("*")
+        .single();
+      if (error) throw new HttpError(500, "Nao foi possivel criar o subagente", error);
+      const subagent = data as AgentRow;
+      await this.refreshDerivedAgentState(await this.attachInheritedChannel(subagent, parent));
+      await this.ensureCalendarToolBinding(subagent.id, subagent.aces_id);
+      return subagent;
+    }
+
     if (!input.instanceName?.trim()) {
       throw new HttpError(400, "Instancia do agente e obrigatoria");
     }
 
-    const personalityProfile = input.personalityProfile ?? "balanced";
     const instanceName = input.instanceName.trim();
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
 
@@ -3663,6 +3828,10 @@ export class AgentManager {
       handoff_target_phone: input.handoffTargetPhone?.trim() || null,
       unanswered_followup_enabled: input.unansweredFollowupEnabled ?? true,
       created_by: context.crmUserId,
+      agent_type: "primary",
+      parent_agent_id: null,
+      agent_key: null,
+      routing_instruction: null,
     };
 
     const { data, error } = await this.agentsClient
@@ -3946,7 +4115,6 @@ export class AgentManager {
       || nextConfig.reschedule
       || nextConfig.cancel
     );
-
     if (input.isEnabled === true && (
       isRbBillingTool
         ? !rbBillingReady
@@ -4582,7 +4750,49 @@ export class AgentManager {
       .order("display_order", { ascending: true })
       .order("created_at", { ascending: false });
     if (error) throw new HttpError(500, "Nao foi possivel listar o catalogo de visagismo", error);
-    return (data ?? []) as VisagismCatalogItemRow[];
+    return Promise.all(((data ?? []) as VisagismCatalogItemRow[]).map(async (item) => {
+      let previewUrl: string | null = null;
+      if (item.storage_bucket && item.storage_path) {
+        const { data: signed, error: signedError } = await this.serviceClient.storage
+          .from(item.storage_bucket)
+          .createSignedUrl(item.storage_path, this.chatSignedDownloadTtlSeconds);
+        if (!signedError) previewUrl = signed?.signedUrl ?? null;
+      } else if (item.source_url) {
+        previewUrl = item.source_url;
+      }
+      return { ...item, preview_url: previewUrl };
+    }));
+  }
+
+  async analyzeVisagismCatalogDraft(
+    context: AuthContext,
+    agentId: string,
+    input: { productCode: string; fileName: string; mimeType: string; base64: string },
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (!this.rbVisagismService) {
+      throw new HttpError(503, "Analise de visagismo indisponivel");
+    }
+    const productCode = input.productCode.trim();
+    if (!productCode) throw new HttpError(400, "Nome do oculos e obrigatorio");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(input.mimeType)) {
+      throw new HttpError(400, "Formato de imagem nao aceito");
+    }
+    if (!input.base64.trim()) throw new HttpError(400, "Imagem e obrigatoria");
+    try {
+      return await this.rbVisagismService.analyzeDraft({
+        acesId: context.acesId,
+        base64: input.base64,
+        modelo: productCode,
+      });
+    } catch (error) {
+      throw new HttpError(
+        500,
+        error instanceof Error ? error.message : "Nao foi possivel analisar a armacao",
+        error,
+      );
+    }
   }
 
   async upsertVisagismCatalogItem(
@@ -4590,10 +4800,10 @@ export class AgentManager {
     agentId: string,
     input: {
       id?: string | null;
+      draftId?: string | null;
       productCode: string;
       recommendationDescription: string;
       attributes?: JsonRecord;
-      sourceUrl: string;
       displayOrder?: number;
       isActive?: boolean;
     }
@@ -4601,24 +4811,62 @@ export class AgentManager {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
 
-    const payload = {
-      id: input.id ?? undefined,
-      aces_id: context.acesId,
-      product_code: input.productCode.trim(),
-      recommendation_description: input.recommendationDescription.trim(),
-      attributes: input.attributes ?? {},
-      source_url: input.sourceUrl.trim(),
-      display_order: input.displayOrder ?? 0,
-      is_active: input.isActive ?? true,
-    };
+    const productCode = input.productCode.trim();
+    const recommendationDescription = input.recommendationDescription.trim();
+    if (!productCode || !recommendationDescription) {
+      throw new HttpError(400, "Nome e descricao da armacao sao obrigatorios");
+    }
 
+    if (!input.id && input.draftId) {
+      if (!this.rbVisagismService) throw new HttpError(503, "Storage de visagismo indisponivel");
+      try {
+        const item = await this.rbVisagismService.saveDraft({
+          acesId: context.acesId,
+          draftId: input.draftId,
+          modelo: productCode,
+          recommendationDescription,
+          attributes: input.attributes ?? {},
+          displayOrder: input.displayOrder,
+        });
+        await this.refreshVisagismToolReadiness(agentId, context.acesId);
+        return item;
+      } catch (error) {
+        throw new HttpError(500, error instanceof Error ? error.message : "Nao foi possivel salvar a armacao", error);
+      }
+    }
+
+    if (!input.id) throw new HttpError(400, "Analise da imagem e obrigatoria para criar uma armacao");
     const { data, error } = await this.agentsClient
       .from("visagism_catalog_items")
-      .upsert(payload, { onConflict: "aces_id,product_code" })
+      .update({
+        product_code: productCode,
+        recommendation_description: recommendationDescription,
+        attributes: input.attributes ?? {},
+        display_order: input.displayOrder ?? 0,
+        is_active: input.isActive ?? true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.id)
+      .eq("aces_id", context.acesId)
       .select("*")
       .single();
     if (error) throw new HttpError(500, "Nao foi possivel salvar o item do catalogo", error);
+    await this.refreshVisagismToolReadiness(agentId, context.acesId);
     return data;
+  }
+
+  private async refreshVisagismToolReadiness(agentId: string, acesId: number) {
+    const ready = await this.isVisagismReady(acesId);
+    const { error } = await this.agentsClient
+      .from("agent_tools")
+      .update({
+        readiness: ready ? "ready" : "needs_config",
+        last_validated_at: new Date().toISOString(),
+      })
+      .eq("agent_id", agentId)
+      .eq("aces_id", acesId)
+      .eq("tool_key", "visagism");
+    if (error) throw new HttpError(500, "Nao foi possivel atualizar a prontidao do Visagismo", error);
   }
 
   async deactivateVisagismCatalogItem(context: AuthContext, agentId: string, itemId: string) {
@@ -4643,6 +4891,7 @@ export class AgentManager {
       .eq("id", itemId)
       .eq("aces_id", context.acesId);
     if (error) throw new HttpError(500, "Nao foi possivel desativar o item do catalogo", error);
+    await this.refreshVisagismToolReadiness(agentId, context.acesId);
     return { success: true };
   }
 
@@ -5093,6 +5342,7 @@ export class AgentManager {
         .from("ai_agents")
         .select("id, name, instance_name, is_active")
         .eq("aces_id", context.acesId)
+        .eq("agent_type", "primary")
         .neq("id", agentId)
         .eq("is_active", true)
         .order("name"),
@@ -5274,11 +5524,13 @@ export class AgentManager {
 
   async updateAgent(context: AuthContext, agentId: string, input: UpdateAgentInput) {
     this.ensureAdmin(context);
-    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const currentAgent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
 
     const payload: JsonRecord = {};
     if (input.name !== undefined) payload.name = input.name.trim();
-    if (input.instanceName !== undefined) payload.instance_name = input.instanceName.trim();
+    if (input.instanceName !== undefined && currentAgent.agent_type === "primary") {
+      payload.instance_name = input.instanceName.trim();
+    }
     if (input.systemPrompt !== undefined) payload.system_prompt = input.systemPrompt.trim();
     if (input.model !== undefined) payload.model = input.model.trim();
     if (input.provider !== undefined) payload.provider = input.provider;
@@ -5293,6 +5545,11 @@ export class AgentManager {
     if (input.handoffTargetPhone !== undefined) payload.handoff_target_phone = input.handoffTargetPhone.trim() || null;
     if (input.unansweredFollowupEnabled !== undefined) {
       payload.unanswered_followup_enabled = input.unansweredFollowupEnabled;
+    }
+    if (input.routingInstruction !== undefined && currentAgent.agent_type === "subagent") {
+      const instruction = input.routingInstruction?.trim() ?? "";
+      if (!instruction) throw new HttpError(400, "Defina quando o subagente deve assumir o atendimento");
+      payload.routing_instruction = instruction;
     }
 
     const { data, error } = await this.agentsClient
@@ -5553,6 +5810,21 @@ export class AgentManager {
     });
     if (moveStageError) {
       throw new HttpError(500, "Nao foi possivel mover o lead para a etapa selecionada", moveStageError);
+    }
+
+    const { error: transferError } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .update({
+        status: "completed",
+        ended_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("aces_id", context.acesId)
+      .eq("lead_id", lead.id)
+      .eq("source_agent_id", agent.id)
+      .eq("status", "active");
+    if (transferError) {
+      throw new HttpError(500, "Nao foi possivel encerrar o atendimento especializado", transferError);
     }
 
     await this.updateLeadInteractionMode(context.acesId, lead.id, "ai");
@@ -6197,7 +6469,7 @@ export class AgentManager {
     });
   }
 
-  private getModel(modelName: string): GenerativeModel {
+  private getModel(modelName: string, temperature = 0.4): GenerativeModel {
     if (!this.gemini) {
       throw new HttpError(500, "GEMINI_API_KEY nao configurada no backend");
     }
@@ -6205,7 +6477,7 @@ export class AgentManager {
     return this.gemini.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.4,
+        temperature,
         responseMimeType: "application/json",
       },
     });
@@ -6239,13 +6511,14 @@ export class AgentManager {
 
   private async generateGeminiContent(
     primaryModelName: string,
-    prompt: string | Array<string | { inlineData: { mimeType: string; data: string } }>
+    prompt: string | Array<string | { inlineData: { mimeType: string; data: string } }>,
+    temperature = 0.4,
   ) {
     const models = this.getGeminiModelCandidates(primaryModelName);
     let lastError: unknown = null;
 
     for (const [modelIndex, modelName] of models.entries()) {
-      const model = this.getModel(modelName);
+      const model = this.getModel(modelName, temperature);
 
       for (let attempt = 1; attempt <= this.geminiMaxRetries; attempt += 1) {
         try {
@@ -8371,6 +8644,24 @@ export class AgentManager {
     throw new Error("Nao foi possivel baixar o material cadastrado");
   }
 
+  private async downloadVisagismCatalogImage(item: VisagismCatalogItemRow) {
+    if (item.storage_bucket && item.storage_path) {
+      const { data, error } = await this.serviceClient.storage
+        .from(item.storage_bucket)
+        .download(item.storage_path);
+      if (error || !data) {
+        throw new HttpError(500, "Nao foi possivel baixar a armacao do Storage", error);
+      }
+      const buffer = Buffer.from(await data.arrayBuffer());
+      if (buffer.byteLength === 0 || buffer.byteLength > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
+        throw new Error("Tamanho da imagem da armacao invalido");
+      }
+      return { buffer, ...this.detectRegisteredMedia(buffer) };
+    }
+    if (item.source_url) return this.downloadRegisteredMedia(item.source_url);
+    throw new Error("A armacao selecionada nao possui imagem no Storage");
+  }
+
   private async executeConfiguredMedia(params: {
     agent: AgentRow;
     lead: LeadRow;
@@ -8870,7 +9161,6 @@ export class AgentManager {
         status: "succeeded",
       },
     });
-
     const routingIdempotencyKey = params.sourceMessageId
       ? `agent-forwarding:${params.sourceMessageId}:${targetAgent.id}`
       : null;
@@ -9104,6 +9394,48 @@ export class AgentManager {
     };
   }
 
+  private async forceInternalAgentHumanHandoff(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    reason: string;
+    messages: MessageRow[];
+  }): Promise<HandoffExecutionResult> {
+    const latestLeadMessage = [...params.messages]
+      .reverse()
+      .find((message) => message.source_type === "lead")?.content?.trim();
+    await this.updateLeadInteractionMode(params.agent.aces_id, params.lead.id, "human");
+    await this.freezeLead(params.agent, params.lead.id, "ai_policy", params.reason);
+    await this.saveMessage({
+      leadId: params.lead.id,
+      acesId: params.agent.aces_id,
+      content: INTERNAL_HANDOFF_TRANSITION_MESSAGE,
+      direction: "outbound",
+      sourceType: "system",
+      instanceName: params.agent.instance_name,
+      conversationId: null,
+    });
+    await this.saveMessage({
+      leadId: params.lead.id,
+      acesId: params.agent.aces_id,
+      content: buildInternalHandoffNote(
+        params.reason,
+        latestLeadMessage || "Resumo indisponivel.",
+      ),
+      direction: "outbound",
+      sourceType: "system",
+      instanceName: params.agent.instance_name,
+      conversationId: null,
+    });
+    return {
+      triggered: true,
+      mode: "internal",
+      targetPhone: null,
+      targetAgentId: null,
+      reason: params.reason,
+      notification: null,
+    };
+  }
+
   private async saveAgendaContext(
     agentId: string,
     leadId: string,
@@ -9281,6 +9613,121 @@ export class AgentManager {
           }];
         });
     });
+  }
+
+  private async resolveActiveSubagentSession(parent: AgentRow, leadId: string) {
+    const { data, error } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .select("id, aces_id, lead_id, source_agent_id, target_agent_id, status, context_snapshot, started_at, ended_at")
+      .eq("aces_id", parent.aces_id)
+      .eq("lead_id", leadId)
+      .eq("source_agent_id", parent.id)
+      .eq("status", "active")
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel consultar o atendimento do subagente", error);
+    if (!data) return { session: null, subagent: null };
+
+    const target = await this.getAgentById(String(data.target_agent_id));
+    if (
+      target.agent_type !== "subagent"
+      || target.parent_agent_id !== parent.id
+      || target.aces_id !== parent.aces_id
+      || !target.is_active
+    ) {
+      await this.finishSubagentSession({
+        sessionId: String(data.id),
+        status: "failed",
+        reason: "O subagente vinculado nao esta mais disponivel.",
+      });
+      return { session: null, subagent: null };
+    }
+    return {
+      session: data as AgentTransferSessionRow,
+      subagent: await this.attachInheritedChannel(target, parent),
+    };
+  }
+
+  private async findSubagentByKey(parent: AgentRow, key: string | null) {
+    if (!key) return null;
+    const available = await this.listActiveSubagents(parent);
+    const target = available.find((agent) => agent.agent_key === key) ?? null;
+    return target ? this.attachInheritedChannel(target, parent) : null;
+  }
+
+  private async startSubagentSession(params: {
+    parent: AgentRow;
+    lead: LeadRow;
+    subagent: AgentRow;
+    activeSession: AgentTransferSessionRow | null;
+    reason: string;
+    context: JsonRecord;
+  }): Promise<{ session: AgentTransferSessionRow; ownsRun: boolean }> {
+    if (params.activeSession) {
+      if (asString(asRecord(params.activeSession.context_snapshot).run_id) === asString(params.context.run_id)) {
+        return { session: params.activeSession, ownsRun: false };
+      }
+      const { data, error } = await this.agentsClient
+        .from("agent_transfer_sessions")
+        .update({
+          context_snapshot: { ...params.context, reason: params.reason },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", params.activeSession.id)
+        .eq("status", "active")
+        .select("id, aces_id, lead_id, source_agent_id, target_agent_id, status, context_snapshot, started_at, ended_at")
+        .single();
+      if (error) throw new HttpError(500, "Nao foi possivel atualizar o atendimento do subagente", error);
+      return { session: data as AgentTransferSessionRow, ownsRun: true };
+    }
+
+    const { data, error } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .insert({
+        aces_id: params.parent.aces_id,
+        lead_id: params.lead.id,
+        source_agent_id: params.parent.id,
+        target_agent_id: params.subagent.id,
+        status: "active",
+        context_snapshot: { ...params.context, reason: params.reason },
+        started_at: new Date().toISOString(),
+      })
+      .select("id, aces_id, lead_id, source_agent_id, target_agent_id, status, context_snapshot, started_at, ended_at")
+      .single();
+    if (!error) return { session: data as AgentTransferSessionRow, ownsRun: true };
+    if (error.code === "23505") {
+      const concurrent = await this.resolveActiveSubagentSession(params.parent, params.lead.id);
+      if (concurrent.session) return { session: concurrent.session, ownsRun: false };
+    }
+    throw new HttpError(500, "Nao foi possivel iniciar o atendimento do subagente", error);
+  }
+
+  private async finishSubagentSession(params: {
+    sessionId: string;
+    status: "completed" | "cancelled" | "failed";
+    reason: string;
+    context?: JsonRecord;
+  }) {
+    const { data: current } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .select("context_snapshot")
+      .eq("id", params.sessionId)
+      .maybeSingle();
+    const context = {
+      ...asRecord(current?.context_snapshot),
+      ...params.context,
+      ended_reason: params.reason,
+    };
+    const { error } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .update({
+        status: params.status,
+        context_snapshot: context,
+        ended_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", params.sessionId)
+      .eq("status", "active");
+    if (error) throw new HttpError(500, "Nao foi possivel encerrar o atendimento do subagente", error);
   }
 
   private async executeAgendaSubworkflow(params: {
@@ -9764,7 +10211,10 @@ export class AgentManager {
     messages: MessageRow[]
   ): Promise<GeminiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = await this.getHandoffConfig(agent);
-    const leadState = await this.getLeadState(agent.id, lead.id);
+    const subagents = agent.agent_type === "primary"
+      ? await this.listActiveSubagents(agent)
+      : [];
+    let leadState = await this.getLeadState(agent.id, lead.id);
     const agendaContext = readAgendaContext(leadState?.agenda_context);
     const temporalContext = buildNativeTemporalContext();
     const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
@@ -9797,7 +10247,7 @@ export class AgentManager {
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
       "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
@@ -9830,6 +10280,9 @@ export class AgentManager {
       "forwarding_destination_key deve ser uma chave exata dos destinos disponiveis somente quando um destino especifico corresponder claramente ao contexto.",
       "Nunca invente uma chave. Se houver handoff geral sem destino especifico, use null.",
       "Quando uma empresa ou cidade ja estiver clara na conversa, compare diretamente com os destinos relacionados sem pedir novamente.",
+      "subagent_key deve ser null ou uma chave exata da lista de subagentes disponiveis. Se o assunto corresponder claramente a um especialista, selecione-o; nunca invente chaves.",
+      "return_to_parent deve ser true somente quando este agente for um subagente e a mensagem atual estiver fora de sua responsabilidade.",
+      "complete_after_reply deve ser true somente para subagente quando a duvida informativa atual puder ser respondida por completo neste turno e nao for necessario aguardar outra informacao do cliente.",
       "",
       `Contexto temporal nativo: ${JSON.stringify(temporalContext)}`,
       `Contexto estruturado atual da Agenda: ${JSON.stringify(agendaContext)}`,
@@ -9865,6 +10318,12 @@ export class AgentManager {
           when_to_use: destination.context_instruction,
         })),
       })}`,
+      "",
+      `Subagentes disponiveis: ${JSON.stringify(subagents.map((subagent) => ({
+        key: subagent.agent_key,
+        name: subagent.name,
+        when_to_use: subagent.routing_instruction,
+      })))}`,
       "",
       `Historico recente:\n${conversation}`,
     ].join("\n");
@@ -9973,12 +10432,14 @@ export class AgentManager {
       .join("\n");
     const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
 
-    const leadState = await this.getLeadState(agent.id, lead.id);
+    let leadState = await this.getLeadState(agent.id, lead.id);
     const opticalProfile = leadState?.optical_profile ?? {};
     const memorySummary = leadState?.memory_summary ?? null;
 
     const lastLeadMsg = messages.filter((m) => m.source_type === "lead").pop()?.content ?? "";
-    const ragKnowledge = lastLeadMsg ? await this.searchVectorKnowledge(agent.aces_id, agent.id, lastLeadMsg, 3) : [];
+    const ragKnowledge = agent.rag_enabled && lastLeadMsg
+      ? await this.searchVectorKnowledge(agent.aces_id, agent.id, lastLeadMsg, 3)
+      : [];
     const ragContext = ragKnowledge.length > 0
       ? `Conhecimento Relevante (RAG Vetorial):\n${ragKnowledge.map((k) => `- ${k.content}`).join("\n")}`
       : null;
@@ -10890,14 +11351,18 @@ export class AgentManager {
   }
 
   private async flushBufferedConversation(agentId: string, leadId: string) {
-    const agent = await this.getAgentById(agentId);
+    const channelAgent = await this.getAgentById(agentId);
+    let agent = channelAgent;
     const bufferedEntries = await this.consumeBufferedEntries(agentId, leadId);
 
-    const lead = await this.loadLeadForAgent(agent, leadId);
+    const lead = await this.loadLeadForAgent(channelAgent, leadId);
+    const activeDelegation = await this.resolveActiveSubagentSession(channelAgent, lead.id);
+    let subagentSession = activeDelegation.session;
+    if (activeDelegation.subagent) agent = activeDelegation.subagent;
     const aiState = await this.resolveLeadAiState(
       lead.id,
-      agent,
-      agent.instance_name,
+      channelAgent,
+      channelAgent.instance_name,
       lead.interaction_mode
     );
     if (!aiState.enabled) {
@@ -10911,7 +11376,7 @@ export class AgentManager {
 
     const opticsImageAnalyses = await this.processBufferedOpticsImages(agent, lead, bufferedEntries);
 
-    const leadState = await this.getLeadState(agent.id, lead.id);
+    let leadState = await this.getLeadState(agent.id, lead.id);
     const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id);
     if (
       !this.shouldAnalyzeLead(
@@ -10926,11 +11391,11 @@ export class AgentManager {
     // Fresh webhook buffers should keep the conversational AI responsive; delayed rechecks are only
     // useful for background CRM analysis when no new inbound batch is waiting right now.
     if (bufferedEntries.length === 0 && inactivityRemainingMs > 0) {
-      this.scheduleCrmAnalysisAfterInactivity(agent.id, lead.id, inactivityRemainingMs);
+      this.scheduleCrmAnalysisAfterInactivity(channelAgent.id, lead.id, inactivityRemainingMs);
       return;
     }
 
-    const rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
+    let rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
     const tags = await this.getTagsForAccount(agent.aces_id);
     const conversation = await this.fetchRecentConversation(lead.id);
     const temporalContext = buildNativeTemporalContext();
@@ -10943,7 +11408,52 @@ export class AgentManager {
     const runId = latestInbound?.id ?? randomUUID();
 
     try {
-      const result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+      let result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+
+      if (subagentSession && result.parsed.return_to_parent) {
+        await this.finishSubagentSession({
+          sessionId: subagentSession.id,
+          status: "completed",
+          reason: "O assunto atual deve voltar ao agente principal.",
+          context: { run_id: runId, returned_before_reply: true },
+        });
+        subagentSession = null;
+        agent = channelAgent;
+        leadState = await this.getLeadState(agent.id, lead.id);
+        rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
+        result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+      }
+
+      if (!subagentSession && agent.agent_type === "primary" && result.parsed.subagent_key) {
+        const selectedSubagent = await this.findSubagentByKey(channelAgent, result.parsed.subagent_key);
+        if (selectedSubagent) {
+          const claim = await this.startSubagentSession({
+            parent: channelAgent,
+            lead,
+            subagent: selectedSubagent,
+            activeSession: null,
+            reason: result.parsed.reason || `Atendimento encaminhado para ${selectedSubagent.name}.`,
+            context: { run_id: runId, subagent_key: selectedSubagent.agent_key },
+          });
+          if (!claim.ownsRun) return;
+          subagentSession = claim.session;
+          agent = selectedSubagent;
+          leadState = await this.getLeadState(agent.id, lead.id);
+          rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
+          result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+        }
+      } else if (subagentSession) {
+        const claim = await this.startSubagentSession({
+          parent: channelAgent,
+          lead,
+          subagent: agent,
+          activeSession: subagentSession,
+          reason: result.parsed.reason || `Atendimento continuado por ${agent.name}.`,
+          context: { run_id: runId, subagent_key: agent.agent_key },
+        });
+        if (!claim.ownsRun) return;
+        subagentSession = claim.session;
+      }
       await tryRecordAiUsage(this.serviceClient, {
         idempotencyKey: `ai_run:${runId}:crm_analysis:${result.modelName}:${result.attempt}`,
         acesId: agent.aces_id,
@@ -10980,6 +11490,16 @@ export class AgentManager {
         storedContext: leadState?.agenda_context,
         runId,
       });
+      const delegatedToInternalAgent = agent.agent_type === "subagent";
+      const requestedCalendarMutation = ["book", "reschedule", "cancel"].includes(
+        result.parsed.agenda_request.intent,
+      );
+      if (delegatedToInternalAgent && requestedCalendarMutation && agendaApplication.status === "denied") {
+        result.parsed.should_handoff = true;
+        result.parsed.should_pause = true;
+        result.parsed.handoff_reason =
+          result.parsed.handoff_reason || "Solicitacao de agenda que exige atendimento humano.";
+      }
       const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, {
         nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
         nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
@@ -10988,9 +11508,9 @@ export class AgentManager {
         agenda: agendaApplication,
       });
       await tryRecordAiUsage(this.serviceClient, {
-        idempotencyKey: `ai_run:${runId}:customer_reply:${replyResult.modelName}:${replyResult.attempt}`,
+        idempotencyKey: `ai_run:${runId}:${delegatedToInternalAgent ? "internal_agent_reply" : "customer_reply"}:${replyResult.modelName}:${replyResult.attempt}`,
         acesId: agent.aces_id,
-        featureKey: "sdr_reply",
+        featureKey: delegatedToInternalAgent ? "internal_agent_reply" : "sdr_reply",
         provider: "google_gemini",
         model: replyResult.modelName,
         lineItems: tokenLineItems(replyResult.tokensIn, replyResult.tokensOut),
@@ -11001,13 +11521,15 @@ export class AgentManager {
           run_id: runId,
           used_fallback_model: replyResult.usedFallback,
           generation_attempt: replyResult.attempt,
+          subagent_id: delegatedToInternalAgent ? agent.id : null,
+          subagent_key: delegatedToInternalAgent ? agent.agent_key : null,
         },
       });
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const visagismRecord = asRecord(visagismApplication);
-      if (visagismRecord.status === "succeeded") {
+      if (!delegatedToInternalAgent && visagismRecord.status === "succeeded") {
         result.parsed.reply_blocks = [];
-      } else if (visagismRecord.status === "waiting_input") {
+      } else if (!delegatedToInternalAgent && visagismRecord.status === "waiting_input") {
         const missing = Array.isArray(visagismRecord.missingAnswerKeys)
           ? visagismRecord.missingAnswerKeys.map(String)
           : [];
@@ -11026,6 +11548,10 @@ export class AgentManager {
         tags,
         validStageIds,
       });
+      if (delegatedToInternalAgent) {
+        result.parsed.native_followup.should_schedule = false;
+        result.parsed.native_followup.needs_clarification = false;
+      }
       const nativeFollowupApplication = await this.applyNativeFollowup({
         agent,
         lead,
@@ -11061,7 +11587,7 @@ export class AgentManager {
           blocks: result.parsed.reply_blocks,
           sourceType: "ai",
           runId,
-          hasMediaAttachment: Boolean(requestedMediaKey),
+          hasMediaAttachment: Boolean(requestedMediaKey) || delegatedToInternalAgent,
         });
       }
 
@@ -11088,7 +11614,44 @@ export class AgentManager {
         }
       }
 
-      const handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
+      let handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
+      if (subagentSession && result.parsed.should_handoff && !handoffResult.triggered) {
+        handoffResult = await this.forceInternalAgentHumanHandoff({
+          agent,
+          lead,
+          reason: result.parsed.handoff_reason || "Solicitacao clinica para atendimento humano.",
+          messages: conversation,
+        });
+      }
+      let returnedToPrimary = false;
+      if (subagentSession) {
+        if (result.parsed.should_handoff) {
+          await this.finishSubagentSession({
+            sessionId: subagentSession.id,
+            status: handoffResult.triggered ? "completed" : "failed",
+            reason: handoffResult.triggered
+              ? result.parsed.handoff_reason
+              : "O encaminhamento humano solicitado nao foi ativado.",
+            context: {
+              run_id: runId,
+              intent: result.parsed.agenda_request.intent,
+              handoff: handoffResult,
+            },
+          });
+        } else if (result.parsed.complete_after_reply) {
+          await this.finishSubagentSession({
+            sessionId: subagentSession.id,
+            status: "completed",
+            reason: "Atendimento informativo concluido; o agente principal reassumira na proxima mensagem.",
+            context: {
+              run_id: runId,
+              intent: result.parsed.agenda_request.intent,
+              returned_to_primary: true,
+            },
+          });
+          returnedToPrimary = true;
+        }
+      }
       if (handoffResult.triggered) {
         await this.saveAgendaContext(agent.id, lead.id, null);
       }
@@ -11164,6 +11727,12 @@ export class AgentManager {
           media_delivery: mediaDelivery,
           visagism: visagismApplication,
           agenda: agendaApplication,
+          subagent: delegatedToInternalAgent ? {
+            agent_id: agent.id,
+            agent_key: agent.agent_key,
+            session_id: subagentSession?.id ?? null,
+            returned_to_primary: returnedToPrimary,
+          } : null,
           freeze_until: freezeUntil,
         },
         suggestedStageId,
@@ -11843,6 +12412,7 @@ export class AgentManager {
 
     const messages = (messagesData ?? []) as MessageRow[];
     const messageIds = messages.map((message) => message.id);
+    const messageIdSet = new Set(messageIds);
     const createdByIds = Array.from(
       new Set(messages.map((message) => message.created_by).filter((value): value is string => Boolean(value)))
     );
@@ -11870,7 +12440,6 @@ export class AgentManager {
         .select("id, message_id, kind, mime_type, file_name, file_size, storage_path, expires_at, storage_deleted_at")
         .eq("lead_id", lead.id)
         .eq("aces_id", context.acesId)
-        .in("message_id", messageIds)
         .order("created_at", { ascending: true });
 
       if (attachmentsError) {
@@ -11879,6 +12448,12 @@ export class AgentManager {
 
       const nowMs = Date.now();
       for (const attachment of (attachmentsData ?? []) as MessageAttachmentRow[]) {
+        // Keep the response limited to the messages loaded above without
+        // serializing every message UUID into a potentially oversized URL.
+        if (!messageIdSet.has(attachment.message_id)) {
+          continue;
+        }
+
         const expired = attachment.expires_at ? new Date(attachment.expires_at).getTime() <= nowMs : false;
         let downloadUrl: string | null = null;
 
@@ -12243,6 +12818,10 @@ export class AgentManager {
       id: "manual",
       aces_id: context.acesId,
       instance_name: instanceName,
+      agent_type: "primary",
+      parent_agent_id: null,
+      agent_key: null,
+      routing_instruction: null,
       name: "Envio manual",
       system_prompt: DEFAULT_SYSTEM_MESSAGE,
       provider: "gemini",
@@ -12256,6 +12835,7 @@ export class AgentManager {
       handoff_enabled: false,
       handoff_prompt: null,
       handoff_target_phone: null,
+      rag_enabled: false,
       unanswered_followup_enabled: true,
       template_key: null,
       template_version: null,
@@ -12926,7 +13506,7 @@ export class AgentManager {
 
     const [{ data: sourceFile, error: sourceError }, frame] = await Promise.all([
       this.serviceClient.storage.from(CHAT_ATTACHMENTS_BUCKET).download(params.sourceAttachment.storagePath),
-      this.downloadRegisteredMedia(params.selectedItem.source_url),
+      this.downloadVisagismCatalogImage(params.selectedItem),
     ]);
     if (sourceError || !sourceFile) throw new HttpError(500, "Nao foi possivel baixar a foto do visagismo", sourceError);
     if (frame.kind !== "image") throw new Error("O item selecionado nao possui uma imagem de armacao valida");

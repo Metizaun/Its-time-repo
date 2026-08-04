@@ -346,6 +346,16 @@ function resolveMetaWebhookAppSecret() {
   );
 }
 
+const rbVisagismService = new RbVisagismService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  model: process.env.VISAGISM_CATALOG_ANALYSIS_MODEL,
+  maxSourceBytes: Number(process.env.VISAGISM_CATALOG_MAX_SOURCE_BYTES ?? 10 * 1024 * 1024),
+  maxStoredBytes: Number(process.env.VISAGISM_CATALOG_MAX_STORED_BYTES ?? 1_500_000),
+  ffmpegPath: process.env.FFMPEG_PATH,
+});
+
 const manager = new AgentManager({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY"),
@@ -403,6 +413,7 @@ const manager = new AgentManager({
   instancePhoneAllowlists: {
     mamis: ["554199031152"],
   },
+  rbVisagismService,
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -435,16 +446,6 @@ const rbConnectionService = new RbConnectionService({
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   jwtSecret: requireEnv("RB_WEBHOOK_JWT_SECRET"),
   rbApiBaseUrl: process.env.RB_API_BASE_URL,
-});
-
-const rbVisagismService = new RbVisagismService({
-  supabaseUrl: requireEnv("SUPABASE_URL"),
-  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-  geminiApiKey: process.env.GEMINI_API_KEY,
-  model: process.env.VISAGISM_CATALOG_ANALYSIS_MODEL,
-  maxSourceBytes: Number(process.env.VISAGISM_CATALOG_MAX_SOURCE_BYTES ?? 10 * 1024 * 1024),
-  maxStoredBytes: Number(process.env.VISAGISM_CATALOG_MAX_STORED_BYTES ?? 1_500_000),
-  ffmpegPath: process.env.FFMPEG_PATH,
 });
 
 const rbBillingWorker = new RbBillingWorker({
@@ -2365,7 +2366,13 @@ app.post(
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agent = await manager.createAgent(req.authContext!, {
       name: String(req.body.name ?? ""),
-      instanceName: String(req.body.instanceName ?? ""),
+      instanceName: typeof req.body.instanceName === "string" ? req.body.instanceName : undefined,
+      agentType: req.body.agentType === "subagent" ? "subagent" : "primary",
+      parentAgentId: typeof req.body.parentAgentId === "string" ? req.body.parentAgentId : undefined,
+      agentKey: typeof req.body.agentKey === "string" ? req.body.agentKey : undefined,
+      routingInstruction: typeof req.body.routingInstruction === "string"
+        ? req.body.routingInstruction
+        : undefined,
       systemPrompt:
         typeof req.body.systemPrompt === "string"
           ? req.body.systemPrompt
@@ -2431,6 +2438,10 @@ app.patch(
       instanceName:
         typeof req.body.instanceName === "string"
           ? req.body.instanceName
+          : undefined,
+      routingInstruction:
+        typeof req.body.routingInstruction === "string"
+          ? req.body.routingInstruction
           : undefined,
       systemPrompt:
         typeof req.body.systemPrompt === "string"
@@ -2874,6 +2885,25 @@ app.get(
 );
 
 app.post(
+  "/api/agents/:id/tools/visagism/analyze",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const draft = await manager.analyzeVisagismCatalogDraft(
+      req.authContext!,
+      agentId,
+      {
+        productCode: String(req.body.productCode ?? ""),
+        fileName: String(req.body.fileName ?? ""),
+        mimeType: String(req.body.mimeType ?? ""),
+        base64: String(req.body.base64 ?? ""),
+      },
+    );
+    res.status(201).json({ success: true, draft });
+  }),
+);
+
+app.post(
   "/api/agents/:id/tools/visagism/catalog",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -2883,6 +2913,7 @@ app.post(
       agentId,
       {
         id: typeof req.body.id === "string" ? req.body.id : null,
+        draftId: typeof req.body.draftId === "string" ? req.body.draftId : null,
         productCode: String(req.body.productCode ?? ""),
         recommendationDescription: String(
           req.body.recommendationDescription ?? "",
@@ -2893,7 +2924,6 @@ app.post(
           !Array.isArray(req.body.attributes)
             ? req.body.attributes
             : undefined,
-        sourceUrl: String(req.body.sourceUrl ?? ""),
         displayOrder:
           typeof req.body.displayOrder === "number"
             ? req.body.displayOrder

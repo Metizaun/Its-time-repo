@@ -7,43 +7,33 @@ type AgentToolsDialogProps = {
   agentId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  toolKey?: AgentTool["key"] | null;
-};
-
-const TOOL_LABELS: Record<AgentTool["key"], string> = {
-  ai_audio: "Audio IA",
-  forwarding: "Encaminhamento",
-  send_media: "Enviar midia",
-  rb_billing: "Cobranca RB",
-  prescription_analyst: "Analista de receituario",
-  visagism: "Visagismo",
+  onCreateSubagent?: () => void;
+  onConfigure: (toolKey: AgentTool["key"]) => void;
 };
 
 export function AgentToolsDialog({
   agentId,
   open,
   onOpenChange,
-  toolKey = null,
+  onCreateSubagent,
+  onConfigure,
 }: AgentToolsDialogProps) {
-  const title = toolKey ? TOOL_LABELS[toolKey] : "Ferramentas do agente";
-  const description = toolKey
-    ? "Ajuste somente esta capacidade do agente."
-    : "Ative, desative e configure as capacidades disponiveis para este agente.";
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <DialogTitle>Ferramentas do agente</DialogTitle>
+          <DialogDescription>Ative, desative e escolha a capacidade que deseja configurar.</DialogDescription>
         </DialogHeader>
 
         <div className="min-w-0 overflow-y-auto pr-1">
-          <AgentToolsPanel
-            agentId={agentId}
-            toolFilterKey={toolKey}
-            onRequestClose={() => onOpenChange(false)}
-          />
+          {open && agentId ? (
+            <AgentToolsPanel
+              agentId={agentId}
+              onCreateSubagent={onCreateSubagent}
+              onConfigure={onConfigure}
+            />
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

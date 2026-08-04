@@ -10,7 +10,11 @@ import {
 
 interface AgentPayload {
   name: string;
-  instance_name: string;
+  instance_name: string | null;
+  agent_type?: AIAgent["agent_type"];
+  parent_agent_id?: string | null;
+  agent_key?: string | null;
+  routing_instruction?: string | null;
   system_prompt: string;
   model: string;
   is_active: boolean;
@@ -35,7 +39,7 @@ function errorMessage(err: unknown, fallback: string) {
   return typeof message === "string" && message.trim() ? message : fallback;
 }
 
-function buildAgentSaveError(err: unknown, instanceName?: string) {
+function buildAgentSaveError(err: unknown, instanceName?: string | null) {
   const detailsRecord = errorDetails(err);
   const code = String(detailsRecord.code ?? "");
   const constraint = String(detailsRecord.constraint ?? "").toLowerCase();
@@ -107,9 +111,10 @@ export function useAgents() {
   }, []);
 
   const findConflictingAgent = useCallback(
-    async (instanceName: string, currentAgentId?: string) =>
+    async (instanceName: string | null, currentAgentId?: string) =>
+      !instanceName ? null :
       agents.find(
-        (agent) => agent.instance_name === instanceName && agent.id !== currentAgentId
+        (agent) => agent.agent_type === "primary" && agent.instance_name === instanceName && agent.id !== currentAgentId
       ) ?? null,
     [agents]
   );
@@ -119,7 +124,9 @@ export function useAgents() {
       try {
         setSaving(true);
 
-        const conflictingAgent = await findConflictingAgent(payload.instance_name, agentId);
+        const conflictingAgent = payload.agent_type === "subagent"
+          ? null
+          : await findConflictingAgent(payload.instance_name, agentId);
         if (conflictingAgent) {
           throw new Error(
             `A instância "${payload.instance_name}" já está vinculada ao agente "${conflictingAgent.name}".`
@@ -131,6 +138,7 @@ export function useAgents() {
           await patchCrmBackend(`/api/ai-agents/${encodeURIComponent(agentId)}`, {
             name: payload.name,
             instanceName: payload.instance_name,
+            routingInstruction: payload.routing_instruction,
             systemPrompt: payload.system_prompt,
             model: payload.model,
             isActive: payload.is_active,
@@ -148,6 +156,10 @@ export function useAgents() {
           await postCrmBackend("/api/ai-agents", {
             name: payload.name,
             instanceName: payload.instance_name,
+            agentType: payload.agent_type ?? "primary",
+            parentAgentId: payload.parent_agent_id,
+            agentKey: payload.agent_key,
+            routingInstruction: payload.routing_instruction,
             systemPrompt: payload.system_prompt,
             model: payload.model,
             isActive: payload.is_active,

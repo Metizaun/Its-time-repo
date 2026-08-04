@@ -74,13 +74,33 @@ export type VisagismCatalogItem = {
   product_code: string;
   recommendation_description: string;
   attributes: Record<string, unknown>;
-  source_url: string;
+  preview_url?: string | null;
+  source_url?: string | null;
   storage_bucket?: string | null;
   storage_path?: string | null;
   mime_type?: string | null;
   file_size?: number | null;
   is_active: boolean;
   display_order: number;
+};
+
+export type VisagismAnalysis = {
+  product_name: string;
+  color: string;
+  shape: string;
+  material: string;
+  style: string;
+  recommended_face_shapes: string[];
+  recommended_personality_traits: string[];
+  recommended_perception: string[];
+  recommended_style_profiles: string[];
+  recommendation_description: string;
+};
+
+export type VisagismAnalysisDraft = {
+  draftId: string;
+  previewUrl: string;
+  analysis: VisagismAnalysis;
 };
 
 export type LensPriceRule = {
@@ -199,10 +219,10 @@ export async function saveVisagismCatalogItem(
   agentId: string,
   input: {
     id?: string;
+    draftId?: string;
     productCode: string;
     recommendationDescription: string;
     attributes?: Record<string, unknown>;
-    sourceUrl: string;
     displayOrder: number;
     isActive: boolean;
   }
@@ -212,6 +232,22 @@ export async function saveVisagismCatalogItem(
     input
   );
   return response.item;
+}
+
+export async function analyzeVisagismCatalogItem(
+  agentId: string,
+  input: {
+    productCode: string;
+    fileName: string;
+    mimeType: string;
+    base64: string;
+  }
+) {
+  const response = await postCrmBackend<{ draft: VisagismAnalysisDraft }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/visagism/analyze`,
+    input
+  );
+  return response.draft;
 }
 
 export async function deactivateVisagismCatalogItem(agentId: string, itemId: string) {
