@@ -52,6 +52,7 @@ import {
   type AgendaPresentedOption,
   type AgendaRequest,
 } from "./agenda-subworkflow.js";
+import { formatCnpj } from "./rb-lead-note.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
@@ -435,7 +436,7 @@ export type NormalizedPrescription = {
   addition: number | null;
 };
 
-type PrescriptionExtraction = NormalizedPrescription & {
+export type PrescriptionExtraction = NormalizedPrescription & {
   distancePd: number | null;
   nearPd: number | null;
   patientName: string | null;
@@ -1017,6 +1018,34 @@ function buildInternalHandoffNote(reason: string, summary: string) {
   return `${INTERNAL_HANDOFF_NOTE_PREFIX}\nMotivo: ${noteReason}\nResumo: ${noteSummary}`;
 }
 
+export function buildExternalForwardingNotification(input: {
+  agentName: string;
+  destinationName: string;
+  leadName: string | null;
+  leadPhone: string | null;
+  reason: string;
+  summary: string;
+}) {
+  return [
+    "Novo lead encaminhado",
+    `Origem: ${input.agentName.trim() || "Agente IA"}`,
+    `Destino: ${input.destinationName.trim() || "Contato externo"}`,
+    input.leadName?.trim() ? `Lead: ${input.leadName.trim()}` : null,
+    input.leadPhone?.trim() ? `WhatsApp do lead: ${input.leadPhone.trim()}` : null,
+    `Motivo: ${input.reason.trim() || "Condicao de encaminhamento atendida pela IA."}`,
+    `Resumo: ${truncateText(input.summary.trim() || "Resumo indisponivel.", 1200)}`,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+export function shouldFreezeAfterHandoff(
+  shouldPause: boolean,
+  handoff: Pick<HandoffExecutionResult, "triggered" | "mode">,
+) {
+  return handoff.mode !== "external_notification" && (shouldPause || handoff.triggered);
+}
+
 function deriveChatSystemKind(message: Pick<MessageRow, "source_type" | "content">): ChatSystemKind | null {
   if (message.source_type !== "system") {
     return null;
@@ -1525,6 +1554,26 @@ export function getPrescriptionValidationErrors(prescription: NormalizedPrescrip
     if (axis !== null && (!Number.isInteger(axis) || axis < 0 || axis > 180)) errors.push(`${key}_invalid`);
   }
   return errors;
+}
+
+// Erros que impedem qualquer leitura util do receituario (nao ha dado nenhum para o olho).
+// Erros "leves" (ex.: eixo nao informado) nao bloqueiam a leitura do grau, apenas impedem
+// a cotacao automatica de preco (matchLensPriceRule permanece estrita) e geram um aviso
+// para o atendimento confirmar o dado antes de fechar o pedido.
+const PRESCRIPTION_BLOCKING_ERROR_CODES = new Set(["od_missing", "oe_missing"]);
+export const PRESCRIPTION_MIN_CONFIDENCE = 0.5;
+
+export function evaluatePrescriptionReadiness(
+  extraction: PrescriptionExtraction,
+  minConfidence: number = PRESCRIPTION_MIN_CONFIDENCE
+) {
+  if (!extraction.isPrescription) {
+    return { errors: ["not_a_prescription"], blockingErrors: ["not_a_prescription"], valid: false };
+  }
+  const errors = getPrescriptionValidationErrors(extraction);
+  const blockingErrors = errors.filter((code) => PRESCRIPTION_BLOCKING_ERROR_CODES.has(code));
+  const valid = blockingErrors.length === 0 && extraction.confidence >= minConfidence;
+  return { errors, blockingErrors, valid };
 }
 
 export function matchLensPriceRule(
@@ -9302,6 +9351,180 @@ export class AgentManager {
     };
   }
 
+  private async notifyExternalForwarding(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    destination: {
+      id: string;
+      display_name: string;
+      target_phone: string | null;
+    };
+    reason: string;
+    summary: string;
+    sourceMessageId: string | null;
+  }): Promise<HandoffExecutionResult> {
+    const targetPhone = params.destination.target_phone;
+    if (!targetPhone) {
+      return {
+        triggered: false,
+        mode: "external_notification",
+        targetPhone: null,
+        targetAgentId: null,
+        reason: params.reason,
+        notification: "O destino externo nao possui WhatsApp configurado.",
+      };
+    }
+
+    const notification = buildExternalForwardingNotification({
+      agentName: params.agent.name,
+      destinationName: params.destination.display_name,
+      leadName: params.lead.name,
+      leadPhone: params.lead.contact_phone,
+      reason: params.reason,
+      summary: params.summary,
+    });
+    const idempotencyKey = params.sourceMessageId
+      ? `external-forwarding:${params.sourceMessageId}:${params.destination.id}`
+      : null;
+    let routingEventId: string | null = null;
+
+    if (idempotencyKey) {
+      const { data: existingEvent, error: existingError } = await this.serviceClient
+        .from("routing_events")
+        .select("id, status")
+        .eq("aces_id", params.agent.aces_id)
+        .eq("idempotency_key", idempotencyKey)
+        .maybeSingle();
+      if (existingError) {
+        console.error("[crm-ai] Falha ao verificar duplicidade do encaminhamento externo:", existingError);
+      } else if (existingEvent?.status === "completed" || existingEvent?.status === "pending") {
+        return {
+          triggered: true,
+          mode: "external_notification",
+          targetPhone,
+          targetAgentId: null,
+          reason: params.reason,
+          notification: "O contato externo ja foi notificado para esta mensagem.",
+        };
+      } else if (existingEvent?.id) {
+        routingEventId = existingEvent.id;
+        await this.serviceClient
+          .from("routing_events")
+          .update({ status: "pending", error_message: null, completed_at: null })
+          .eq("id", routingEventId)
+          .eq("aces_id", params.agent.aces_id);
+      }
+    }
+
+    if (!routingEventId) {
+      const { data: routingEvent, error: routingEventError } = await this.serviceClient
+        .from("routing_events")
+        .insert({
+          aces_id: params.agent.aces_id,
+          lead_id: params.lead.id,
+          source_agent_id: params.agent.id,
+          forwarding_destination_id: params.destination.id,
+          empresa_id: null,
+          target_agent_id: null,
+          destination_mode: "external_notification",
+          status: "pending",
+          reason: params.reason,
+          seller_ids_snapshot: [],
+          context_snapshot: {
+            destination_name: params.destination.display_name,
+            target_phone: targetPhone,
+            summary: truncateText(params.summary, 1200),
+          },
+          idempotency_key: idempotencyKey,
+        })
+        .select("id")
+        .single();
+      if (routingEventError?.code === "23505") {
+        return {
+          triggered: true,
+          mode: "external_notification",
+          targetPhone,
+          targetAgentId: null,
+          reason: params.reason,
+          notification: "O contato externo ja esta sendo notificado para esta mensagem.",
+        };
+      }
+      if (routingEventError) {
+        console.error("[crm-ai] Falha ao registrar encaminhamento externo pendente:", routingEventError);
+      } else {
+        routingEventId = routingEvent.id;
+      }
+    }
+
+    try {
+      await this.sendWhatsAppMessage(params.agent.instance_name, targetPhone, notification, {
+        acesId: params.agent.aces_id,
+        leadId: params.lead.id,
+        agentId: params.agent.id,
+        sourceType: "external_forwarding",
+      });
+      if (routingEventId) {
+        await this.serviceClient
+          .from("routing_events")
+          .update({ status: "completed", completed_at: new Date().toISOString(), error_message: null })
+          .eq("id", routingEventId)
+          .eq("aces_id", params.agent.aces_id);
+      }
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "lead",
+        aggregateId: params.lead.id,
+        eventType: "tool.forwarding.external.succeeded",
+        payload: {
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          forwarding_destination_id: params.destination.id,
+          tool_key: "forwarding",
+          status: "succeeded",
+        },
+      });
+      return {
+        triggered: true,
+        mode: "external_notification",
+        targetPhone,
+        targetAgentId: null,
+        reason: params.reason,
+        notification,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Falha ao enviar encaminhamento externo";
+      if (routingEventId) {
+        await this.serviceClient
+          .from("routing_events")
+          .update({ status: "failed", error_message: truncateText(errorMessage, 500) })
+          .eq("id", routingEventId)
+          .eq("aces_id", params.agent.aces_id);
+      }
+      await this.enqueueBiEvent({
+        acesId: params.agent.aces_id,
+        aggregateType: "lead",
+        aggregateId: params.lead.id,
+        eventType: "tool.forwarding.external.failed",
+        payload: {
+          lead_id: params.lead.id,
+          agent_id: params.agent.id,
+          forwarding_destination_id: params.destination.id,
+          tool_key: "forwarding",
+          status: "failed",
+          error: truncateText(errorMessage, 500),
+        },
+      }).catch(() => undefined);
+      return {
+        triggered: false,
+        mode: "external_notification",
+        targetPhone,
+        targetAgentId: null,
+        reason: params.reason,
+        notification: errorMessage,
+      };
+    }
+  }
+
   private async triggerHandoff(
     agent: AgentRow,
     lead: LeadRow,
@@ -9361,6 +9584,17 @@ export class AgentManager {
         sourceMessageId,
       });
       if (companyRouting) return companyRouting;
+    }
+
+    if (destination?.mode === "external_notification") {
+      return this.notifyExternalForwarding({
+        agent,
+        lead,
+        destination,
+        reason,
+        summary,
+        sourceMessageId,
+      });
     }
 
     await this.updateLeadInteractionMode(agent.aces_id, lead.id, "human");
@@ -10278,6 +10512,7 @@ export class AgentManager {
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
       "handoff_reason deve explicar objetivamente por que o handoff foi acionado. Se nao houver handoff, deixe handoff_reason vazio.",
       "forwarding_destination_key deve ser uma chave exata dos destinos disponiveis somente quando um destino especifico corresponder claramente ao contexto.",
+      "Quando o destino escolhido tiver mode=external_notification, use should_handoff=true e should_pause=false: esse modo apenas notifica o contato externo e a IA continua atendendo o lead.",
       "Nunca invente uma chave. Se houver handoff geral sem destino especifico, use null.",
       "Quando uma empresa ou cidade ja estiver clara na conversa, compare diretamente com os destinos relacionados sem pedir novamente.",
       "subagent_key deve ser null ou uma chave exata da lista de subagentes disponiveis. Se o assunto corresponder claramente a um especialista, selecione-o; nunca invente chaves.",
@@ -10379,6 +10614,16 @@ export class AgentManager {
       const pixKey = String(info.pix_key || "");
       const dueDateStr = info.next_due_date ? String(info.next_due_date) : "";
 
+      const storeEmpId = String(info.store_emp_id || "").trim();
+      const storeName = String(info.store_name || "").trim();
+      const storeLabel = storeName || (storeEmpId ? `Loja ${storeEmpId}` : "");
+      const storeCnpj = String(info.store_emp_cpf_cnpj || "").trim();
+      const storeRegion = [String(info.store_city || "").trim(), String(info.store_state || "").trim()]
+        .filter(Boolean)
+        .join("/");
+      const storeLocation = [String(info.store_address || "").trim(), storeRegion].filter(Boolean).join(" - ");
+      const storePhone = String(info.store_phone || "").trim();
+
       let dateText = "";
       if (dueDateStr) {
         const dueDate = new Date(`${dueDateStr}T00:00:00`);
@@ -10394,11 +10639,24 @@ export class AgentManager {
         }
       }
 
-      return `\nDados de Cobrança (Registro Base):\n` +
-        `- Saldo Devedor Total: R$ ${totalAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
-        `- Quantidade de Títulos: ${titlesCount}\n` +
-        `- Situação do Vencimento: ${dateText}\n` +
-        `- Chave PIX da Empresa Devedora: ${pixKey}\n`;
+      return [
+        "",
+        "Dados de Cobrança (Registro Base):",
+        storeLabel ? `- Loja/Empresa Credora: ${storeLabel}` : null,
+        storeCnpj ? `- CNPJ da Loja: ${formatCnpj(storeCnpj)}` : null,
+        storeLocation ? `- Endereço da Loja: ${storeLocation}` : null,
+        storePhone ? `- Telefone da Loja: ${storePhone}` : null,
+        `- Saldo Devedor Total: R$ ${totalAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        `- Quantidade de Títulos: ${titlesCount}`,
+        `- Situação do Vencimento: ${dateText}`,
+        `- Chave PIX da Empresa Devedora: ${pixKey}`,
+        storeLabel
+          ? "- Quando o lead perguntar de qual loja ou empresa é a cobrança, responda com o nome e o endereço acima. Nunca diga que possui apenas o CNPJ."
+          : null,
+        "",
+      ]
+        .filter((line) => line !== null)
+        .join("\n");
     } catch (e) {
       console.error("[crm-ai] Erro ao obter contexto de cobranca do lead:", e);
       return "";
@@ -10967,8 +11225,10 @@ export class AgentManager {
     extraction: PrescriptionExtraction,
     rule: LensPriceRule | null,
     status: "parsed" | "needs_new_image" | "failed",
-    handoffRequired: boolean
+    handoffRequired: boolean,
+    validationErrors: string[] = []
   ) {
+    const axisUncertain = validationErrors.includes("od_axis_missing") || validationErrors.includes("oe_axis_missing");
     return [
       "[ANALISE_DE_RECEITUARIO]",
       `status=${status}`,
@@ -10980,6 +11240,9 @@ export class AgentManager {
       extraction.observations ? `observacoes=${truncateText(extraction.observations, 300)}` : null,
       handoffRequired ? "handoff_humano_recomendado=true" : null,
       status !== "parsed" ? "instrucao=solicitar uma nova foto nitida e completa do receituario" : null,
+      status === "parsed" && axisUncertain
+        ? "instrucao=eixo do astigmatismo nao ficou nitido; informe o grau esferico ao cliente e peca para a equipe confirmar o eixo antes de fechar o pedido"
+        : null,
       "[/ANALISE_DE_RECEITUARIO]",
     ].filter((line): line is string => Boolean(line)).join("\n");
   }
@@ -11078,8 +11341,11 @@ export class AgentManager {
       const prompt = [
         "Voce e um worker optico multimodal. Analise esta imagem uma unica vez e retorne somente JSON valido.",
         "Classifique kind como prescription, face, product, document ou other e inclua evidence como lista curta.",
+        "A foto pode estar em condicoes ruins: girada, de lado, de ponta cabeca, com sombra, dobra ou reflexo. Antes de classificar, considere a imagem em todas as rotacoes possiveis e faca o possivel para ler mesmo com qualidade imperfeita.",
+        "Se a imagem contiver uma receita/receituario oftalmologico (impresso ou manuscrito), classifique kind=prescription e extraia TODOS os dados presentes, mesmo que parciais. Nao classifique como other ou document apenas por causa de baixa qualidade, rotacao ou letra manuscrita: tente ler antes de desistir.",
         "Se kind=prescription, preencha prescription com confidence, od_sphere, od_cylinder, od_axis, oe_sphere, oe_cylinder, oe_axis, addition, distance_pd, near_pd, patient_name, prescriber_name, prescriber_registration, prescription_date, expires_at e observations.",
-        "Nao invente valores ilegíveis. Use null. Normalize graus com sinal e ponto decimal, eixos entre 0 e 180 e datas YYYY-MM-DD.",
+        "Nao invente valores ilegiveis: use null apenas no campo especifico que nao deu para ler, mas preencha normalmente todos os demais campos legiveis da mesma receita. Normalize graus com sinal e ponto decimal, eixos entre 0 e 180 e datas YYYY-MM-DD.",
+        "Se a imagem estiver rotacionada, cortada ou com algum trecho ilegivel, registre isso em observations (ex: 'imagem rotacionada, eixo OE ilegivel') em vez de zerar a extracao inteira.",
         "Se kind=face, preencha face com face_shape, summary, hair, skin_tone e visual_features. Nao diagnostique nem infira atributos sensiveis.",
         "Para campos que nao pertencem ao kind identificado, use null.",
       ].join("\n");
@@ -11109,14 +11375,15 @@ export class AgentManager {
         return analysis;
       }
       const extraction = analysis.prescription;
-      const validationErrors = extraction.isPrescription
-        ? getPrescriptionValidationErrors(extraction)
-        : ["not_a_prescription"];
-      const valid = validationErrors.length === 0 && extraction.confidence >= 0.75;
+      const readiness = evaluatePrescriptionReadiness(extraction);
+      const validationErrors = readiness.errors;
+      const valid = readiness.valid;
       const status = valid ? "parsed" : "needs_new_image";
       const { data: ruleRows, error: rulesError } = await this.serviceClient.from("lens_price_rules")
         .select("*").eq("aces_id", agent.aces_id).eq("agent_tool_id", binding.id).eq("is_active", true);
       if (rulesError) throw new HttpError(500, "Nao foi possivel carregar regras de lentes", rulesError);
+      // matchLensPriceRule permanece estrita (usa getPrescriptionValidationErrors sem relaxamento),
+      // entao so cota preco quando od/oe/eixo estiverem completos, mesmo com status=parsed.
       const matchedRule = valid
         ? matchLensPriceRule(extraction, (ruleRows ?? []).map((row: Record<string, unknown>) => this.mapLensPriceRule(row)))
         : null;
@@ -11124,7 +11391,7 @@ export class AgentManager {
         .select("id", { count: "exact", head: true }).eq("aces_id", agent.aces_id).eq("lead_id", lead.id)
         .eq("tool_key", "prescription_analyst").eq("status", "waiting_input");
       const handoffRequired = !valid && Number(priorFailures ?? 0) >= 1;
-      const agentContext = this.formatPrescriptionContext(extraction, matchedRule, status, handoffRequired);
+      const agentContext = this.formatPrescriptionContext(extraction, matchedRule, status, handoffRequired, validationErrors);
       const outputSnapshot = {
         occurrence_key: occurrenceKey,
         extraction,
@@ -11615,7 +11882,12 @@ export class AgentManager {
       }
 
       let handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
-      if (subagentSession && result.parsed.should_handoff && !handoffResult.triggered) {
+      if (
+        subagentSession &&
+        result.parsed.should_handoff &&
+        !handoffResult.triggered &&
+        handoffResult.mode !== "external_notification"
+      ) {
         handoffResult = await this.forceInternalAgentHumanHandoff({
           agent,
           lead,
@@ -11625,7 +11897,7 @@ export class AgentManager {
       }
       let returnedToPrimary = false;
       if (subagentSession) {
-        if (result.parsed.should_handoff) {
+        if (result.parsed.should_handoff && handoffResult.mode !== "external_notification") {
           await this.finishSubagentSession({
             sessionId: subagentSession.id,
             status: handoffResult.triggered ? "completed" : "failed",
@@ -11652,10 +11924,10 @@ export class AgentManager {
           returnedToPrimary = true;
         }
       }
-      if (handoffResult.triggered) {
+      if (handoffResult.triggered && handoffResult.mode !== "external_notification") {
         await this.saveAgendaContext(agent.id, lead.id, null);
       }
-      const shouldFreezeLead = result.parsed.should_pause || handoffResult.triggered;
+      const shouldFreezeLead = shouldFreezeAfterHandoff(result.parsed.should_pause, handoffResult);
 
       if (shouldFreezeLead) {
         freezeUntil = await this.freezeLead(

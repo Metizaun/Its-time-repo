@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 3,
+  "clientKey": "otica-lider",
+  "parentAgent": {
+    "name": "Bruna - Otica Lider",
+    "templateKey": "optics-consultant",
+    "systemPromptFile": "agent-principal.md",
+    "model": "gemini-3.1-flash-lite",
+    "temperature": 0.2,
+    "personalityProfile": "consultative",
+    "handoffPrompt": "Encaminhe ao atendimento humano quando houver intencao de agendamento, negociacao, financeiro, status de pedido, reserva ou confirmacao de estoque, fechamento de orcamento, reclamacao, duvida clinica fora do escopo do prompt ou solicitacao expressa de uma pessoa.",
+    "ragEnabled": false,
+    "active": false
+  },
+  "companies": [
+    {
+      "cnpj": "05070272000181",
+      "legalName": "Otica Condah Ltda",
+      "name": "Otica Lider - Erechim",
+      "address": "Av. Mauricio Cardoso, 189 - Centro",
+      "city": "Erechim",
+      "state": "RS",
+      "postalCode": "99700426",
+      "phone": "(54) 3321-8076",
+      "email": null,
+      "timezone": "America/Sao_Paulo",
+      "active": true
+    }
+  ],
+  "subagents": [],
+  "calendar": {
+    "timezone": "America/Sao_Paulo",
+    "aiBookingEnabled": false
+  }
+}

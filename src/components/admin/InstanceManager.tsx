@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -175,6 +175,14 @@ export function InstanceManager() {
   const [deleteTransferTarget, setDeleteTransferTarget] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
+  // Guarda o ultimo status/setupStatus verificado pelo polling do QR code,
+  // para so recarregar a lista completa quando algo de fato mudar (evita
+  // ficar re-buscando tudo a cada tick so para constatar "continua igual").
+  const lastPolledStatusRef = useRef<{
+    status: "connected" | "disconnected" | null;
+    setupStatus: AdminInstanceSetupStatus | null;
+  }>({ status: null, setupStatus: null });
+
   const stateBadge = useMemo(() => {
     switch (connectionState) {
       case "connected":
@@ -241,11 +249,15 @@ export function InstanceManager() {
     return token;
   }, []);
 
-  const loadInstances = useCallback(async () => {
+  const loadInstances = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+
     try {
-      setLoading(true);
-      setError(null);
-      setMetaError(null);
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+        setMetaError(null);
+      }
       const accessToken = await getAccessToken();
       const result = await listAdminInstances({ accessToken });
       setInstances(result.instances ?? []);
@@ -263,16 +275,30 @@ export function InstanceManager() {
         );
         setRbConnections(rbResult.connections ?? []);
       } catch (metaErr: any) {
-        setMetaChannels({});
-        setGupshupChannels({});
-        setRbConnections([]);
-        setMetaError(metaErr?.message ?? "Nao foi possivel carregar canais Meta");
+        if (silent) {
+          // Refresh em segundo plano: mantem os dados ja carregados na tela
+          // em vez de limpar os canais por causa de uma falha passageira.
+          console.error("Falha ao atualizar canais (refresh em segundo plano):", metaErr);
+        } else {
+          setMetaChannels({});
+          setGupshupChannels({});
+          setRbConnections([]);
+          setMetaError(metaErr?.message ?? "Nao foi possivel carregar canais Meta");
+        }
       }
     } catch (err: any) {
-      setError(err?.message ?? "Nao foi possivel carregar as instancias");
-      setInstances([]);
+      if (silent) {
+        // Idem: nao apaga a lista de instancias nem mostra o banner de erro
+        // por causa de uma falha passageira durante um refresh silencioso.
+        console.error("Falha ao atualizar instancias (refresh em segundo plano):", err);
+      } else {
+        setError(err?.message ?? "Nao foi possivel carregar as instancias");
+        setInstances([]);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [getAccessToken]);
 
@@ -293,7 +319,7 @@ export function InstanceManager() {
 
       if (error) throw error;
       toast.success("Cor atualizada com sucesso");
-      await loadInstances();
+      await loadInstances({ silent: true });
     } catch (err: any) {
       toast.error("Erro ao salvar cor", {
         description: err?.message ?? "Erro desconhecido",
@@ -344,7 +370,7 @@ export function InstanceManager() {
       });
 
       toast.success("Canal Meta salvo");
-      await loadInstances();
+      await loadInstances({ silent: true });
       setMetaDialogOpen(false);
     } catch (err: any) {
       toast.error("Falha ao salvar canal Meta", { description: err?.message });
@@ -365,7 +391,7 @@ export function InstanceManager() {
         [instanceName]: templatesResult.templates ?? [],
       }));
 
-      await loadInstances();
+      await loadInstances({ silent: true });
       toast.success(`Templates sincronizados: ${syncResult.synced}`);
     } catch (err: any) {
       toast.error("Falha ao sincronizar templates Meta", { description: err?.message });
@@ -400,7 +426,17 @@ export function InstanceManager() {
         toast.success("Instancia conectada");
       }
 
-      await loadInstances();
+      const previousPoll = lastPolledStatusRef.current;
+      const pollChanged =
+        previousPoll.status !== status || previousPoll.setupStatus !== result.setupStatus;
+      lastPolledStatusRef.current = { status, setupStatus: result.setupStatus };
+
+      if (pollChanged) {
+        // So recarrega a lista completa (instancias + Meta + Gupshup + RB)
+        // quando o status realmente mudou. Evita reconstruir a tela inteira
+        // a cada 5s so para confirmar "ainda aguardando o scan".
+        await loadInstances({ silent: true });
+      }
     } catch (err: any) {
       setConnectionState("error");
       setConnectionMessage(err?.message || "Falha ao consultar status da instancia.");
@@ -459,7 +495,7 @@ export function InstanceManager() {
           ? "Webhook externo vinculado"
           : "Instancia registrada no backend"
       );
-      await loadInstances();
+      await loadInstances({ silent: true });
       if (result.connectionMode === "local" && result.status !== "connected") {
         await checkCurrentInstanceStatus(result.instanceName);
       }
@@ -493,7 +529,7 @@ export function InstanceManager() {
       setConnectionState("disconnected");
       setCurrentSetupStatus(result.setupStatus);
       setConnectionMessage("Novo QR code gerado. Escaneie para concluir.");
-      await loadInstances();
+      await loadInstances({ silent: true });
     } catch (err: any) {
       setConnectionState("error");
       setConnectionMessage(err?.message || "Nao foi possivel reconectar a instancia.");
@@ -518,7 +554,7 @@ export function InstanceManager() {
       setConnectionState("disconnected");
       setCurrentSetupStatus(result.setupStatus);
       setConnectionMessage("QR code atualizado.");
-      await loadInstances();
+      await loadInstances({ silent: true });
     } catch (err: any) {
       setConnectionState("error");
       setConnectionMessage(err?.message || "Nao foi possivel atualizar o QR code.");
@@ -533,7 +569,7 @@ export function InstanceManager() {
       setBusyAction(`sync:${instanceName}`);
       const accessToken = await getAccessToken();
       const result = await syncInstanceStatus({ accessToken, instanceName });
-      await loadInstances();
+      await loadInstances({ silent: true });
 
       if (createdInstanceName === instanceName) {
         setConnectionState(result.status === "connected" ? "connected" : "disconnected");
@@ -581,7 +617,7 @@ export function InstanceManager() {
           gupshupChannel: result.channel as AdminGupshupChannel,
         },
       }));
-      await loadInstances();
+      await loadInstances({ silent: true });
       toast.success("Conexao Gupshup salva");
       resetCreateDialog();
     } catch (err: any) {
@@ -618,7 +654,7 @@ export function InstanceManager() {
         rbEmpresaIds: empresaIds,
         status: rbForm.active ? "active" : "inactive",
       });
-      await loadInstances();
+      await loadInstances({ silent: true });
       toast.success("Conexão Via RB salva");
       resetCreateDialog();
     } catch (err: unknown) {
@@ -650,7 +686,7 @@ export function InstanceManager() {
       setBusyAction(`delete-rb:${connection.id}`);
       const accessToken = await getAccessToken();
       await deleteRbConnection({ accessToken, connectionId: connection.id });
-      await loadInstances();
+      await loadInstances({ silent: true });
       toast.success("Conexão Via RB excluída");
     } catch (err: unknown) {
       toast.error("Falha ao excluir conexão Via RB", {
@@ -669,7 +705,7 @@ export function InstanceManager() {
       setBusyAction(`disconnect:${instanceName}`);
       const accessToken = await getAccessToken();
       const result = await disconnectInstance({ accessToken, instanceName });
-      await loadInstances();
+      await loadInstances({ silent: true });
 
       if (result.warning) {
         toast.warning(result.warning);
@@ -714,7 +750,7 @@ export function InstanceManager() {
         transferToInstanceName: deleteLeadAction === "transfer" ? deleteTransferTarget : null,
         confirmationText: deleteLeadAction === "delete" ? deleteConfirmation : null,
       });
-      await loadInstances();
+      await loadInstances({ silent: true });
       resetDeleteDialog();
 
       if (result.warning) {
@@ -786,6 +822,13 @@ export function InstanceManager() {
       toast.error("Nao foi possivel copiar o endpoint");
     }
   };
+
+  useEffect(() => {
+    // Nova sessao de setup (instancia diferente ou dialogo reaberto): reseta
+    // a referencia de comparacao do polling para nao herdar o status da
+    // sessao anterior.
+    lastPolledStatusRef.current = { status: null, setupStatus: null };
+  }, [createdInstanceName]);
 
   useEffect(() => {
     if (!createDialogOpen || !createdInstanceName || connectionState === "connected") {
