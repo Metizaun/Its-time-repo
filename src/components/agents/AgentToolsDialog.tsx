@@ -20,13 +20,13 @@ export function AgentToolsDialog({
 }: AgentToolsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Ferramentas do agente</DialogTitle>
           <DialogDescription>Ative, desative e escolha a capacidade que deseja configurar.</DialogDescription>
         </DialogHeader>
 
-        <div className="min-w-0 overflow-y-auto pr-1">
+        <div className="min-w-0 min-h-0 flex-1 overflow-y-auto pr-1">
           {open && agentId ? (
             <AgentToolsPanel
               agentId={agentId}

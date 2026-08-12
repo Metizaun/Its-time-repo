@@ -303,7 +303,8 @@ export async function saveForwardingDestination(
   input: {
     destinationKey: string;
     displayName: string;
-    mode: "agent" | "internal_company";
+    mode: "external_notification" | "agent" | "internal_company";
+    targetPhone?: string | null;
     targetAgentId?: string | null;
     empresaId?: string | null;
     sellerIds?: string[];

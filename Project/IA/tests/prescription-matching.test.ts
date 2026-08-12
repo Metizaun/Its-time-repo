@@ -1,7 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getPrescriptionValidationErrors, matchLensPriceRule, type LensPriceRule } from "../sdr-agent-gemini.js";
+import {
+  evaluatePrescriptionReadiness,
+  getPrescriptionValidationErrors,
+  matchLensPriceRule,
+  type LensPriceRule,
+  type PrescriptionExtraction,
+} from "../sdr-agent-gemini.js";
+
+function buildExtraction(overrides: Partial<PrescriptionExtraction>): PrescriptionExtraction {
+  return {
+    odSphere: null, odCylinder: null, odAxis: null,
+    oeSphere: null, oeCylinder: null, oeAxis: null,
+    addition: null, distancePd: null, nearPd: null,
+    patientName: null, prescriberName: null, prescriberRegistration: null,
+    prescriptionDate: null, expiresAt: null, observations: null,
+    confidence: 0.9, isPrescription: true,
+    ...overrides,
+  };
+}
 
 const baseRule: LensPriceRule = {
   id: "basic", displayName: "Basica", lensCategory: "single_vision",
@@ -31,6 +49,39 @@ test("overlapping ranges are resolved by lowest priority", () => {
     oeSphere: 0, oeCylinder: 0, oeAxis: null, addition: null,
   }, [baseRule, preferred]);
   assert.equal(match?.id, "preferred");
+});
+
+test("receituario com eixo faltando fica valido (leitura de grau), mas nao cota preco", () => {
+  const extraction = buildExtraction({
+    odSphere: -1, odCylinder: -0.5, odAxis: null,
+    oeSphere: -1, oeCylinder: 0, oeAxis: null,
+    confidence: 0.6,
+  });
+  const readiness = evaluatePrescriptionReadiness(extraction);
+  assert.equal(readiness.valid, true, "eixo faltando nao deve bloquear a leitura do grau");
+  assert.deepEqual(readiness.blockingErrors, []);
+  assert.ok(readiness.errors.includes("od_axis_missing"));
+  assert.equal(matchLensPriceRule(extraction, [baseRule]), null, "sem eixo nao deve cotar preco");
+});
+
+test("receituario sem nenhum dado de um dos olhos continua bloqueado", () => {
+  const extraction = buildExtraction({
+    odSphere: null, odCylinder: null, odAxis: null,
+    oeSphere: -1, oeCylinder: 0, oeAxis: null,
+    confidence: 0.9,
+  });
+  const readiness = evaluatePrescriptionReadiness(extraction);
+  assert.equal(readiness.valid, false);
+  assert.deepEqual(readiness.blockingErrors, ["od_missing"]);
+});
+
+test("confianca abaixo do minimo bloqueia mesmo com dados completos", () => {
+  const extraction = buildExtraction({
+    odSphere: -1, odCylinder: 0, odAxis: null,
+    oeSphere: -1, oeCylinder: 0, oeAxis: null,
+    confidence: 0.2,
+  });
+  assert.equal(evaluatePrescriptionReadiness(extraction).valid, false);
 });
 
 test("multifocal requires a matching addition range", () => {

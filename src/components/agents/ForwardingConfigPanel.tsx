@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, Building2, Loader2, Pencil, Plus, Route, Trash2, Users, X } from "lucide-react";
+import { Bot, Building2, Loader2, MessageCircle, Pencil, Plus, Route, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import {
   type ForwardingSetup,
 } from "@/services/agentToolsService";
 
-type DestinationMode = "internal_company" | "agent";
+type DestinationMode = "external_notification" | "internal_company" | "agent";
 
 type ForwardingConfigPanelProps = {
   agentId: string;
@@ -33,8 +33,14 @@ const EMPTY_SETUP: ForwardingSetup = {
   agents: [],
 };
 
+function normalizedPhoneDigits(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  return digits.length <= 11 ? `55${digits}` : digits;
+}
+
 function destinationKey(mode: DestinationMode, targetId: string) {
-  return `${mode === "internal_company" ? "empresa" : "agente"}-${targetId}`;
+  const prefix = mode === "internal_company" ? "empresa" : mode === "agent" ? "agente" : "externo";
+  return `${prefix}-${mode === "external_notification" ? normalizedPhoneDigits(targetId) : targetId}`;
 }
 
 export function ForwardingConfigPanel({ agentId, onClose, onChanged }: ForwardingConfigPanelProps) {
@@ -45,9 +51,11 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
   const [mode, setMode] = useState<DestinationMode>("internal_company");
   const [empresaId, setEmpresaId] = useState("");
   const [targetAgentId, setTargetAgentId] = useState("");
+  const [targetPhone, setTargetPhone] = useState("");
   const [sellerIds, setSellerIds] = useState<string[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [instruction, setInstruction] = useState("");
+  const [editingDestinationKey, setEditingDestinationKey] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -94,9 +102,11 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
     setMode("internal_company");
     setEmpresaId("");
     setTargetAgentId("");
+    setTargetPhone("");
     setSellerIds([]);
     setDisplayName("");
     setInstruction("");
+    setEditingDestinationKey("");
   };
 
   const selectCompany = (companyId: string) => {
@@ -122,13 +132,15 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
   };
 
   const editDestination = (destination: ForwardingDestination) => {
-    if (destination.mode === "external_notification") return;
+    if (destination.destination_key === "legacy-handoff") return;
     setMode(destination.mode);
     setEmpresaId(destination.empresa_id ?? "");
     setTargetAgentId(destination.target_agent_id ?? "");
+    setTargetPhone(destination.target_phone ?? "");
     setSellerIds(destination.seller_ids ?? []);
     setDisplayName(destination.display_name);
     setInstruction(destination.context_instruction);
+    setEditingDestinationKey(destination.destination_key);
     setActiveTab("form");
   };
 
@@ -138,9 +150,14 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
   };
 
   const submit = async () => {
-    const targetId = mode === "internal_company" ? empresaId : targetAgentId;
+    const targetId = mode === "internal_company" ? empresaId : mode === "agent" ? targetAgentId : targetPhone;
     if (!targetId || !displayName.trim() || !instruction.trim()) {
       toast.error("Preencha o destino e a orientacao de encaminhamento.");
+      return;
+    }
+    const phoneDigits = targetPhone.replace(/\D/g, "");
+    if (mode === "external_notification" && (phoneDigits.length < 10 || phoneDigits.length > 15)) {
+      toast.error("Informe um numero de WhatsApp valido, com DDD.");
       return;
     }
     if (mode === "internal_company" && sellerIds.length === 0) {
@@ -151,9 +168,10 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
     try {
       setSaving(true);
       await saveForwardingDestination(agentId, {
-        destinationKey: destinationKey(mode, targetId),
+        destinationKey: editingDestinationKey || destinationKey(mode, targetId),
         displayName: displayName.trim(),
         mode,
+        targetPhone: mode === "external_notification" ? targetPhone.trim() : null,
         empresaId: mode === "internal_company" ? empresaId : null,
         sellerIds: mode === "internal_company" ? sellerIds : [],
         targetAgentId: mode === "agent" ? targetAgentId : null,
@@ -195,7 +213,7 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
             Destinos de encaminhamento
           </div>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--color-text-secondary)]">
-            A IA escolhe o destino pelo contexto. Para empresas, o atendimento entra na fila compartilhada dos vendedores selecionados; para outra IA, a instancia do agente de destino assume a conversa.
+            A IA escolhe o destino pelo contexto. O encaminhamento externo apenas notifica o WhatsApp informado e mantem a IA ativa na conversa.
           </p>
         </div>
         <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Fechar configuracao">
@@ -242,6 +260,7 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
                 <SelectContent>
                   <SelectItem value="internal_company">Equipe de uma empresa</SelectItem>
                   <SelectItem value="agent">Outra IA interna</SelectItem>
+                  <SelectItem value="external_notification">Encaminhamento externo</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -287,7 +306,7 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
                   </div>
                 ) : null}
               </>
-            ) : (
+            ) : mode === "agent" ? (
               <div className="space-y-2">
                 <Label>IA e instancia de destino</Label>
                 <Select value={targetAgentId} onValueChange={selectAgent}>
@@ -300,6 +319,22 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="forwarding-phone">WhatsApp de destino</Label>
+                <Input
+                  id="forwarding-phone"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={targetPhone}
+                  onChange={(event) => setTargetPhone(event.target.value)}
+                  placeholder="Ex.: 55 11 99999-9999"
+                />
+                <p className="text-xs text-[var(--color-text-secondary)]">
+                  Este contato recebera uma notificacao; a IA continuara atendendo o lead.
+                </p>
               </div>
             )}
 
@@ -342,12 +377,17 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
               <div className="rounded-[var(--radius-xl)] border border-dashed border-[var(--color-border-medium)] p-5 text-center">
                 <Route className="mx-auto h-5 w-5 text-[var(--color-text-muted)]" />
                 <p className="mt-2 text-sm font-medium text-[var(--color-text-primary)]">Nenhum destino ativo</p>
-                <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Cadastre uma empresa ou outra IA para liberar a Tool.</p>
+                <p className="mt-1 text-xs text-[var(--color-text-secondary)]">Cadastre uma empresa, outra IA ou um WhatsApp externo para liberar a Tool.</p>
               </div>
             ) : setup.destinations.filter((destination) => destination.is_active).map((destination) => {
               const company = destination.empresa_id ? companiesById.get(destination.empresa_id) : null;
               const target = destination.target_agent_id ? agentsById.get(destination.target_agent_id) : null;
-              const DestinationIcon = destination.mode === "internal_company" ? Building2 : Bot;
+              const isLegacyHandoff = destination.destination_key === "legacy-handoff";
+              const DestinationIcon = destination.mode === "internal_company"
+                ? Building2
+                : destination.mode === "external_notification"
+                  ? MessageCircle
+                  : Bot;
               return (
                 <article key={destination.id} className="rounded-[var(--radius-lg)] border border-[var(--color-border-subtle)] p-3">
                   <div className="flex items-start gap-3">
@@ -361,10 +401,12 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
                           ? `${company.name} - ${destination.seller_ids.length} vendedor(es)`
                           : target
                             ? `${target.name} - ${target.instance_name}`
-                            : destination.mode === "external_notification" ? "Destino externo legado" : "Destino indisponivel"}
+                            : destination.mode === "external_notification"
+                              ? `${isLegacyHandoff ? "WhatsApp externo legado" : "WhatsApp externo"} - ${destination.target_phone ?? "numero indisponivel"}`
+                              : "Destino indisponivel"}
                       </p>
                     </div>
-                    {destination.mode !== "external_notification" ? (
+                    {!isLegacyHandoff ? (
                       <Button type="button" variant="ghost" size="icon" onClick={() => editDestination(destination)} aria-label="Editar destino">
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>

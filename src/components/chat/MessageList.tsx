@@ -22,7 +22,12 @@ export function MessageList({ messages, loading }: MessageListProps) {
   };
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    const viewport = getScrollViewport();
+    if (viewport) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+    }
     shouldStickToBottomRef.current = true;
     setHasUnreadMessages(false);
   };

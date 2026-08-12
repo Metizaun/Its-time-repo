@@ -7,7 +7,7 @@ export type RbLeadNoteInput = {
   storeCnpj?: string | null;
 };
 
-function formatCnpj(value?: string | null) {
+export function formatCnpj(value?: string | null) {
   const normalized = String(value ?? "").replace(/\D/g, "");
   if (normalized.length !== 14) return normalized || "Não informado";
 

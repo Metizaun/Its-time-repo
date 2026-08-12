@@ -33,17 +33,17 @@ export function AgentToolConfigurationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={isWideFlow
-          ? "max-h-[92vh] max-w-5xl overflow-hidden [&>button]:hidden"
+          ? "flex max-h-[92vh] max-w-5xl flex-col overflow-hidden [&>button]:hidden"
           : hasDedicatedEditor
-            ? "max-h-[90vh] max-w-3xl overflow-hidden [&>button]:hidden"
-            : "max-h-[90vh] max-w-3xl overflow-hidden"}
+            ? "flex max-h-[90vh] max-w-3xl flex-col overflow-hidden [&>button]:hidden"
+            : "flex max-h-[90vh] max-w-3xl flex-col overflow-hidden"}
       >
-        <DialogHeader className={hasDedicatedEditor ? "sr-only" : undefined}>
+        <DialogHeader className={hasDedicatedEditor ? "sr-only" : "shrink-0"}>
           <DialogTitle>{toolKey ? TOOL_LABELS[toolKey] : "Configurar ferramenta"}</DialogTitle>
           <DialogDescription>Revise e salve as configurações desta ferramenta.</DialogDescription>
         </DialogHeader>
 
-        <div className="min-w-0 overflow-y-auto pr-1">
+        <div className="min-w-0 min-h-0 flex-1 overflow-y-auto pr-1">
           {open && agentId && toolKey ? (
             <AgentToolsPanel
               agentId={agentId}
