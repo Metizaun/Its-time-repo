@@ -436,6 +436,8 @@ export type NormalizedPrescription = {
   addition: number | null;
 };
 
+export type PrescriptionConfidence = 0 | 1 | 2;
+
 export type PrescriptionExtraction = NormalizedPrescription & {
   distancePd: number | null;
   nearPd: number | null;
@@ -1561,7 +1563,32 @@ export function getPrescriptionValidationErrors(prescription: NormalizedPrescrip
 // a cotacao automatica de preco (matchLensPriceRule permanece estrita) e geram um aviso
 // para o atendimento confirmar o dado antes de fechar o pedido.
 const PRESCRIPTION_BLOCKING_ERROR_CODES = new Set(["od_missing", "oe_missing"]);
-export const PRESCRIPTION_MIN_CONFIDENCE = 0.5;
+export const PRESCRIPTION_MIN_CONFIDENCE: PrescriptionConfidence = 1;
+
+/**
+ * Contrato canônico do receituário: 0 = low, 1 = medium, 2 = high.
+ * Os formatos antigos são aceitos somente na entrada para não quebrar runs
+ * já gerados por modelos que retornavam strings ou números entre 0 e 1.
+ */
+export function normalizePrescriptionConfidence(value: unknown): PrescriptionConfidence {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "low" || normalized === "baixa" || normalized === "baixo") return 0;
+    if (normalized === "medium" || normalized === "media" || normalized === "médio" || normalized === "medio") return 1;
+    if (normalized === "high" || normalized === "alta" || normalized === "alto") return 2;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) value = numeric;
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  if (value === 0) return 0;
+  if (value === 1) return 1;
+  if (value === 2) return 2;
+
+  // Compatibilidade de leitura com o contrato legado [0, 1].
+  if (value > 0 && value < 1) return value < 0.5 ? 0 : value < 0.8 ? 1 : 2;
+  return value < 1 ? 0 : value < 2 ? 1 : 2;
+}
 
 export function evaluatePrescriptionReadiness(
   extraction: PrescriptionExtraction,
@@ -1911,7 +1938,7 @@ function parsePrescriptionRecord(parsed: JsonRecord): PrescriptionExtraction {
     prescriptionDate: nullableDate(parsed.prescription_date),
     expiresAt: nullableDate(parsed.expires_at),
     observations: nullableText(parsed.observations),
-    confidence: clampConfidence(parsed.confidence),
+    confidence: normalizePrescriptionConfidence(parsed.confidence),
     isPrescription: parsed.is_prescription === true,
   };
 }
@@ -11232,7 +11259,7 @@ export class AgentManager {
     return [
       "[ANALISE_DE_RECEITUARIO]",
       `status=${status}`,
-      `confianca=${extraction.confidence.toFixed(2)}`,
+      `confianca=${extraction.confidence}`,
       `od=esf ${extraction.odSphere ?? "?"}; cil ${extraction.odCylinder ?? "?"}; eixo ${extraction.odAxis ?? "?"}`,
       `oe=esf ${extraction.oeSphere ?? "?"}; cil ${extraction.oeCylinder ?? "?"}; eixo ${extraction.oeAxis ?? "?"}`,
       `adicao=${extraction.addition ?? "nao informada"}`,
@@ -11344,6 +11371,7 @@ export class AgentManager {
         "A foto pode estar em condicoes ruins: girada, de lado, de ponta cabeca, com sombra, dobra ou reflexo. Antes de classificar, considere a imagem em todas as rotacoes possiveis e faca o possivel para ler mesmo com qualidade imperfeita.",
         "Se a imagem contiver uma receita/receituario oftalmologico (impresso ou manuscrito), classifique kind=prescription e extraia TODOS os dados presentes, mesmo que parciais. Nao classifique como other ou document apenas por causa de baixa qualidade, rotacao ou letra manuscrita: tente ler antes de desistir.",
         "Se kind=prescription, preencha prescription com confidence, od_sphere, od_cylinder, od_axis, oe_sphere, oe_cylinder, oe_axis, addition, distance_pd, near_pd, patient_name, prescriber_name, prescriber_registration, prescription_date, expires_at e observations.",
+        "confidence DEVE ser sempre um numero inteiro do contrato canonico: 0 = low (baixa), 1 = medium (media), 2 = high (alta). Nunca retorne confidence como texto e nunca use valores decimais.",
         "Nao invente valores ilegiveis: use null apenas no campo especifico que nao deu para ler, mas preencha normalmente todos os demais campos legiveis da mesma receita. Normalize graus com sinal e ponto decimal, eixos entre 0 e 180 e datas YYYY-MM-DD.",
         "Se a imagem estiver rotacionada, cortada ou com algum trecho ilegivel, registre isso em observations (ex: 'imagem rotacionada, eixo OE ilegivel') em vez de zerar a extracao inteira.",
         "Se kind=face, preencha face com face_shape, summary, hair, skin_tone e visual_features. Nao diagnostique nem infira atributos sensiveis.",
