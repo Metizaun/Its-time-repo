@@ -60,14 +60,14 @@
       "model": "gemini-3.1-flash-lite",
       "temperature": 0.1,
       "personalityProfile": "consultative",
-      "routingInstruction": "Assuma conversas sobre consultas, clinicas, profissionais, especialidades, servicos, valores e disponibilidade. Nao assuma assuntos de otica, armacoes, lentes, pedidos ou financeiro.",
-      "handoffPrompt": "Encaminhe ao atendimento humano em todo pedido ou intencao clara de agendar, remarcar ou cancelar consulta. Nunca crie, altere ou cancele eventos.",
+      "routingInstruction": "Assuma conversas sobre consultas, clinicas, profissionais, especialidades, servicos, valores e locais. Nao assuma assuntos de otica, armacoes, lentes, pedidos ou financeiro. Para interesse em consulta, colete somente unidade, medico de preferencia (se houver) e dia desejado; nao consulte nem ofereca horarios.",
+      "handoffPrompt": "A Cardeal nao agenda horario: o atendimento clinico e por ordem de chegada. Colete somente a unidade, o medico de preferencia (se houver) e o dia desejado. Oriente o cliente a passar antes na loja para retirar o encaminhamento que garante o desconto com o medico parceiro. Depois encaminhe ao atendimento humano para confirmar a vaga do dia. Nunca crie, altere, cancele ou confirme eventos.",
       "ragEnabled": false,
       "active": true,
       "tools": {
         "calendar": {
           "enabled": true,
-          "queryAvailability": true,
+          "queryAvailability": false,
           "create": false,
           "reschedule": false,
           "cancel": false
