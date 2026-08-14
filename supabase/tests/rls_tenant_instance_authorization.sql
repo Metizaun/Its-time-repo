@@ -15,6 +15,7 @@ VALUES
   ('91000000-0000-0000-0000-000000000001', 'authenticated', 'authenticated', 'admin-a@rls.test', '', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
   ('91000000-0000-0000-0000-000000000002', 'authenticated', 'authenticated', 'seller-a@rls.test', '', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
   ('91000000-0000-0000-0000-000000000003', 'authenticated', 'authenticated', 'viewer-a@rls.test', '', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
+  ('91000000-0000-0000-0000-000000000004', 'authenticated', 'authenticated', 'former-owner-a@rls.test', '', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
   ('92000000-0000-0000-0000-000000000001', 'authenticated', 'authenticated', 'admin-b@rls.test', '', now(), '{}'::jsonb, '{}'::jsonb, now(), now());
 
 INSERT INTO crm.users (id, auth_user_id, email, name, role, aces_id)
@@ -22,6 +23,7 @@ VALUES
   ('91100000-0000-0000-0000-000000000001', '91000000-0000-0000-0000-000000000001', 'admin-a@rls.test', 'Admin A', 'ADMIN', 9101),
   ('91100000-0000-0000-0000-000000000002', '91000000-0000-0000-0000-000000000002', 'seller-a@rls.test', 'Seller A', 'VENDEDOR', 9101),
   ('91100000-0000-0000-0000-000000000003', '91000000-0000-0000-0000-000000000003', 'viewer-a@rls.test', 'Viewer A', 'VENDEDOR', 9101),
+  ('91100000-0000-0000-0000-000000000004', '91000000-0000-0000-0000-000000000004', 'former-owner-a@rls.test', 'Former Owner A', 'VENDEDOR', 9101),
   ('92200000-0000-0000-0000-000000000001', '92000000-0000-0000-0000-000000000001', 'admin-b@rls.test', 'Admin B', 'ADMIN', 9102);
 
 -- inst-a-1 deliberately has a creator from another account. Authorization must
@@ -43,7 +45,65 @@ INSERT INTO crm.leads (id, aces_id, owner_id, name, contact_phone, status, insta
 VALUES
   ('91a00000-0000-0000-0000-000000000001', 9101, '91100000-0000-0000-0000-000000000001', 'Lead A1', '550000000001', 'Novo', 'rls-inst-a-1', TRUE),
   ('91a00000-0000-0000-0000-000000000002', 9101, '91100000-0000-0000-0000-000000000001', 'Lead A2', '550000000002', 'Novo', 'rls-inst-a-2', TRUE),
+  ('91a00000-0000-0000-0000-000000000003', 9101, '91100000-0000-0000-0000-000000000004', 'Lead sem responsavel', '550000000004', 'Novo', 'rls-inst-a-1', TRUE),
   ('92b00000-0000-0000-0000-000000000001', 9102, '92200000-0000-0000-0000-000000000001', 'Lead B1', '550000000003', 'Novo', 'rls-inst-b-1', TRUE);
+
+DO $$
+DECLARE
+  v_cross_account_rejected boolean := FALSE;
+BEGIN
+  BEGIN
+    UPDATE crm.leads
+    SET owner_id = '92200000-0000-0000-0000-000000000001'
+    WHERE id = '91a00000-0000-0000-0000-000000000002';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF position('Responsavel do lead pertence a outra conta' IN SQLERRM) = 0 THEN
+        RAISE;
+      END IF;
+      v_cross_account_rejected := TRUE;
+  END;
+
+  IF NOT v_cross_account_rejected THEN
+    RAISE EXCEPTION 'Nova atribuicao de responsavel entre contas foi aceita';
+  END IF;
+END;
+$$;
+
+-- Simula um legado anterior ao trigger atual. A atualizacao comum deve funcionar
+-- mesmo com owner_id incompatível, sem permitir criar uma nova incompatibilidade.
+ALTER TABLE crm.leads DISABLE TRIGGER trg_sync_lead_stage_and_aces;
+INSERT INTO crm.leads (id, aces_id, owner_id, name, contact_phone, status, instancia, view)
+VALUES (
+  '91a00000-0000-0000-0000-000000000005',
+  9101,
+  '92200000-0000-0000-0000-000000000001',
+  'Lead legado com responsavel externo',
+  '550000000005',
+  'Novo',
+  'rls-inst-a-1',
+  TRUE
+);
+ALTER TABLE crm.leads ENABLE TRIGGER trg_sync_lead_stage_and_aces;
+
+UPDATE crm.leads
+SET status = 'Em atendimento'
+WHERE id = '91a00000-0000-0000-0000-000000000005';
+
+DELETE FROM crm.users
+WHERE id = '91100000-0000-0000-0000-000000000004';
+
+DO $$
+BEGIN
+  IF (SELECT owner_id FROM crm.leads WHERE id = '91a00000-0000-0000-0000-000000000003') IS NOT NULL THEN
+    RAISE EXCEPTION 'Excluir responsavel nao definiu owner_id como NULL';
+  END IF;
+
+  IF (SELECT status FROM crm.leads WHERE id = '91a00000-0000-0000-0000-000000000005') <> 'Em atendimento' THEN
+    RAISE EXCEPTION 'Atualizacao comum de lead legado foi bloqueada pelo responsavel';
+  END IF;
+END;
+$$;
 
 DO $$
 BEGIN
@@ -74,8 +134,10 @@ BEGIN
   IF (SELECT count(*) FROM crm.leads WHERE id IN (
     '91a00000-0000-0000-0000-000000000001',
     '91a00000-0000-0000-0000-000000000002',
+    '91a00000-0000-0000-0000-000000000003',
+    '91a00000-0000-0000-0000-000000000005',
     '92b00000-0000-0000-0000-000000000001'
-  )) <> 2 THEN
+  )) <> 4 THEN
     RAISE EXCEPTION 'Admin A atravessou tenant ou perdeu leads da propria conta';
   END IF;
 END;
@@ -97,9 +159,15 @@ BEGIN
   IF (SELECT count(*) FROM crm.leads WHERE id IN (
     '91a00000-0000-0000-0000-000000000001',
     '91a00000-0000-0000-0000-000000000002',
+    '91a00000-0000-0000-0000-000000000003',
+    '91a00000-0000-0000-0000-000000000005',
     '92b00000-0000-0000-0000-000000000001'
-  )) <> 1 THEN
+  )) <> 3 THEN
     RAISE EXCEPTION 'Seller editor atravessou instancia ou tenant';
+  END IF;
+
+  IF (SELECT owner_id FROM crm.leads WHERE id = '91a00000-0000-0000-0000-000000000003') IS NOT NULL THEN
+    RAISE EXCEPTION 'Lead perdeu acesso ou ganhou novo responsavel apos exclusao';
   END IF;
 
   UPDATE crm.leads SET notes = 'editor-ok'

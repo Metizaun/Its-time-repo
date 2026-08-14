@@ -751,6 +751,67 @@ export type ParsedWebhookMessage = {
 
 export type WebhookPayload = JsonRecord;
 
+export type InboundInstanceAuthorizationDecision = {
+  authorized: boolean;
+  shouldUpsertMembership: boolean;
+};
+
+export function decideInboundInstanceAuthorization(input: {
+  hasExistingLead: boolean;
+  leadPrimaryInstance: string | null;
+  inboundInstance: string;
+  hasActiveMembership: boolean;
+}): InboundInstanceAuthorizationDecision {
+  if (!input.hasExistingLead || input.leadPrimaryInstance === input.inboundInstance) {
+    return { authorized: true, shouldUpsertMembership: false };
+  }
+
+  if (input.hasActiveMembership) {
+    return { authorized: true, shouldUpsertMembership: false };
+  }
+
+  return { authorized: true, shouldUpsertMembership: true };
+}
+
+type IncomingMessageDedupeRedis = Pick<Redis, "set" | "eval">;
+
+export type IncomingMessageDedupeReservation = {
+  duplicated: boolean;
+  release: () => Promise<void>;
+};
+
+export async function reserveIncomingMessageDedupe(
+  redis: IncomingMessageDedupeRedis | null,
+  messageId: string | null,
+  scope = "global"
+): Promise<IncomingMessageDedupeReservation> {
+  if (!messageId || !redis) {
+    return { duplicated: false, release: async () => undefined };
+  }
+
+  const key = `crm-ai:inbound:${scope}:${messageId}`;
+  const token = randomUUID();
+  const stored = await redis.set(key, token, "EX", 600, "NX");
+  if (stored !== "OK") {
+    return { duplicated: true, release: async () => undefined };
+  }
+
+  let released = false;
+  return {
+    duplicated: false,
+    release: async () => {
+      if (released) return;
+      released = true;
+      await redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        key,
+        token,
+      );
+    },
+  };
+}
+
 type WebhookContactIdentity = {
   phone: string | null;
   remoteJid: string | null;
@@ -6966,14 +7027,8 @@ export class AgentManager {
     }
   }
 
-  private async dedupeIncomingMessage(messageId: string | null, scope = "global") {
-    if (!messageId || !this.redis) {
-      return false;
-    }
-
-    const key = `crm-ai:inbound:${scope}:${messageId}`;
-    const stored = await this.redis.set(key, "1", "EX", 600, "NX");
-    return stored !== "OK";
+  private reserveIncomingMessage(messageId: string | null, scope = "global") {
+    return reserveIncomingMessageDedupe(this.redis, messageId, scope);
   }
 
   private async findMessageByProviderMessageId(
@@ -7216,9 +7271,19 @@ export class AgentManager {
           await this.invalidateChatMessagesCache(params.acesId, params.leadId);
           return retryData as MessageRow;
         }
+
+        if (retryError) {
+          throw buildSupabaseOperationError(
+            retryError,
+            "Nao foi possivel registrar a mensagem no CRM"
+          );
+        }
       }
 
-      throw new HttpError(500, "Nao foi possivel registrar a mensagem no CRM", error);
+      throw buildSupabaseOperationError(
+        error,
+        "Nao foi possivel registrar a mensagem no CRM"
+      );
     }
 
     await this.updateLeadAfterMessage({
@@ -7327,6 +7392,53 @@ export class AgentManager {
     }
 
     return Boolean(data);
+  }
+
+  private async authorizeVerifiedInboundInstance(params: {
+    acesId: number;
+    lead: LeadRow | null;
+    instanceName: string;
+    provider: WhatsAppProviderName;
+  }) {
+    const { acesId, lead, instanceName, provider } = params;
+    const hasActiveMembership = lead && lead.instancia !== instanceName
+      ? await this.hasActiveLeadInstanceMembership(acesId, lead.id, instanceName)
+      : false;
+    const decision = decideInboundInstanceAuthorization({
+      hasExistingLead: Boolean(lead),
+      leadPrimaryInstance: lead?.instancia ?? null,
+      inboundInstance: instanceName,
+      hasActiveMembership,
+    });
+
+    if (!lead || !decision.shouldUpsertMembership) {
+      return decision.authorized;
+    }
+
+    const { error } = await this.serviceClient
+      .from("lead_instance_memberships")
+      .upsert(
+        {
+          aces_id: acesId,
+          lead_id: lead.id,
+          instance_name: instanceName,
+          source_agent_id: null,
+          reason: `verified_inbound:${provider}`,
+          is_active: true,
+          revoked_at: null,
+          authorized_at: new Date().toISOString(),
+        },
+        { onConflict: "lead_id,instance_name" }
+      );
+
+    if (error) {
+      throw buildSupabaseOperationError(
+        error,
+        "Nao foi possivel autorizar a instancia inbound para o lead"
+      );
+    }
+
+    return true;
   }
 
   private async loadLeadForAgent(agent: AgentRow, leadId: string) {
@@ -12490,26 +12602,37 @@ export class AgentManager {
       message.fromMe ? "outbound" : "inbound",
       message.phone,
     ].join(":");
-    const duplicated = await this.dedupeIncomingMessage(message.messageId, dedupeScope);
-    if (duplicated) {
+    const dedupeReservation = await this.reserveIncomingMessage(message.messageId, dedupeScope);
+    if (dedupeReservation.duplicated) {
       return { ignored: true, reason: "Mensagem duplicada" };
     }
 
-    const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
+    try {
+      const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
 
-    const existingLeadForRouting = await this.findLeadByPhone(instance.aces_id, message.phone);
-    const isPrimaryInstance =
-      !existingLeadForRouting || existingLeadForRouting.instancia === message.instanceName;
-    const hasAdditionalMembership =
-      existingLeadForRouting && !isPrimaryInstance
-        ? await this.hasActiveLeadInstanceMembership(
-            instance.aces_id,
-            existingLeadForRouting.id,
-            message.instanceName
-          )
-        : false;
-    const instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
-    const agent = instanceAuthorized ? candidateAgent : null;
+      const existingLeadForRouting = await this.findLeadByPhone(instance.aces_id, message.phone);
+      let instanceAuthorized: boolean;
+      if (message.fromMe) {
+        const isPrimaryInstance =
+          !existingLeadForRouting || existingLeadForRouting.instancia === message.instanceName;
+        const hasAdditionalMembership =
+          existingLeadForRouting && !isPrimaryInstance
+            ? await this.hasActiveLeadInstanceMembership(
+                instance.aces_id,
+                existingLeadForRouting.id,
+                message.instanceName
+              )
+            : false;
+        instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
+      } else {
+        instanceAuthorized = await this.authorizeVerifiedInboundInstance({
+          acesId: instance.aces_id,
+          lead: existingLeadForRouting,
+          instanceName: message.instanceName,
+          provider: "evolution",
+        });
+      }
+      const agent = instanceAuthorized ? candidateAgent : null;
     const ownerIdForLead = null;
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
       ? "[imagem recebida para analise optica]"
@@ -12749,13 +12872,24 @@ export class AgentManager {
       messageId: savedMessage.id,
     });
 
-    return {
-      success: true,
-      leadId: lead.id,
-      queued: true,
-      agentId: agent.id,
-      bypassingGlobalInactive: aiState.bypassingGlobalInactive,
-    };
+      return {
+        success: true,
+        leadId: lead.id,
+        queued: true,
+        agentId: agent.id,
+        bypassingGlobalInactive: aiState.bypassingGlobalInactive,
+      };
+    } catch (error) {
+      try {
+        await dedupeReservation.release();
+      } catch (releaseError) {
+        console.warn("[crm-ai-webhook] Falha ao liberar reserva de deduplicacao Evolution:", {
+          providerMessageId: message.messageId,
+          error: releaseError instanceof Error ? releaseError.message : String(releaseError),
+        });
+      }
+      throw error;
+    }
   }
 
   async processProviderInboundWebhook(acesId: number, message: ParsedWebhookMessage) {
@@ -12787,19 +12921,21 @@ export class AgentManager {
     }
 
     const dedupeScope = [acesId, message.provider, message.instanceName, "inbound", message.phone].join(":");
-    if (await this.dedupeIncomingMessage(message.messageId, dedupeScope)) {
+    const dedupeReservation = await this.reserveIncomingMessage(message.messageId, dedupeScope);
+    if (dedupeReservation.duplicated) {
       return { ignored: true, reason: "Mensagem duplicada" };
     }
 
-    const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, acesId);
-    const existingLeadForRouting = await this.findLeadByPhone(acesId, message.phone);
-    const isPrimaryInstance = !existingLeadForRouting || existingLeadForRouting.instancia === message.instanceName;
-    const hasAdditionalMembership =
-      existingLeadForRouting && !isPrimaryInstance
-        ? await this.hasActiveLeadInstanceMembership(acesId, existingLeadForRouting.id, message.instanceName)
-        : false;
-    const instanceAuthorized = isPrimaryInstance || hasAdditionalMembership;
-    const agent = instanceAuthorized ? candidateAgent : null;
+    try {
+      const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, acesId);
+      const existingLeadForRouting = await this.findLeadByPhone(acesId, message.phone);
+      const instanceAuthorized = await this.authorizeVerifiedInboundInstance({
+        acesId,
+        lead: existingLeadForRouting,
+        instanceName: message.instanceName,
+        provider: message.provider,
+      });
+      const agent = instanceAuthorized ? candidateAgent : null;
     const ownerIdForLead = null;
     const resolvedGupshupMedia = await prefetchGupshupInboundMedia(
       message.provider,
@@ -12895,13 +13031,24 @@ export class AgentManager {
       messageId: savedMessage.id,
     });
 
-    return {
-      success: true,
-      leadId: lead.id,
-      queued: true,
-      agentId: agent.id,
-      bypassingGlobalInactive: aiState.bypassingGlobalInactive,
-    };
+      return {
+        success: true,
+        leadId: lead.id,
+        queued: true,
+        agentId: agent.id,
+        bypassingGlobalInactive: aiState.bypassingGlobalInactive,
+      };
+    } catch (error) {
+      try {
+        await dedupeReservation.release();
+      } catch (releaseError) {
+        console.warn(`[crm-ai-webhook] Falha ao liberar reserva de deduplicacao ${message.provider}:`, {
+          providerMessageId: message.messageId,
+          error: releaseError instanceof Error ? releaseError.message : String(releaseError),
+        });
+      }
+      throw error;
+    }
   }
 
   async createChatAttachmentUploadUrl(context: AuthContext, input: ChatAttachmentUploadUrlInput) {
