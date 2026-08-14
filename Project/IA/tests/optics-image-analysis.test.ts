@@ -5,6 +5,7 @@ import {
   invokeVisagismImageEdit,
   isTransientVisagismError,
   parseOpticsImageAnalysis,
+  normalizePrescriptionConfidence,
   resolveVisagismIdempotencyAction,
 } from "../sdr-agent-gemini.js";
 import { WhatsAppProviderError } from "../whatsapp-provider.js";
@@ -33,7 +34,7 @@ test("extrai receituario na mesma classificacao multimodal", () => {
     kind: "prescription",
     evidence: ["campos OD e OE"],
     prescription: {
-      confidence: 0.98,
+      confidence: 2,
       od_sphere: "-1,25",
       od_cylinder: "-0,50",
       od_axis: 90,
@@ -57,6 +58,32 @@ test("extrai receituario na mesma classificacao multimodal", () => {
   assert.equal(analysis.prescription?.odSphere, -1.25);
   assert.equal(analysis.prescription?.oeSphere, -1);
   assert.equal(analysis.face, null);
+});
+
+test("normaliza confidence do receituario para o contrato 0, 1 ou 2", () => {
+  assert.equal(normalizePrescriptionConfidence(0), 0);
+  assert.equal(normalizePrescriptionConfidence(1), 1);
+  assert.equal(normalizePrescriptionConfidence(2), 2);
+  assert.equal(normalizePrescriptionConfidence("low"), 0);
+  assert.equal(normalizePrescriptionConfidence("medium"), 1);
+  assert.equal(normalizePrescriptionConfidence("high"), 2);
+  assert.equal(normalizePrescriptionConfidence(0.98), 2);
+});
+
+test("receita legivel retornada pelo modelo como high fica pronta para leitura", () => {
+  const analysis = parseOpticsImageAnalysis(JSON.stringify({
+    kind: "prescription",
+    prescription: {
+      confidence: "high",
+      od_sphere: "+0.50",
+      oe_sphere: "+0.75",
+      oe_cylinder: "-0.75",
+      oe_axis: 100,
+    },
+  }));
+
+  assert.equal(analysis.prescription?.confidence, 2);
+  assert.equal(analysis.prescription?.isPrescription, true);
 });
 
 test("edicao do visagismo exige foto e armacao", () => {

@@ -16,7 +16,7 @@ function buildExtraction(overrides: Partial<PrescriptionExtraction>): Prescripti
     addition: null, distancePd: null, nearPd: null,
     patientName: null, prescriberName: null, prescriberRegistration: null,
     prescriptionDate: null, expiresAt: null, observations: null,
-    confidence: 0.9, isPrescription: true,
+    confidence: 2, isPrescription: true,
     ...overrides,
   };
 }
@@ -55,7 +55,7 @@ test("receituario com eixo faltando fica valido (leitura de grau), mas nao cota 
   const extraction = buildExtraction({
     odSphere: -1, odCylinder: -0.5, odAxis: null,
     oeSphere: -1, oeCylinder: 0, oeAxis: null,
-    confidence: 0.6,
+    confidence: 1,
   });
   const readiness = evaluatePrescriptionReadiness(extraction);
   assert.equal(readiness.valid, true, "eixo faltando nao deve bloquear a leitura do grau");
@@ -68,7 +68,7 @@ test("receituario sem nenhum dado de um dos olhos continua bloqueado", () => {
   const extraction = buildExtraction({
     odSphere: null, odCylinder: null, odAxis: null,
     oeSphere: -1, oeCylinder: 0, oeAxis: null,
-    confidence: 0.9,
+    confidence: 2,
   });
   const readiness = evaluatePrescriptionReadiness(extraction);
   assert.equal(readiness.valid, false);
@@ -79,7 +79,7 @@ test("confianca abaixo do minimo bloqueia mesmo com dados completos", () => {
   const extraction = buildExtraction({
     odSphere: -1, odCylinder: 0, odAxis: null,
     oeSphere: -1, oeCylinder: 0, oeAxis: null,
-    confidence: 0.2,
+    confidence: 0,
   });
   assert.equal(evaluatePrescriptionReadiness(extraction).valid, false);
 });

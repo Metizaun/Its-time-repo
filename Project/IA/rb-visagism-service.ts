@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createClient } from "@supabase/supabase-js";
+import { geminiUsageLineItems, tryRecordAiUsage } from "./ai-costs.js";
+import { requireAiBudget } from "./ai-budget.js";
 
 import type { RbConnectionRecord } from "./rb-connection-service.js";
 
@@ -116,6 +118,7 @@ function buildDescription(model: string, analysis: ReverseVisagismAnalysis) {
 export class RbVisagismService {
   private readonly supabase;
   private readonly agentsClient;
+  private readonly crmClient;
   private readonly gemini: GoogleGenerativeAI | null;
   private readonly model: string;
   private readonly maxSourceBytes: number;
@@ -128,6 +131,10 @@ export class RbVisagismService {
     this.agentsClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
       ...options,
       db: { schema: "agents" },
+    });
+    this.crmClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      ...options,
+      db: { schema: "crm" },
     });
     this.gemini = config.geminiApiKey ? new GoogleGenerativeAI(config.geminiApiKey) : null;
     this.model = config.model?.trim() || "gemini-2.5-flash";
@@ -174,9 +181,9 @@ export class RbVisagismService {
       throw new Error("Imagem excede o limite de 10 MB");
     }
 
-    const compressed = await this.compressImage(source);
-    const analysis = await this.analyzeImage(compressed, modelo);
     const draftId = randomUUID();
+    const compressed = await this.compressImage(source);
+    const analysis = await this.analyzeImage(compressed, modelo, input.acesId, draftId);
     const objectPath = `${input.acesId}/drafts/${draftId}.webp`;
     const { error: uploadError } = await this.supabase.storage
       .from(VISAGISM_BUCKET)
@@ -356,8 +363,9 @@ export class RbVisagismService {
     }
   }
 
-  private async analyzeImage(image: Buffer, modelo: string) {
+  private async analyzeImage(image: Buffer, modelo: string, acesId: number, draftId: string) {
     if (!this.gemini) throw new Error("GEMINI_API_KEY nao configurada");
+    await requireAiBudget(this.crmClient, acesId);
     const model = this.gemini.getGenerativeModel({
       model: this.model,
       generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
@@ -375,6 +383,16 @@ export class RbVisagismService {
       prompt,
       { inlineData: { data: image.toString("base64"), mimeType: "image/webp" } },
     ]);
+    const response = result.response as unknown as Record<string, unknown>;
+    await tryRecordAiUsage(this.crmClient, {
+      idempotencyKey: `rb-visagism:${draftId}:analysis`,
+      acesId,
+      featureKey: "rb_visagism_analysis",
+      provider: "google_gemini",
+      model: this.model,
+      lineItems: geminiUsageLineItems(response.usageMetadata),
+      metadata: { draft_id: draftId, product_code: modelo },
+    });
     return parseAnalysis(result.response.text());
   }
 }

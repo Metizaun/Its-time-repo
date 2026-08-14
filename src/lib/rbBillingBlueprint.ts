@@ -299,6 +299,7 @@ export function buildRbBillingJourneyPayload(params: {
   return {
     name: params.journeyName,
     trigger_stage_id: params.triggerStageId,
+    trigger_event_status: null,
     instance_name: params.instanceName,
     is_active: true,
     humanized_dispatch_enabled: false,

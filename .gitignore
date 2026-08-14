@@ -41,6 +41,8 @@ DEPLOY_ENV_VPS.local.md
 supabase/.branches/
 Meta-API/
 referencias/*.referencia
+/referencias/modelo_prompt_agente_atendimento_oticas.md
+/referencias/guia_qualidade_criacao_prompts.md
 update/*
 !update/guias/
 update/guias/*
@@ -56,6 +58,8 @@ exemples/
 
 # Local visual QA output and API reference samples (may contain PII).
 /artifacts/
+/.codex-artifacts/
+/supabase/.temp/
 /referencias/Cobrança API/
 
 # Local VPS diagnostics may contain machine-specific access details.

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { AIAgent } from "@/types";
 import {
+  CrmBackendError,
   deleteCrmBackend,
   getCrmBackend,
   patchCrmBackend,
@@ -28,6 +29,32 @@ interface AgentPayload {
   templateKey?: string | null;
 }
 
+export type AgentInstanceChangePolicy = "humanize" | "deactivate";
+
+export interface AgentInstanceChangeResult {
+  sourceInstance: string;
+  destinationInstance: string;
+  affectedLeadCount: number;
+  policy: AgentInstanceChangePolicy | null;
+  agentIsActive: boolean;
+}
+
+interface AgentSaveResponse {
+  agent: AIAgent;
+  instanceChange: AgentInstanceChangeResult | null;
+}
+
+export class AgentInstanceChangeRequiredError extends Error {
+  constructor(
+    public readonly sourceInstance: string,
+    public readonly destinationInstance: string,
+    public readonly affectedLeadCount: number,
+  ) {
+    super("A troca de instância exige uma decisão para os leads em modo IA.");
+    this.name = "AgentInstanceChangeRequiredError";
+  }
+}
+
 function errorDetails(err: unknown) {
   return typeof err === "object" && err !== null
     ? (err as Record<string, unknown>)
@@ -39,14 +66,33 @@ function errorMessage(err: unknown, fallback: string) {
   return typeof message === "string" && message.trim() ? message : fallback;
 }
 
+function backendDetails(err: unknown) {
+  return errorDetails(errorDetails(err).details);
+}
+
 function buildAgentSaveError(err: unknown, instanceName?: string | null) {
   const detailsRecord = errorDetails(err);
-  const code = String(detailsRecord.code ?? "");
+  const backendDetailRecord = backendDetails(err);
+  const code = String(backendDetailRecord.code ?? detailsRecord.code ?? "");
   const constraint = String(detailsRecord.constraint ?? "").toLowerCase();
   const details = String(detailsRecord.details ?? "").toLowerCase();
   const message = String(detailsRecord.message ?? "");
   const normalizedMessage = message.toLowerCase();
   const instanceLabel = instanceName ? ` "${instanceName}"` : "";
+
+  if (code === "AGENT_INSTANCE_OCCUPIED") {
+    return new Error(
+      `A instância${instanceLabel} já possui um agente principal. Escolha outra instância.`
+    );
+  }
+
+  if (code === "AGENT_INSTANCE_OUTSIDE_ACCOUNT") {
+    return new Error("A instância selecionada não pertence a esta conta.");
+  }
+
+  if (code === "AGENT_INSTANCE_NOT_FOUND") {
+    return new Error("A instância selecionada não foi encontrada. Atualize a página e tente novamente.");
+  }
 
   if (
     code === "23505" ||
@@ -120,7 +166,11 @@ export function useAgents() {
   );
 
   const upsertAgent = useCallback(
-    async (payload: AgentPayload, agentId?: string) => {
+    async (
+      payload: AgentPayload,
+      agentId?: string,
+      instanceChangePolicy?: AgentInstanceChangePolicy,
+    ): Promise<AgentSaveResponse> => {
       try {
         setSaving(true);
 
@@ -135,7 +185,7 @@ export function useAgents() {
 
         if (agentId) {
           // Edição
-          await patchCrmBackend(`/api/ai-agents/${encodeURIComponent(agentId)}`, {
+          const response = await patchCrmBackend<AgentSaveResponse>(`/api/ai-agents/${encodeURIComponent(agentId)}`, {
             name: payload.name,
             instanceName: payload.instance_name,
             routingInstruction: payload.routing_instruction,
@@ -149,11 +199,14 @@ export function useAgents() {
             handoffEnabled: payload.handoff_enabled,
             handoffPrompt: payload.handoff_prompt,
             handoffTargetPhone: payload.handoff_target_phone,
+            instanceChangePolicy,
           });
           toast.success("Agente atualizado com sucesso");
+          await fetchAgents();
+          return response;
         } else {
           // Criação
-          await postCrmBackend("/api/ai-agents", {
+          const response = await postCrmBackend<{ agent: AIAgent }>("/api/ai-agents", {
             name: payload.name,
             instanceName: payload.instance_name,
             agentType: payload.agent_type ?? "primary",
@@ -173,10 +226,21 @@ export function useAgents() {
             templateKey: payload.templateKey || undefined,
           });
           toast.success("Agente criado com sucesso");
+          await fetchAgents();
+          return { agent: response.agent, instanceChange: null };
         }
-
-        await fetchAgents();
       } catch (err: unknown) {
+        const details = backendDetails(err);
+        if (
+          err instanceof CrmBackendError
+          && details.code === "AGENT_INSTANCE_CHANGE_REQUIRES_DECISION"
+        ) {
+          throw new AgentInstanceChangeRequiredError(
+            String(details.sourceInstance ?? payload.instance_name ?? ""),
+            String(details.destinationInstance ?? payload.instance_name ?? ""),
+            Number(details.affectedLeadCount ?? 0),
+          );
+        }
         const friendlyError = buildAgentSaveError(err, payload.instance_name);
         console.error("Erro ao salvar agente:", err);
         toast.error("Erro ao salvar agente", { description: friendlyError.message });

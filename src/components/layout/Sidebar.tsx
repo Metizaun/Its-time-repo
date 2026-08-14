@@ -11,11 +11,13 @@ import {
   Search,
   Workflow,
   Bot,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChatUnread } from "@/contexts/ChatUnreadContext";
+import { useIsStaff } from "@/hooks/useIsStaff";
 
 const navigation = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard },
@@ -51,6 +53,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const location = useLocation();
   const isAdmin = userRole === "ADMIN";
   const { total: chatUnreadTotal } = useChatUnread();
+  const { isStaff } = useIsStaff();
 
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < TABLET_BP);
   const [collapsed, setCollapsed] = useState<boolean>(getInitialCollapsed);
@@ -197,6 +200,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
             {isAdmin && <NavItem path="/automacao" icon={Workflow} name="Automacao" />}
             {isAdmin && <NavItem path="/agentes" icon={Bot} name="Agentes" />}
             {isAdmin && <NavItem path="/admin" icon={Settings} name="Admin" />}
+            {isStaff && <NavItem path="/superadmin" icon={ShieldCheck} name="Superadmin" />}
           </ul>
         </nav>
 

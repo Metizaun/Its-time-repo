@@ -1,12 +1,26 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { X, GripVertical, Maximize2, Minimize2, ChevronRight } from "lucide-react";
 
-import { useAgents } from "@/hooks/useAgents";
+import {
+  AgentInstanceChangeRequiredError,
+  type AgentInstanceChangePolicy,
+  useAgents,
+} from "@/hooks/useAgents";
 import { useInstances } from "@/hooks/useInstances";
 import { PROMPT_GUIDANCE_SECTIONS } from "@/lib/aiPrompt";
 import { cn } from "@/lib/utils";
 import { AIAgent } from "@/types";
 import { Switch } from "@/components/ui/switch";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 import { toast } from "sonner";
 
@@ -53,23 +67,30 @@ function stripPersonalityInstructions(prompt: string) {
 interface AgentConfigModalProps {
   open: boolean;
   agent: AIAgent | null;
+  agents: AIAgent[];
+  saving: boolean;
+  upsertAgent: ReturnType<typeof useAgents>["upsertAgent"];
   agentType?: AIAgent["agent_type"];
   parentAgentId?: string | null;
   templateKey?: string | null;
   templateName?: string | null;
   onClose: () => void;
+  onSaved: () => Promise<void>;
 }
 
 export function AgentConfigModal({
   open,
   agent,
+  agents,
+  saving,
+  upsertAgent,
   agentType = "primary",
   parentAgentId = null,
   templateKey = null,
   templateName = null,
   onClose,
+  onSaved,
 }: AgentConfigModalProps) {
-  const { agents, upsertAgent, saving } = useAgents();
   const { instances } = useInstances();
 
   const [name, setName] = useState("");
@@ -82,6 +103,7 @@ export function AgentConfigModal({
   const [handoffEnabled, setHandoffEnabled] = useState(false);
   const [handoffPrompt, setHandoffPrompt] = useState("");
   const [handoffConfigOpen, setHandoffConfigOpen] = useState(false);
+  const [instanceDecision, setInstanceDecision] = useState<AgentInstanceChangeRequiredError | null>(null);
 
   const [studioExpanded, setStudioExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -142,6 +164,7 @@ export function AgentConfigModal({
     }
 
     setStudioExpanded(false);
+    setInstanceDecision(null);
   }, [open, agent, parentAgentId, primaryAgents]);
 
   useEffect(() => {
@@ -199,6 +222,44 @@ export function AgentConfigModal({
     event.preventDefault();
   }, []);
 
+  async function saveAgent(instanceChangePolicy?: AgentInstanceChangePolicy) {
+    const personality = PERSONALITY_LEVELS[personalityLevel];
+    const basePrompt = stripPersonalityInstructions(systemPrompt);
+
+    try {
+      const result = await upsertAgent(
+        {
+          name: name.trim(),
+          instance_name: effectiveAgentType === "subagent" ? null : instanceName,
+          agent_type: effectiveAgentType,
+          parent_agent_id: effectiveAgentType === "subagent" ? selectedParentId : null,
+          agent_key: agent?.agent_key ?? undefined,
+          routing_instruction: effectiveAgentType === "subagent" ? routingInstruction.trim() : null,
+          system_prompt: basePrompt,
+          model,
+          is_active: agent?.is_active ?? true,
+          personality_profile: personality.key,
+          buffer_wait_ms: 45000,
+          human_pause_minutes: 60,
+          handoff_enabled: handoffEnabled,
+          handoff_prompt: handoffPrompt.trim() || null,
+          templateKey: agent ? null : templateKey,
+        },
+        agent?.id,
+        instanceChangePolicy,
+      );
+
+      setInstanceName(result.agent.instance_name ?? "");
+      setInstanceDecision(null);
+      await onSaved();
+    } catch (error) {
+      if (error instanceof AgentInstanceChangeRequiredError) {
+        setInstanceDecision(error);
+      }
+      // Os demais erros ja foram apresentados pelo hook; o modal permanece aberto.
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
 
@@ -217,31 +278,7 @@ export function AgentConfigModal({
       return;
     }
 
-    const personality = PERSONALITY_LEVELS[personalityLevel];
-    const basePrompt = stripPersonalityInstructions(systemPrompt);
-
-    await upsertAgent(
-      {
-        name: name.trim(),
-        instance_name: effectiveAgentType === "subagent" ? null : instanceName,
-        agent_type: effectiveAgentType,
-        parent_agent_id: effectiveAgentType === "subagent" ? selectedParentId : null,
-        agent_key: agent?.agent_key ?? undefined,
-        routing_instruction: effectiveAgentType === "subagent" ? routingInstruction.trim() : null,
-        system_prompt: basePrompt,
-        model,
-        is_active: true,
-        personality_profile: personality.key,
-        buffer_wait_ms: 45000,
-        human_pause_minutes: 60,
-        handoff_enabled: handoffEnabled,
-        handoff_prompt: handoffPrompt.trim() || null,
-        templateKey: agent ? null : templateKey,
-      },
-      agent?.id
-    );
-
-    onClose();
+    await saveAgent();
   }
 
   if (!open) {
@@ -683,6 +720,53 @@ export function AgentConfigModal({
           </div>
         </div>
       ) : null}
+
+      <AlertDialog
+        open={Boolean(instanceDecision)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !saving) setInstanceDecision(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Como tratar os leads da instância atual?</AlertDialogTitle>
+            <AlertDialogDescription>
+              O agente está ativo e há <strong>{instanceDecision?.affectedLeadCount ?? 0}</strong>{" "}
+              {(instanceDecision?.affectedLeadCount ?? 0) === 1 ? "lead" : "leads"} em modo IA na instância{" "}
+              <strong>{instanceDecision?.sourceInstance}</strong>. Para mover para{" "}
+              <strong>{instanceDecision?.destinationInstance}</strong>, escolha uma ação.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="rounded-2xl border border-[var(--color-warning-border)] bg-[var(--color-warning-50)] p-4 text-sm text-[var(--color-warning-700)]">
+            <p><strong>Transferir para humano:</strong> os leads deixam a IA e o agente continua ativo no destino.</p>
+            <p className="mt-2"><strong>Desativar e mover:</strong> o agente vai inativo para o destino; os leads antigos continuam em IA e ficarão sem agente.</p>
+          </div>
+
+          <AlertDialogFooter className="gap-2 sm:space-x-0">
+            <AlertDialogCancel disabled={saving}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              onClick={(event) => {
+                event.preventDefault();
+                void saveAgent("deactivate");
+              }}
+              className="bg-[var(--color-error-500)] text-white hover:bg-[var(--color-error-600)]"
+            >
+              Desativar e mover
+            </AlertDialogAction>
+            <AlertDialogAction
+              disabled={saving}
+              onClick={(event) => {
+                event.preventDefault();
+                void saveAgent("humanize");
+              }}
+            >
+              {saving ? "Salvando..." : "Transferir para humano"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

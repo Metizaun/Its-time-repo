@@ -19,7 +19,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatAnchorEventLabel, type AutomationExecution, type AutomationPreviewTreeNode } from "@/lib/automation";
+import {
+  formatAnchorEventLabel,
+  type AutomationAnchorEvent,
+  type AutomationExecution,
+  type AutomationPreviewTreeNode,
+} from "@/lib/automation";
 import type { Lead } from "@/hooks/useLeads";
 
 function formatDateTime(value: string | null) {
@@ -72,7 +77,7 @@ interface AutomationSimulationPanelProps {
   previewLoading: boolean;
   previewResult: {
     anchor_at: string | null;
-    anchor_event: "stage_entered_at" | "last_outbound" | "last_inbound";
+    anchor_event: AutomationAnchorEvent;
     entry_rule: AutomationPreviewTreeNode;
     exit_rule: AutomationPreviewTreeNode;
     steps: Array<{

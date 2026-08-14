@@ -65,6 +65,9 @@ SUPABASE_ANON_KEY=...
 SUPABASE_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 GEMINI_API_KEY=...
+OPENAI_API_KEY=...
+OPENAI_AGENT_MODEL=gpt-5.6-luna
+OPENAI_CRM_ANALYSIS_MODEL=gpt-5.6-luna
 CRM_ANALYSIS_WORKER_MODEL=gemini-3.1-flash-lite
 GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 GEMINI_MAX_RETRIES=3
@@ -87,7 +90,9 @@ RB_BILLING_WORKER_POLL_MS=60000
 Observacoes:
 - `EVOLUTION_API_URL` fica sem `/manager`
 - `EVOLUTION_WEBHOOK_SECRET` pode ficar vazio
-- `CRM_ANALYSIS_WORKER_MODEL` define o modelo interno do worker de analise de conversa; nao e o modelo dos agentes de atendimento
+- `OPENAI_AGENT_MODEL` e `OPENAI_CRM_ANALYSIS_MODEL` definem os modelos principais das duas chamadas centrais
+- `CRM_ANALYSIS_WORKER_MODEL` define o fallback Gemini do worker de analise de conversa
+- `agents.ai_agents.model` continua definindo o fallback Gemini das respostas dos agentes
 - `GEMINI_FALLBACK_MODELS` define os modelos de fallback quando o primario retornar `429/500/503/504`
 - `GEMINI_MAX_RETRIES` e `GEMINI_RETRY_BASE_DELAY_MS` controlam retry com backoff para falhas transitórias do Gemini
 - `REDIS_URL` precisa apontar para o Redis do Docker, nao para `localhost`

@@ -9,7 +9,16 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { RbVisagismService } from "./rb-visagism-service.js";
 
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
-import { tokenLineItems, tryRecordAiUsage } from "./ai-costs.js";
+import {
+  geminiUsageLineItems,
+  openAiUsageLineItems,
+  tryRecordAiUsage,
+  type RecordAiUsageInput,
+} from "./ai-costs.js";
+import {
+  isAiBudgetBlockedError,
+  requireAiBudget,
+} from "./ai-budget.js";
 import { buildChatSendPolicy } from "./chat-send-policy.js";
 import {
   extractProviderQuickReplySelection,
@@ -53,6 +62,12 @@ import {
   type AgendaRequest,
 } from "./agenda-subworkflow.js";
 import { formatCnpj } from "./rb-lead-note.js";
+import {
+  AGENT_REPLY_RESPONSE_SCHEMA,
+  CRM_ANALYSIS_RESPONSE_SCHEMA,
+  generateCentralStructuredResponse,
+  type CentralAiExecutionResult,
+} from "./central-ai-provider.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
@@ -436,6 +451,8 @@ export type NormalizedPrescription = {
   addition: number | null;
 };
 
+export type PrescriptionConfidence = 0 | 1 | 2;
+
 export type PrescriptionExtraction = NormalizedPrescription & {
   distancePd: number | null;
   nearPd: number | null;
@@ -769,7 +786,19 @@ type CreateAgentInput = {
   rbTokenApi?: string;
 };
 
-type UpdateAgentInput = Partial<CreateAgentInput>;
+type AgentInstanceChangePolicy = "humanize" | "deactivate";
+
+type UpdateAgentInput = Partial<CreateAgentInput> & {
+  instanceChangePolicy?: AgentInstanceChangePolicy;
+};
+
+type AgentInstanceChangeResult = {
+  sourceInstance: string;
+  destinationInstance: string;
+  affectedLeadCount: number;
+  policy: AgentInstanceChangePolicy | null;
+  agentIsActive: boolean;
+};
 
 type UpdateAgentToolInput = {
   isEnabled?: boolean;
@@ -909,16 +938,6 @@ type ReplyModelResponse = {
   media_asset_key: string | null;
 };
 
-type GeminiExecutionResult<TParsed> = {
-  parsed: TParsed;
-  rawText: string;
-  modelName: string;
-  usedFallback: boolean;
-  attempt: number;
-  tokensIn: number | null;
-  tokensOut: number | null;
-};
-
 type HandoffExecutionResult = {
   triggered: boolean;
   mode: "internal" | "internal_company" | "external_notification" | "agent" | null;
@@ -959,6 +978,8 @@ type ServiceConfig = {
   geminiRetryBaseDelayMs?: number;
   crmAnalysisWorkerModel?: string;
   openaiApiKey?: string;
+  openaiAgentModel?: string;
+  openaiCrmAnalysisModel?: string;
   openaiTranscriptionModel?: string;
   openaiVisionModel?: string;
   elevenLabsApiKey?: string;
@@ -1561,7 +1582,32 @@ export function getPrescriptionValidationErrors(prescription: NormalizedPrescrip
 // a cotacao automatica de preco (matchLensPriceRule permanece estrita) e geram um aviso
 // para o atendimento confirmar o dado antes de fechar o pedido.
 const PRESCRIPTION_BLOCKING_ERROR_CODES = new Set(["od_missing", "oe_missing"]);
-export const PRESCRIPTION_MIN_CONFIDENCE = 0.5;
+export const PRESCRIPTION_MIN_CONFIDENCE: PrescriptionConfidence = 1;
+
+/**
+ * Contrato canônico do receituário: 0 = low, 1 = medium, 2 = high.
+ * Os formatos antigos são aceitos somente na entrada para não quebrar runs
+ * já gerados por modelos que retornavam strings ou números entre 0 e 1.
+ */
+export function normalizePrescriptionConfidence(value: unknown): PrescriptionConfidence {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "low" || normalized === "baixa" || normalized === "baixo") return 0;
+    if (normalized === "medium" || normalized === "media" || normalized === "médio" || normalized === "medio") return 1;
+    if (normalized === "high" || normalized === "alta" || normalized === "alto") return 2;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) value = numeric;
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  if (value === 0) return 0;
+  if (value === 1) return 1;
+  if (value === 2) return 2;
+
+  // Compatibilidade de leitura com o contrato legado [0, 1].
+  if (value > 0 && value < 1) return value < 0.5 ? 0 : value < 0.8 ? 1 : 2;
+  return value < 1 ? 0 : value < 2 ? 1 : 2;
+}
 
 export function evaluatePrescriptionReadiness(
   extraction: PrescriptionExtraction,
@@ -1911,7 +1957,7 @@ function parsePrescriptionRecord(parsed: JsonRecord): PrescriptionExtraction {
     prescriptionDate: nullableDate(parsed.prescription_date),
     expiresAt: nullableDate(parsed.expires_at),
     observations: nullableText(parsed.observations),
-    confidence: clampConfidence(parsed.confidence),
+    confidence: normalizePrescriptionConfidence(parsed.confidence),
     isPrescription: parsed.is_prescription === true,
   };
 }
@@ -2205,6 +2251,8 @@ export class AgentManager {
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
   private static readonly DEFAULT_CUSTOMER_AGENT_MODEL = "gemini-2.5-flash";
   private static readonly DEFAULT_CRM_ANALYSIS_WORKER_MODEL = "gemini-3.1-flash-lite";
+  private static readonly DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.6-luna";
+  private static readonly DEFAULT_OPENAI_CRM_ANALYSIS_MODEL = "gpt-5.6-luna";
   private static readonly DEFAULT_GEMINI_FALLBACK_MODELS = [
     "gemini-2.5-flash-lite",
   ];
@@ -2231,6 +2279,8 @@ export class AgentManager {
   private readonly geminiRetryBaseDelayMs: number;
   private readonly crmAnalysisWorkerModel: string;
   private readonly openai: OpenAI | null;
+  private readonly openaiAgentModel: string;
+  private readonly openaiCrmAnalysisModel: string;
   private readonly openaiTranscriptionModel: string;
   private readonly openaiVisionModel: string;
   private readonly chatCacheTtlSeconds: number;
@@ -2288,6 +2338,10 @@ export class AgentManager {
     this.crmAnalysisWorkerModel =
       config.crmAnalysisWorkerModel?.trim() || AgentManager.DEFAULT_CRM_ANALYSIS_WORKER_MODEL;
     this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
+    this.openaiAgentModel =
+      config.openaiAgentModel?.trim() || AgentManager.DEFAULT_OPENAI_AGENT_MODEL;
+    this.openaiCrmAnalysisModel =
+      config.openaiCrmAnalysisModel?.trim() || AgentManager.DEFAULT_OPENAI_CRM_ANALYSIS_MODEL;
     this.openaiTranscriptionModel = config.openaiTranscriptionModel?.trim() || "gpt-4o-mini-transcribe";
     this.openaiVisionModel = config.openaiVisionModel?.trim() || "gpt-4.1-mini";
     this.chatCacheTtlSeconds = parsePositiveInteger(
@@ -5574,16 +5628,103 @@ export class AgentManager {
   async updateAgent(context: AuthContext, agentId: string, input: UpdateAgentInput) {
     this.ensureAdmin(context);
     const currentAgent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    let instanceChange: AgentInstanceChangeResult | null = null;
+    const requestedInstance = input.instanceName?.trim();
+    const isChangingInstance =
+      currentAgent.agent_type === "primary"
+      && requestedInstance !== undefined
+      && requestedInstance !== currentAgent.instance_name;
+
+    if (isChangingInstance) {
+      if (!requestedInstance) {
+        throw new HttpError(400, "Instancia do agente e obrigatoria", {
+          code: "AGENT_INSTANCE_NOT_FOUND",
+        });
+      }
+
+      const targetInstance = await this.findInstanceByName(requestedInstance);
+      if (!targetInstance) {
+        throw new HttpError(404, "Instancia de destino nao encontrada", {
+          code: "AGENT_INSTANCE_NOT_FOUND",
+          destinationInstance: requestedInstance,
+        });
+      }
+      if (targetInstance.aces_id !== context.acesId) {
+        throw new HttpError(403, "Instancia de destino nao pertence a esta conta", {
+          code: "AGENT_INSTANCE_OUTSIDE_ACCOUNT",
+          destinationInstance: requestedInstance,
+        });
+      }
+
+      await this.ensureInstanceOwnership(context.acesId, requestedInstance, context.crmUserId, context.role);
+      const { data: moveData, error: moveError } = await this.serviceClient.rpc(
+        "service_reassign_agent_instance",
+        {
+          p_agent_id: agentId,
+          p_aces_id: context.acesId,
+          p_target_instance: requestedInstance,
+          p_policy: input.instanceChangePolicy ?? null,
+          p_requested_active: input.isActive ?? null,
+        },
+      );
+      if (moveError) {
+        throw new HttpError(500, "Nao foi possivel trocar a instancia do agente", moveError);
+      }
+
+      const move = asRecord(moveData);
+      if (move.success !== true) {
+        const code = asString(move.code) ?? "AGENT_INSTANCE_CHANGE_FAILED";
+        const responseByCode: Record<string, { status: number; message: string }> = {
+          AGENT_INSTANCE_CHANGE_REQUIRES_DECISION: {
+            status: 409,
+            message: "A instancia atual possui leads em modo IA. Escolha como continuar.",
+          },
+          AGENT_INSTANCE_OCCUPIED: {
+            status: 409,
+            message: "A instancia de destino ja possui um agente principal.",
+          },
+          AGENT_INSTANCE_OUTSIDE_ACCOUNT: {
+            status: 403,
+            message: "A instancia de destino nao pertence a esta conta.",
+          },
+          AGENT_INSTANCE_NOT_FOUND: {
+            status: 404,
+            message: "Instancia de destino nao encontrada.",
+          },
+          AGENT_INSTANCE_CHANGE_POLICY_INVALID: {
+            status: 400,
+            message: "Decisao de troca de instancia invalida.",
+          },
+          AGENT_NOT_FOUND: {
+            status: 404,
+            message: "Agente nao encontrado.",
+          },
+        };
+        const response = responseByCode[code] ?? {
+          status: 409,
+          message: "Nao foi possivel trocar a instancia do agente.",
+        };
+        throw new HttpError(response.status, response.message, { ...move, code });
+      }
+
+      instanceChange = {
+        sourceInstance: String(move.sourceInstance ?? currentAgent.instance_name),
+        destinationInstance: String(move.destinationInstance ?? requestedInstance),
+        affectedLeadCount: Number(move.affectedLeadCount ?? 0),
+        policy:
+          move.policy === "humanize" || move.policy === "deactivate"
+            ? move.policy
+            : null,
+        agentIsActive: move.agentIsActive === true,
+      };
+    }
 
     const payload: JsonRecord = {};
     if (input.name !== undefined) payload.name = input.name.trim();
-    if (input.instanceName !== undefined && currentAgent.agent_type === "primary") {
-      payload.instance_name = input.instanceName.trim();
-    }
     if (input.systemPrompt !== undefined) payload.system_prompt = input.systemPrompt.trim();
     if (input.model !== undefined) payload.model = input.model.trim();
     if (input.provider !== undefined) payload.provider = input.provider;
-    if (input.isActive !== undefined) payload.is_active = input.isActive;
+    if (input.isActive !== undefined && !isChangingInstance) payload.is_active = input.isActive;
     if (input.temperature !== undefined) payload.temperature = input.temperature;
     if (input.personalityProfile !== undefined) payload.personality_profile = input.personalityProfile;
     if (input.bufferWaitMs !== undefined) payload.buffer_wait_ms = input.bufferWaitMs;
@@ -5601,21 +5742,29 @@ export class AgentManager {
       payload.routing_instruction = instruction;
     }
 
+    if (Object.keys(payload).length > 0) {
+      const { error } = await this.agentsClient
+        .from("ai_agents")
+        .update(payload)
+        .eq("id", agentId)
+        .eq("aces_id", context.acesId);
+
+      if (error) {
+        throw new HttpError(500, "Nao foi possivel atualizar o agente", error);
+      }
+    }
+
     const { data, error } = await this.agentsClient
       .from("ai_agents")
-      .update(payload)
+      .select("*")
       .eq("id", agentId)
       .eq("aces_id", context.acesId)
-      .select("*")
       .single();
-
-    if (error) {
-      throw new HttpError(500, "Nao foi possivel atualizar o agente", error);
-    }
+    if (error) throw new HttpError(500, "Nao foi possivel confirmar a atualizacao do agente", error);
 
     const agent = data as AgentRow;
     await this.refreshDerivedAgentState(agent);
-    return agent;
+    return { agent, instanceChange };
   }
 
   async getStageRules(context: AuthContext, agentId: string) {
@@ -6604,6 +6753,65 @@ export class AgentManager {
     throw lastError instanceof Error ? lastError : new Error("Falha ao gerar conteudo com Gemini");
   }
 
+  private async generateCentralModelResponse<TParsed>(params: {
+    openaiModel: string;
+    geminiFallbackModel: string;
+    prompt: string;
+    schemaName: string;
+    schema: Record<string, unknown>;
+    maxOutputTokens: number;
+    parse: (text: string) => TParsed;
+    metering: Omit<
+      RecordAiUsageInput,
+      "provider" | "model" | "lineItems" | "providerRequestId"
+    >;
+  }): Promise<CentralAiExecutionResult<TParsed>> {
+    return generateCentralStructuredResponse({
+      openai: this.openai,
+      openaiModel: params.openaiModel,
+      prompt: params.prompt,
+      schemaName: params.schemaName,
+      schema: params.schema,
+      maxOutputTokens: params.maxOutputTokens,
+      parse: params.parse,
+      fallback: async () => {
+        const { result, modelName, attempt } = await this.generateGeminiContent(
+          params.geminiFallbackModel,
+          params.prompt,
+        );
+        const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
+        return {
+          rawText: result.response.text(),
+          modelName,
+          attempt,
+          tokensIn: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : null,
+          tokensOut: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
+          usageLineItems: geminiUsageLineItems(usage),
+        };
+      },
+      onPrimaryError: (error) => {
+        console.warn("[crm-ai] OpenAI indisponivel para chamada central; usando Gemini:", {
+          model: params.openaiModel,
+          error: extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : String(error)),
+        });
+      },
+      onUsage: async (usage) => {
+        await tryRecordAiUsage(this.serviceClient, {
+          ...params.metering,
+          provider: usage.provider,
+          model: usage.modelName,
+          providerRequestId: usage.providerRequestId,
+          lineItems: usage.usageLineItems,
+          metadata: {
+            ...(params.metering.metadata ?? {}),
+            used_fallback_model: usage.usedFallback,
+            generation_attempt: usage.attempt,
+          },
+        });
+      },
+    });
+  }
+
   private async matchOutboundEcho(instanceName: string, phone: string, content: string) {
     return matchOutboundEcho({
       client: this.serviceClient,
@@ -7324,12 +7532,50 @@ export class AgentManager {
     return ((data ?? []) as MessageRow[]).reverse();
   }
 
-  private async searchVectorKnowledge(acesId: number, agentId: string, query: string, limit = 3) {
+  private async searchVectorKnowledge(params: {
+    acesId: number;
+    agentId: string;
+    leadId: string;
+    instanceName: string;
+    runId: string;
+    query: string;
+    limit?: number;
+  }) {
+    const {
+      acesId,
+      agentId,
+      leadId,
+      instanceName,
+      runId,
+      query,
+      limit = 3,
+    } = params;
+
+    await requireAiBudget(this.serviceClient, acesId);
+
     try {
       if (!this.gemini || !query.trim()) return [];
-      const embeddingModel = this.gemini.getGenerativeModel({ model: "text-embedding-004" });
+      const model = "gemini-embedding-001";
+      const embeddingModel = this.gemini.getGenerativeModel({ model });
+      const counted = await embeddingModel.countTokens(query.trim()).catch(() => null);
       const embeddingResult = await embeddingModel.embedContent(query.trim());
       const vector = embeddingResult.embedding.values;
+
+      await tryRecordAiUsage(this.serviceClient, {
+        idempotencyKey: `ai_run:${runId}:rag_embedding:${agentId}`,
+        acesId,
+        featureKey: "sdr_rag_embedding",
+        provider: "google_gemini",
+        model,
+        lineItems: counted && Number.isFinite(counted.totalTokens)
+          ? [{ metric: "input_text_token", quantity: counted.totalTokens }]
+          : [{ metric: "request", quantity: 1, metadata: { token_usage_missing: true } }],
+        aiRunId: runId,
+        agentId,
+        leadId,
+        instanceName,
+        metadata: { run_id: runId },
+      });
 
       const { data, error } = await this.serviceClient.rpc("match_knowledge_embeddings", {
         p_aces_id: acesId,
@@ -7635,6 +7881,8 @@ export class AgentManager {
   private async normalizeInboundContent(
     message: ParsedWebhookMessage,
     resolvedMedia?: ResolvedInboundMedia | null,
+    acesId?: number,
+    leadId?: string | null,
   ) {
     try {
       if (message.content.trim()) {
@@ -7647,11 +7895,12 @@ export class AgentManager {
 
       if (this.openai) {
         try {
-          const normalized = await this.normalizeMediaWithOpenAi(message, resolvedMedia);
+          const normalized = await this.normalizeMediaWithOpenAi(message, resolvedMedia, acesId, leadId);
           if (normalized) {
             return normalized;
           }
         } catch (error) {
+          if (isAiBudgetBlockedError(error)) throw error;
           console.warn("[crm-ai] Falha ao normalizar midia com OpenAI, usando fallback:", error);
         }
       }
@@ -7681,7 +7930,23 @@ export class AgentManager {
             ? "Leia o documento recebido no WhatsApp e descreva de forma objetiva o conteudo principal. Responda apenas com a descricao."
             : "Descreva de forma objetiva o conteudo principal desta imagem recebida no WhatsApp. Responda apenas com a descricao.";
 
-      const { result } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
+      if (acesId !== undefined) await requireAiBudget(this.serviceClient, acesId);
+      const { result, modelName: usedModel } = await this.generateGeminiContent(modelName, [prompt, mediaPart]);
+      const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
+      if (acesId !== undefined) {
+        await tryRecordAiUsage(this.serviceClient, {
+          idempotencyKey: `media:${message.messageId ?? `${message.instanceName}:${message.sentAt}`}:gemini`,
+          acesId,
+          featureKey: message.mediaKind === "audio" ? "transcription" : "vision",
+          provider: "google_gemini",
+          model: usedModel,
+          lineItems: geminiUsageLineItems(usage),
+          leadId: leadId ?? null,
+          instanceName: message.instanceName,
+          occurredAt: message.sentAt,
+          metadata: { media_kind: message.mediaKind },
+        });
+      }
       return (
         result.response.text().trim() ||
         (message.mediaKind === "audio"
@@ -7705,12 +7970,15 @@ export class AgentManager {
   private async normalizeMediaWithOpenAi(
     message: ParsedWebhookMessage,
     resolvedMedia?: ResolvedInboundMedia | null,
+    acesId?: number,
+    leadId?: string | null,
   ) {
     if (!this.openai) {
       return null;
     }
 
     if (message.mediaKind === "audio") {
+      if (acesId !== undefined) await requireAiBudget(this.serviceClient, acesId);
       const media = resolvedMedia === undefined ? await this.resolveMediaBytes(message) : resolvedMedia;
       if (!media) {
         return null;
@@ -7726,10 +7994,29 @@ export class AgentManager {
         language: "pt",
       });
 
+      if (acesId !== undefined) {
+        const raw = transcription as unknown as JsonRecord;
+        await tryRecordAiUsage(this.serviceClient, {
+          idempotencyKey: `media:${message.messageId ?? `${message.instanceName}:${message.sentAt}`}:openai-transcription`,
+          acesId,
+          featureKey: "transcription",
+          provider: "openai",
+          model: this.openaiTranscriptionModel,
+          lineItems: openAiUsageLineItems(raw.usage, {
+            durationSeconds: typeof raw.duration === "number" ? raw.duration : null,
+            modality: "audio",
+          }),
+          leadId: leadId ?? null,
+          instanceName: message.instanceName,
+          occurredAt: message.sentAt,
+        });
+      }
+
       return transcription.text.trim() || "[audio recebido]";
     }
 
     if (message.mediaKind === "image") {
+      if (acesId !== undefined) await requireAiBudget(this.serviceClient, acesId);
       const media = resolvedMedia === undefined ? await this.resolveMediaBytes(message) : resolvedMedia;
       if (!media) {
         return null;
@@ -7754,6 +8041,21 @@ export class AgentManager {
           },
         ],
       });
+
+      if (acesId !== undefined) {
+        await tryRecordAiUsage(this.serviceClient, {
+          idempotencyKey: `media:${message.messageId ?? `${message.instanceName}:${message.sentAt}`}:openai-vision`,
+          acesId,
+          featureKey: "vision",
+          provider: "openai",
+          model: response.model || this.openaiVisionModel,
+          providerRequestId: response.id,
+          lineItems: openAiUsageLineItems(response.usage, { modality: "image" }),
+          leadId: leadId ?? null,
+          instanceName: message.instanceName,
+          occurredAt: message.sentAt,
+        });
+      }
 
       return response.output_text.trim() || "[imagem recebida]";
     }
@@ -8413,7 +8715,21 @@ export class AgentManager {
     let dispatched = false;
 
     try {
+      await requireAiBudget(this.serviceClient, params.agent.aces_id);
       const audio = await this.generateElevenLabsAudio(text, voiceId);
+      await tryRecordAiUsage(this.serviceClient, {
+        idempotencyKey: `tool_run:${toolRunId}:tts`,
+        acesId: params.agent.aces_id,
+        featureKey: "tts",
+        provider: "elevenlabs",
+        model: this.elevenLabsModel,
+        lineItems: [{ metric: "character", quantity: text.length }],
+        toolRunId,
+        agentId: params.agent.id,
+        leadId: params.lead.id,
+        instanceName,
+        metadata: { run_id: params.runId, voice_id: voiceId },
+      });
       const { error: uploadError } = await this.serviceClient.storage
         .from(CHAT_ATTACHMENTS_BUCKET)
         .upload(storagePath, audio, { contentType: "audio/mpeg", upsert: false });
@@ -9351,6 +9667,23 @@ export class AgentManager {
     };
   }
 
+  async isAdminStaff(authUserId: string) {
+    const { data, error } = await this.serviceClient.rpc("service_admin_is_staff", {
+      p_auth_user_id: authUserId,
+    });
+    if (error) throw new HttpError(500, "Nao foi possivel validar o acesso de superadmin", error);
+    return data === true;
+  }
+
+  async adminRpc(functionName: string, params: JsonRecord = {}) {
+    if (!functionName.startsWith("service_admin_")) {
+      throw new HttpError(500, "RPC administrativa invalida");
+    }
+    const { data, error } = await this.serviceClient.rpc(functionName, params);
+    if (error) throw new HttpError(400, error.message, error);
+    return data;
+  }
+
   private async notifyExternalForwarding(params: {
     agent: AgentRow;
     lead: LeadRow;
@@ -9463,6 +9796,7 @@ export class AgentManager {
         agentId: params.agent.id,
         sourceType: "external_forwarding",
       });
+
       if (routingEventId) {
         await this.serviceClient
           .from("routing_events")
@@ -10442,8 +10776,9 @@ export class AgentManager {
     lead: LeadRow,
     rules: Array<{ stage: StageRow; rule: StageRuleRow }>,
     tags: TagRow[],
-    messages: MessageRow[]
-  ): Promise<GeminiExecutionResult<StructuredModelResponse>> {
+    messages: MessageRow[],
+    runId: string,
+  ): Promise<CentralAiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = await this.getHandoffConfig(agent);
     const subagents = agent.agent_type === "primary"
       ? await this.listActiveSubagents(agent)
@@ -10563,23 +10898,24 @@ export class AgentManager {
       `Historico recente:\n${conversation}`,
     ].join("\n");
 
-    const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(
-      this.crmAnalysisWorkerModel,
-      prompt
-    );
-    const text = result.response.text();
-    const parsed = parseStructuredJson(text);
-    const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
-
-    return {
-      parsed,
-      rawText: text,
-      modelName,
-      usedFallback,
-      attempt,
-      tokensIn: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : null,
-      tokensOut: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
-    };
+    return this.generateCentralModelResponse({
+      openaiModel: this.openaiCrmAnalysisModel,
+      geminiFallbackModel: this.crmAnalysisWorkerModel,
+      prompt,
+      schemaName: "crm_operational_analysis",
+      schema: CRM_ANALYSIS_RESPONSE_SCHEMA,
+      maxOutputTokens: 6000,
+      parse: parseStructuredJson,
+      metering: {
+        idempotencyKey: `ai_run:${runId}:crm_analysis:${agent.id}`,
+        acesId: agent.aces_id,
+        featureKey: "sdr_analysis",
+        agentId: agent.id,
+        leadId: lead.id,
+        instanceName: agent.instance_name,
+        metadata: { run_id: runId },
+      },
+    });
   }
 
   private async getLeadBillingContextString(leadId: string, agentId: string, acesId: number): Promise<string> {
@@ -10668,6 +11004,7 @@ export class AgentManager {
     lead: LeadRow,
     messages: MessageRow[],
     analysis: StructuredModelResponse,
+    runId: string,
     executionContext: {
       nativeFollowupShouldSchedule: boolean;
       nativeFollowupNeedsClarification: boolean;
@@ -10675,7 +11012,7 @@ export class AgentManager {
       visagism: JsonRecord;
       agenda: AgendaExecutionResult;
     }
-  ): Promise<GeminiExecutionResult<ReplyModelResponse>> {
+  ): Promise<CentralAiExecutionResult<ReplyModelResponse>> {
     const mediaAssets = await this.listAvailableMediaAssets(agent);
     const conversation = messages
       .map((message) => {
@@ -10696,7 +11033,15 @@ export class AgentManager {
 
     const lastLeadMsg = messages.filter((m) => m.source_type === "lead").pop()?.content ?? "";
     const ragKnowledge = agent.rag_enabled && lastLeadMsg
-      ? await this.searchVectorKnowledge(agent.aces_id, agent.id, lastLeadMsg, 3)
+      ? await this.searchVectorKnowledge({
+          acesId: agent.aces_id,
+          agentId: agent.id,
+          leadId: lead.id,
+          instanceName: agent.instance_name,
+          runId,
+          query: lastLeadMsg,
+          limit: 3,
+        })
       : [];
     const ragContext = ragKnowledge.length > 0
       ? `Conhecimento Relevante (RAG Vetorial):\n${ragKnowledge.map((k) => `- ${k.content}`).join("\n")}`
@@ -10757,21 +11102,29 @@ export class AgentManager {
       `Historico recente (Memoria de Curto Prazo):\n${conversation}`,
     ].filter(Boolean).join("\n");
 
-    const responseModel = agent.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL;
-    const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(responseModel, prompt);
-    const text = result.response.text();
-    const parsed = parseReplyJson(text);
-    const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
-
-    return {
-      parsed,
-      rawText: text,
-      modelName,
-      usedFallback,
-      attempt,
-      tokensIn: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : null,
-      tokensOut: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
-    };
+    const geminiFallbackModel = agent.model?.trim() || AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL;
+    return this.generateCentralModelResponse({
+      openaiModel: this.openaiAgentModel,
+      geminiFallbackModel,
+      prompt,
+      schemaName: "whatsapp_agent_reply",
+      schema: AGENT_REPLY_RESPONSE_SCHEMA,
+      maxOutputTokens: 1200,
+      parse: parseReplyJson,
+      metering: {
+        idempotencyKey: `ai_run:${runId}:${agent.agent_type === "subagent" ? "internal_agent_reply" : "customer_reply"}:${agent.id}`,
+        acesId: agent.aces_id,
+        featureKey: agent.agent_type === "subagent" ? "internal_agent_reply" : "sdr_reply",
+        agentId: agent.id,
+        leadId: lead.id,
+        instanceName: agent.instance_name,
+        metadata: {
+          run_id: runId,
+          subagent_id: agent.agent_type === "subagent" ? agent.id : null,
+          subagent_key: agent.agent_type === "subagent" ? agent.agent_key : null,
+        },
+      },
+    });
   }
 
   private async applyStageDecision(
@@ -11232,7 +11585,7 @@ export class AgentManager {
     return [
       "[ANALISE_DE_RECEITUARIO]",
       `status=${status}`,
-      `confianca=${extraction.confidence.toFixed(2)}`,
+      `confianca=${extraction.confidence}`,
       `od=esf ${extraction.odSphere ?? "?"}; cil ${extraction.odCylinder ?? "?"}; eixo ${extraction.odAxis ?? "?"}`,
       `oe=esf ${extraction.oeSphere ?? "?"}; cil ${extraction.oeCylinder ?? "?"}; eixo ${extraction.oeAxis ?? "?"}`,
       `adicao=${extraction.addition ?? "nao informada"}`,
@@ -11344,15 +11697,31 @@ export class AgentManager {
         "A foto pode estar em condicoes ruins: girada, de lado, de ponta cabeca, com sombra, dobra ou reflexo. Antes de classificar, considere a imagem em todas as rotacoes possiveis e faca o possivel para ler mesmo com qualidade imperfeita.",
         "Se a imagem contiver uma receita/receituario oftalmologico (impresso ou manuscrito), classifique kind=prescription e extraia TODOS os dados presentes, mesmo que parciais. Nao classifique como other ou document apenas por causa de baixa qualidade, rotacao ou letra manuscrita: tente ler antes de desistir.",
         "Se kind=prescription, preencha prescription com confidence, od_sphere, od_cylinder, od_axis, oe_sphere, oe_cylinder, oe_axis, addition, distance_pd, near_pd, patient_name, prescriber_name, prescriber_registration, prescription_date, expires_at e observations.",
+        "confidence DEVE ser sempre um numero inteiro do contrato canonico: 0 = low (baixa), 1 = medium (media), 2 = high (alta). Nunca retorne confidence como texto e nunca use valores decimais.",
         "Nao invente valores ilegiveis: use null apenas no campo especifico que nao deu para ler, mas preencha normalmente todos os demais campos legiveis da mesma receita. Normalize graus com sinal e ponto decimal, eixos entre 0 e 180 e datas YYYY-MM-DD.",
         "Se a imagem estiver rotacionada, cortada ou com algum trecho ilegivel, registre isso em observations (ex: 'imagem rotacionada, eixo OE ilegivel') em vez de zerar a extracao inteira.",
         "Se kind=face, preencha face com face_shape, summary, hair, skin_tone e visual_features. Nao diagnostique nem infira atributos sensiveis.",
         "Para campos que nao pertencem ao kind identificado, use null.",
       ].join("\n");
+      await requireAiBudget(this.serviceClient, agent.aces_id);
       const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(
         this.prescriptionWorkerModel,
         [prompt, { inlineData: { mimeType: String(attachment.mime_type || "image/jpeg"), data: buffer.toString("base64") } }]
       );
+      const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
+      await tryRecordAiUsage(this.serviceClient, {
+        idempotencyKey: `tool_run:${toolRunId}:prescription:${attempt}`,
+        acesId: agent.aces_id,
+        featureKey: "prescription_analyst",
+        provider: "google_gemini",
+        model: modelName,
+        lineItems: geminiUsageLineItems(usage),
+        toolRunId,
+        agentId: agent.id,
+        leadId: lead.id,
+        instanceName: agent.instance_name,
+        metadata: { used_fallback_model: usedFallback, generation_attempt: attempt },
+      });
       const rawText = result.response.text();
       const analysis = parseOpticsImageAnalysis(rawText);
       if (analysis.kind !== "prescription" || !analysis.prescription) {
@@ -11641,6 +12010,20 @@ export class AgentManager {
       return;
     }
 
+    try {
+      await requireAiBudget(this.serviceClient, agent.aces_id);
+    } catch (error) {
+      if (isAiBudgetBlockedError(error)) {
+        console.warn("[crm-ai] Run de IA bloqueado pelo teto da conta:", {
+          acesId: agent.aces_id,
+          leadId: lead.id,
+          pct: error.decision.pct,
+        });
+        return;
+      }
+      throw error;
+    }
+
     const opticsImageAnalyses = await this.processBufferedOpticsImages(agent, lead, bufferedEntries);
 
     let leadState = await this.getLeadState(agent.id, lead.id);
@@ -11675,7 +12058,7 @@ export class AgentManager {
     const runId = latestInbound?.id ?? randomUUID();
 
     try {
-      let result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+      let result = await this.classifyConversation(agent, lead, rules, tags, conversation, runId);
 
       if (subagentSession && result.parsed.return_to_parent) {
         await this.finishSubagentSession({
@@ -11688,7 +12071,7 @@ export class AgentManager {
         agent = channelAgent;
         leadState = await this.getLeadState(agent.id, lead.id);
         rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
-        result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+        result = await this.classifyConversation(agent, lead, rules, tags, conversation, runId);
       }
 
       if (!subagentSession && agent.agent_type === "primary" && result.parsed.subagent_key) {
@@ -11707,7 +12090,7 @@ export class AgentManager {
           agent = selectedSubagent;
           leadState = await this.getLeadState(agent.id, lead.id);
           rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
-          result = await this.classifyConversation(agent, lead, rules, tags, conversation);
+          result = await this.classifyConversation(agent, lead, rules, tags, conversation, runId);
         }
       } else if (subagentSession) {
         const claim = await this.startSubagentSession({
@@ -11721,22 +12104,6 @@ export class AgentManager {
         if (!claim.ownsRun) return;
         subagentSession = claim.session;
       }
-      await tryRecordAiUsage(this.serviceClient, {
-        idempotencyKey: `ai_run:${runId}:crm_analysis:${result.modelName}:${result.attempt}`,
-        acesId: agent.aces_id,
-        featureKey: "sdr_analysis",
-        provider: "google_gemini",
-        model: result.modelName,
-        lineItems: tokenLineItems(result.tokensIn, result.tokensOut),
-        agentId: agent.id,
-        leadId: lead.id,
-        instanceName: agent.instance_name,
-        metadata: {
-          run_id: runId,
-          used_fallback_model: result.usedFallback,
-          generation_attempt: result.attempt,
-        },
-      });
       const validStageIds = new Set(rules.map(({ stage }) => stage.id));
       const suggestedStageId =
         result.parsed.stage_decision.stage_id && validStageIds.has(result.parsed.stage_decision.stage_id)
@@ -11767,30 +12134,12 @@ export class AgentManager {
         result.parsed.handoff_reason =
           result.parsed.handoff_reason || "Solicitacao de agenda que exige atendimento humano.";
       }
-      const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, {
+      const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, runId, {
         nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
         nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
         handoffTriggered: result.parsed.should_handoff,
         visagism: asRecord(visagismApplication),
         agenda: agendaApplication,
-      });
-      await tryRecordAiUsage(this.serviceClient, {
-        idempotencyKey: `ai_run:${runId}:${delegatedToInternalAgent ? "internal_agent_reply" : "customer_reply"}:${replyResult.modelName}:${replyResult.attempt}`,
-        acesId: agent.aces_id,
-        featureKey: delegatedToInternalAgent ? "internal_agent_reply" : "sdr_reply",
-        provider: "google_gemini",
-        model: replyResult.modelName,
-        lineItems: tokenLineItems(replyResult.tokensIn, replyResult.tokensOut),
-        agentId: agent.id,
-        leadId: lead.id,
-        instanceName: agent.instance_name,
-        metadata: {
-          run_id: runId,
-          used_fallback_model: replyResult.usedFallback,
-          generation_attempt: replyResult.attempt,
-          subagent_id: delegatedToInternalAgent ? agent.id : null,
-          subagent_key: delegatedToInternalAgent ? agent.agent_key : null,
-        },
       });
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const visagismRecord = asRecord(visagismApplication);
@@ -11971,14 +12320,20 @@ export class AgentManager {
         },
         outputSnapshot: {
           raw_model_response: result.rawText,
+          provider: result.provider,
+          provider_request_id: result.providerRequestId,
           model_name: result.modelName,
           used_fallback_model: result.usedFallback,
           generation_attempt: result.attempt,
           analysis_raw_model_response: result.rawText,
+          analysis_provider: result.provider,
+          analysis_provider_request_id: result.providerRequestId,
           analysis_model_name: result.modelName,
           analysis_used_fallback_model: result.usedFallback,
           analysis_generation_attempt: result.attempt,
           reply_raw_model_response: replyResult.rawText,
+          reply_provider: replyResult.provider,
+          reply_provider_request_id: replyResult.providerRequestId,
           reply_model_name: replyResult.modelName,
           reply_used_fallback_model: replyResult.usedFallback,
           reply_generation_attempt: replyResult.attempt,
@@ -12158,7 +12513,12 @@ export class AgentManager {
     const ownerIdForLead = null;
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
       ? "[imagem recebida para analise optica]"
-      : await this.normalizeInboundContent(message);
+      : await this.normalizeInboundContent(
+          message,
+          undefined,
+          instance.aces_id,
+          existingLeadForRouting?.id ?? null,
+        );
 
     if (message.fromMe) {
       const matchedOutbound = await this.matchOutboundEcho(
@@ -12448,7 +12808,12 @@ export class AgentManager {
     );
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
       ? "[imagem recebida para analise optica]"
-      : await this.normalizeInboundContent(message, resolvedGupshupMedia);
+      : await this.normalizeInboundContent(
+          message,
+          resolvedGupshupMedia,
+          acesId,
+          existingLeadForRouting?.id ?? null,
+        );
 
     const lead = await this.findOrCreateLead(
       acesId,
@@ -13517,6 +13882,9 @@ export class AgentManager {
   }
 
   private async matchVisagismCatalogItem(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    toolRunId: string;
     catalog: VisagismCatalogItemRow[];
     answers: VisagismLeadAnswerRow[];
     faceAnalysis: FaceAnalysis | null;
@@ -13540,6 +13908,7 @@ export class AgentManager {
     const fallbackItem = eligible.find((item) => item.id === fallback?.id) ?? eligible[0];
 
     try {
+      await requireAiBudget(this.serviceClient, params.agent.aces_id);
       const prompt = [
         "Voce seleciona uma unica armacao para um atendimento de visagismo.",
         "Retorne somente JSON com selected_item_id e reason.",
@@ -13553,7 +13922,21 @@ export class AgentManager {
           attributes: item.attributes,
         })))}`,
       ].join("\n");
-      const { result, modelName } = await this.generateGeminiContent(this.visagismMatchingWorkerModel, prompt);
+      const { result, modelName, attempt } = await this.generateGeminiContent(this.visagismMatchingWorkerModel, prompt);
+      await tryRecordAiUsage(this.serviceClient, {
+        idempotencyKey: `tool_run:${params.toolRunId}:visagism-match:${attempt}`,
+        acesId: params.agent.aces_id,
+        featureKey: "visagism_matching",
+        provider: "google_gemini",
+        model: modelName,
+        lineItems: geminiUsageLineItems(
+          asRecord((result.response as unknown as JsonRecord).usageMetadata),
+        ),
+        toolRunId: params.toolRunId,
+        agentId: params.agent.id,
+        leadId: params.lead.id,
+        instanceName: params.agent.instance_name,
+      });
       const parsed = asRecord(JSON.parse(result.response.text().trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "")));
       const selectedId = asString(parsed.selected_item_id);
       const selected = eligible.find((item) => item.id === selectedId);
@@ -13677,6 +14060,9 @@ export class AgentManager {
     if (!ready || !sourceAttachment) return { runId: toolRunId, status: "waiting_input" as const };
 
     const match = await this.matchVisagismCatalogItem({
+      agent: params.agent,
+      lead: params.lead,
+      toolRunId,
       catalog,
       answers,
       faceAnalysis: params.faceAnalysis,
@@ -13744,6 +14130,10 @@ export class AgentManager {
   }
 
   private async renderVisagismImage(params: {
+    toolRunId: string;
+    agent: AgentRow;
+    lead: LeadRow;
+    attempt: number;
     sourceAttachment: { storagePath: string; mimeType: string; fileName: string };
     selectedItem: VisagismCatalogItemRow;
     answers: VisagismLeadAnswerRow[];
@@ -13791,10 +14181,25 @@ export class AgentManager {
       toFile(frame.buffer, `${params.selectedItem.product_code}.${frame.extension}`, { type: frame.mimeType }),
     ]);
     const request = createVisagismEditRequest(this.visagismImageWorkerModel, prompt, imageInputs);
+    await requireAiBudget(this.serviceClient, params.agent.aces_id);
     const response = await invokeVisagismImageEdit(
       (input) => imagesApi.edit(input),
       request
     );
+    const responseRecord = response as unknown as JsonRecord;
+    await tryRecordAiUsage(this.serviceClient, {
+      idempotencyKey: `tool_run:${params.toolRunId}:visagism-image:${params.attempt}`,
+      acesId: params.agent.aces_id,
+      featureKey: "visagism_image",
+      provider: "openai",
+      model: this.visagismImageWorkerModel,
+      lineItems: openAiUsageLineItems(responseRecord.usage, { modality: "image" }),
+      toolRunId: params.toolRunId,
+      agentId: params.agent.id,
+      leadId: params.lead.id,
+      instanceName: params.agent.instance_name,
+      metadata: { generation_attempt: params.attempt, size: "1024x1024" },
+    });
 
     const item = response?.data?.[0];
     const base64 = asString(item?.b64_json) ?? null;
@@ -13849,6 +14254,10 @@ export class AgentManager {
     try {
       try {
         generated = await this.renderVisagismImage({
+          toolRunId: params.toolRunId,
+          agent: params.agent,
+          lead: params.lead,
+          attempt: 1,
           sourceAttachment: params.sourceAttachment,
           selectedItem: params.selectedItem,
           answers: params.answers,
@@ -13859,6 +14268,10 @@ export class AgentManager {
         retryUsed = true;
         await this.agentsClient.from("agent_tool_runs").update({ attempt_count: 2 }).eq("id", params.toolRunId);
         generated = await this.renderVisagismImage({
+          toolRunId: params.toolRunId,
+          agent: params.agent,
+          lead: params.lead,
+          attempt: 2,
           sourceAttachment: params.sourceAttachment,
           selectedItem: params.selectedItem,
           answers: params.answers,

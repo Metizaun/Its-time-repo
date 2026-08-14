@@ -99,10 +99,20 @@ export async function tryRecordAiUsage(
 export function tokenLineItems(
   tokensInput: number | null,
   tokensOutput: number | null,
+  cachedInputTokens: number | null = null,
 ) {
   const items: AiUsageLineItem[] = [];
+  const cached = cachedInputTokens !== null && cachedInputTokens >= 0
+    ? cachedInputTokens
+    : 0;
   if (tokensInput !== null && tokensInput >= 0) {
-    items.push({ metric: "input_text_token", quantity: tokensInput });
+    items.push({
+      metric: "input_text_token",
+      quantity: Math.max(tokensInput - cached, 0),
+    });
+  }
+  if (cached > 0) {
+    items.push({ metric: "cached_input_text_token", quantity: cached });
   }
   if (tokensOutput !== null && tokensOutput >= 0) {
     items.push({ metric: "output_token", quantity: tokensOutput });
@@ -115,4 +125,72 @@ export function tokenLineItems(
     });
   }
   return items;
+}
+
+function usageRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function usageNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function openAiUsageLineItems(
+  usage: unknown,
+  options?: { durationSeconds?: number | null; modality?: "text" | "audio" | "image" },
+) {
+  const root = usageRecord(usage);
+  const inputDetails = usageRecord(
+    root.input_tokens_details ?? root.input_token_details,
+  );
+  const outputDetails = usageRecord(
+    root.output_tokens_details ?? root.output_token_details,
+  );
+  const totalInput = usageNumber(root.input_tokens ?? root.prompt_tokens);
+  const totalOutput = usageNumber(root.output_tokens ?? root.completion_tokens);
+  const cached = usageNumber(inputDetails.cached_tokens) ?? 0;
+  const audioInput = usageNumber(inputDetails.audio_tokens) ?? 0;
+  const imageInput = usageNumber(inputDetails.image_tokens) ?? 0;
+  const textInput = usageNumber(inputDetails.text_tokens);
+  const imageOutput = usageNumber(outputDetails.image_tokens) ?? 0;
+  const items: AiUsageLineItem[] = [];
+
+  const inferredTextInput = textInput ?? Math.max((totalInput ?? 0) - cached - audioInput - imageInput, 0);
+  if (inferredTextInput > 0) items.push({ metric: "input_text_token", quantity: inferredTextInput });
+  if (cached > 0) items.push({ metric: "cached_input_text_token", quantity: cached });
+  if (audioInput > 0) items.push({ metric: "input_audio_token", quantity: audioInput });
+  if (imageInput > 0) items.push({ metric: "input_image_token", quantity: imageInput });
+  if (imageOutput > 0) items.push({ metric: "output_image_token", quantity: imageOutput });
+  if ((totalOutput ?? 0) - imageOutput > 0) {
+    items.push({ metric: "output_token", quantity: Math.max((totalOutput ?? 0) - imageOutput, 0) });
+  }
+
+  const durationSeconds = usageNumber(options?.durationSeconds ?? root.duration);
+  if (items.length === 0 && durationSeconds !== null && durationSeconds > 0) {
+    items.push({ metric: "audio_minute", quantity: durationSeconds / 60 });
+  }
+
+  if (items.length === 0) {
+    items.push({
+      metric: "request",
+      quantity: 1,
+      metadata: {
+        token_usage_missing: true,
+        modality: options?.modality ?? "text",
+      },
+    });
+  }
+  return items;
+}
+
+export function geminiUsageLineItems(usage: unknown) {
+  const root = usageRecord(usage);
+  return tokenLineItems(
+    usageNumber(root.promptTokenCount),
+    usageNumber(root.candidatesTokenCount),
+    usageNumber(root.cachedContentTokenCount),
+  );
 }
