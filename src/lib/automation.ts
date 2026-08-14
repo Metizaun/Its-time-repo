@@ -2,14 +2,26 @@ import type { Instance } from "@/hooks/useInstances";
 import type { PipelineStage } from "@/types";
 
 export type AutomationRuleGroupOperator = "all" | "any";
-export type AutomationAnchorEvent = "stage_entered_at" | "last_outbound" | "last_inbound";
+export type AutomationAnchorEvent =
+  | "stage_entered_at"
+  | "last_outbound"
+  | "last_inbound"
+  | "event_start_time"
+  | "event_end_time"
+  | "event_status_changed_at";
 export type AutomationReentryMode = "restart_on_match" | "ignore_if_active" | "allow_parallel";
 export type AutomationMessageDirection = "inbound" | "outbound";
 export type AutomationConditionVisibility = "user" | "internal";
 export type AutomationTimeUnit = "minute" | "hour" | "day";
 export type AutomationStepContentMode = "text" | "media";
 export type AutomationStepMediaKind = "image" | "video" | "document";
-export type AutomationJourneyEntrySource = "conditions" | "rb";
+export type AutomationJourneyEntrySource = "conditions" | "rb" | "calendar_event";
+export type AutomationTriggerEventStatus =
+  | "scheduled"
+  | "confirmed"
+  | "cancelled"
+  | "done"
+  | "no_show";
 export type AutomationStepRbMessageKind = "reminder" | "charge";
 export type AutomationRecipeId =
   | "follow_up_last_message"
@@ -53,7 +65,8 @@ export interface AutomationJourney {
   id: string;
   aces_id: number;
   name: string;
-  trigger_stage_id: string;
+  trigger_stage_id: string | null;
+  trigger_event_status: AutomationTriggerEventStatus | null;
   instance_name: string;
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
@@ -433,6 +446,26 @@ export const AUTOMATION_ANCHOR_EVENT_OPTIONS: Array<{ value: AutomationAnchorEve
   { value: "last_inbound", label: "Ultima resposta do lead" },
 ];
 
+export const AUTOMATION_CALENDAR_ANCHOR_EVENT_OPTIONS: Array<{
+  value: AutomationAnchorEvent;
+  label: string;
+}> = [
+  { value: "event_end_time", label: "Fim do evento" },
+  { value: "event_start_time", label: "Inicio do evento" },
+  { value: "event_status_changed_at", label: "Mudanca de status" },
+];
+
+export const AUTOMATION_TRIGGER_EVENT_STATUS_OPTIONS: Array<{
+  value: AutomationTriggerEventStatus;
+  label: string;
+}> = [
+  { value: "done", label: "Concluido" },
+  { value: "cancelled", label: "Cancelado" },
+  { value: "no_show", label: "Nao compareceu" },
+  { value: "confirmed", label: "Confirmado" },
+  { value: "scheduled", label: "Agendado" },
+];
+
 export const AUTOMATION_REENTRY_MODE_OPTIONS: Array<{ value: AutomationReentryMode; label: string }> = [
   { value: "restart_on_match", label: "Reiniciar o prazo" },
   { value: "ignore_if_active", label: "Manter a automacao atual" },
@@ -655,6 +688,13 @@ export function createDefaultExitRule() {
   return createRuleGroup("any", [createPredicate("lead_replied")]);
 }
 
+// Jornadas de agenda nascem sem condicoes: o gatilho e o proprio status do
+// evento. Na saida isso tambem importa - uma resposta do lead nao pode encerrar
+// a jornada, senao um retorno agendado para daqui a meses nunca seria enviado.
+export function createEmptyRuleGroup() {
+  return createRuleGroup("all", []);
+}
+
 export function updateDefaultEntryRuleStage(rule: AutomationRuleNode, triggerStageId: string) {
   const normalized = normalizeRuleNode(rule, createDefaultEntryRule(triggerStageId));
 
@@ -846,6 +886,18 @@ export function formatTimingSummary(delayMinutes: number, anchorEvent: Automatio
       return "Enviar na hora da ultima resposta do lead";
     }
 
+    if (anchorEvent === "event_start_time") {
+      return "Enviar no inicio do evento";
+    }
+
+    if (anchorEvent === "event_end_time") {
+      return "Enviar no fim do evento";
+    }
+
+    if (anchorEvent === "event_status_changed_at") {
+      return "Enviar na mudanca de status";
+    }
+
     return "Enviar ao entrar na etapa";
   }
 
@@ -858,6 +910,18 @@ export function formatTimingSummary(delayMinutes: number, anchorEvent: Automatio
 
   if (anchorEvent === "last_inbound") {
     return `Enviar ${timeLabel} depois da ultima resposta do lead`;
+  }
+
+  if (anchorEvent === "event_start_time") {
+    return `Enviar ${timeLabel} depois do inicio do evento`;
+  }
+
+  if (anchorEvent === "event_end_time") {
+    return `Enviar ${timeLabel} depois do fim do evento`;
+  }
+
+  if (anchorEvent === "event_status_changed_at") {
+    return `Enviar ${timeLabel} depois da mudanca de status`;
   }
 
   return `Enviar ${timeLabel} depois de entrar na etapa`;
@@ -1033,7 +1097,19 @@ export function summarizeRuleNode(
 }
 
 export function formatAnchorEventLabel(value: AutomationAnchorEvent) {
-  return AUTOMATION_ANCHOR_EVENT_OPTIONS.find((item) => item.value === value)?.label ?? value;
+  return (
+    [...AUTOMATION_ANCHOR_EVENT_OPTIONS, ...AUTOMATION_CALENDAR_ANCHOR_EVENT_OPTIONS].find(
+      (item) => item.value === value,
+    )?.label ?? value
+  );
+}
+
+export function formatTriggerEventStatusLabel(value: AutomationTriggerEventStatus | null) {
+  if (!value) {
+    return "";
+  }
+
+  return AUTOMATION_TRIGGER_EVENT_STATUS_OPTIONS.find((item) => item.value === value)?.label ?? value;
 }
 
 export function formatReentryModeLabel(value: AutomationReentryMode) {

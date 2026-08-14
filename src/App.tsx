@@ -18,6 +18,7 @@ const Leads = lazy(() => import("./pages/Leads"));
 const Buscar = lazy(() => import("./pages/Buscar"));
 const Automacao = lazy(() => import("./pages/Automacao"));
 const Admin = lazy(() => import("./pages/Admin"));
+const SuperAdmin = lazy(() => import("./pages/SuperAdmin"));
 const Chat = lazy(() => import("./pages/Chat"));
 const Calendar = lazy(() => import("./pages/Calendar"));
 const CalendarSettings = lazy(() => import("./pages/CalendarSettings"));
@@ -62,6 +63,7 @@ const App = () => (
                   <Route path="/automacao" element={<ProtectedRoute><MainLayout><Automacao /></MainLayout></ProtectedRoute>} />
                   <Route path="/agentes" element={<ProtectedRoute><MainLayout><Agentes /></MainLayout></ProtectedRoute>} />
                   <Route path="/admin" element={<ProtectedRoute><MainLayout><Admin /></MainLayout></ProtectedRoute>} />
+                  <Route path="/superadmin" element={<ProtectedRoute><MainLayout><SuperAdmin /></MainLayout></ProtectedRoute>} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
               </Suspense>

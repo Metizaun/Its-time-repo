@@ -8,7 +8,7 @@
     "model": "gemini-3.1-flash-lite",
     "temperature": 0.2,
     "personalityProfile": "consultative",
-    "handoffPrompt": "Encaminhe ao atendimento humano quando houver intencao de agendamento, remarcacao, cancelamento, orcamento detalhado, negociacao, financeiro, status de pedido, indisponibilidade de informacao segura ou solicitacao expressa de uma pessoa.",
+    "handoffPrompt": "Nao transfira um pedido generico de orcamento antes de qualificar minimamente a necessidade e entregar uma orientacao inicial. Encaminhe ao atendimento humano somente quando houver pedido de valor final ou fechamento do orcamento, negociacao, financeiro, desconto especial, status de pedido, reserva ou confirmacao de estoque, reclamacao, pedido concreto de compra, indisponibilidade de informacao segura, intencao de agendamento/remarcacao/cancelamento ou solicitacao expressa de uma pessoa. Depois de analisar a receita e orientar a opcao inicial, encaminhe para a equipe confirmar o valor final.",
     "ragEnabled": false,
     "active": true
   },

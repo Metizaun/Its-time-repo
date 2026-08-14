@@ -25,6 +25,7 @@ import { useLeads } from "@/hooks/useLeads";
 import { usePipelines } from "@/hooks/usePipelines";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { listAgentTools } from "@/services/agentToolsService";
+import { type AutomationJourneyEntrySource } from "@/lib/automation";
 
 export default function Automacao() {
   const { userRole } = useAuth();
@@ -51,6 +52,8 @@ export default function Automacao() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
   const [selectedJourneyId, setSelectedJourneyId] = useState<string | null>(null);
   const [pendingStageId, setPendingStageId] = useState<string | null>(null);
+  const [pendingEntrySource, setPendingEntrySource] =
+    useState<AutomationJourneyEntrySource>("conditions");
   const [automationModalOpen, setAutomationModalOpen] = useState(false);
   const [rbEnabledInstanceNames, setRbEnabledInstanceNames] = useState<string[]>([]);
 
@@ -157,6 +160,14 @@ export default function Automacao() {
   const handleCreateAutomation = (stageId: string | null) => {
     setSelectedJourneyId(null);
     setPendingStageId(stageId);
+    setPendingEntrySource("conditions");
+    setAutomationModalOpen(true);
+  };
+
+  const handleCreateCalendarAutomation = () => {
+    setSelectedJourneyId(null);
+    setPendingStageId(null);
+    setPendingEntrySource("calendar_event");
     setAutomationModalOpen(true);
   };
 
@@ -278,6 +289,7 @@ export default function Automacao() {
           journeys={filteredJourneys}
           stepsByJourney={stepsByJourney}
           onCreate={handleCreateAutomation}
+          onCreateCalendar={handleCreateCalendarAutomation}
           onEdit={handleEditAutomation}
         />
       )}
@@ -301,6 +313,7 @@ export default function Automacao() {
           await preview({ funnelId: selectedJourneyId as string, leadId });
         }}
         preselectedStageId={pendingStageId}
+        preselectedEntrySource={pendingEntrySource}
         preselectedInstanceName={selectedInstanceName}
         onSelectJourney={setSelectedJourneyId}
         createJourney={createJourney}

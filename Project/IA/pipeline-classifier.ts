@@ -1,4 +1,11 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
+import {
+  generateCentralStructuredResponse,
+  type CentralAiExecutionResult,
+  type UnparsedFallbackResult,
+} from "./central-ai-provider.js";
+import { geminiUsageLineItems } from "./ai-costs.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -56,14 +63,34 @@ export type PipelineClassificationResult = {
   tokensInput: number | null;
   tokensOutput: number | null;
   rawDecision: JsonRecord;
+  provider: "openai" | "google_gemini";
+  providerRequestId: string | null;
+  usedFallback: boolean;
+  attempt: number;
 };
 
 export type PipelineClassifierConfig = {
   apiKey: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
   modelName?: string;
   fallbackModels?: string[];
   maxRetries?: number;
   retryBaseDelayMs?: number;
+};
+
+const PIPELINE_CLASSIFICATION_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    suggested_stage_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+    should_apply_stage: { type: "boolean" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    reason: { type: "string" },
+    evidence: { type: "string" },
+  },
+  required: ["summary", "suggested_stage_id", "should_apply_stage", "confidence", "reason", "evidence"],
+  additionalProperties: false,
 };
 
 function asRecord(value: unknown): JsonRecord {
@@ -239,12 +266,16 @@ export function buildPipelineClassificationPrompt(
 
 export class PipelineClassifier {
   private readonly gemini: GoogleGenerativeAI;
+  private readonly openai: OpenAI | null;
+  private readonly openaiModel: string;
   private readonly models: string[];
   private readonly maxRetries: number;
   private readonly retryBaseDelayMs: number;
 
   constructor(config: PipelineClassifierConfig) {
     this.gemini = new GoogleGenerativeAI(config.apiKey);
+    this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
+    this.openaiModel = config.openaiModel?.trim() || "gpt-5.6-luna";
     this.models = [
       config.modelName?.trim() || "gemini-3.1-flash-lite",
       ...(config.fallbackModels ?? [])
@@ -263,55 +294,66 @@ export class PipelineClassifier {
 
   async classify(
     input: PipelineClassificationInput,
+    onUsage?: (
+      result: CentralAiExecutionResult<ReturnType<typeof parsePipelineClassificationResponse>>,
+    ) => Promise<void> | void,
   ): Promise<PipelineClassificationResult> {
     const prompt = buildPipelineClassificationPrompt(input);
-    let lastError: unknown = null;
-
-    for (const modelName of this.models) {
-      const model = this.gemini.getGenerativeModel({
-        model: modelName,
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 1200,
-          responseMimeType: "application/json",
-        },
-      });
-
-      for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
-        try {
-          const result = await model.generateContent(prompt);
-          const rawText = result.response.text();
-          const decision = parsePipelineClassificationResponse(
-            rawText,
-            input.stages,
-          );
-          const usage = asRecord(
-            (result.response as unknown as JsonRecord).usageMetadata,
-          );
-
-          return {
-            ...decision,
-            modelName,
-            tokensInput:
-              typeof usage.promptTokenCount === "number"
-                ? usage.promptTokenCount
-                : null,
-            tokensOutput:
-              typeof usage.candidatesTokenCount === "number"
-                ? usage.candidatesTokenCount
-                : null,
-          };
-        } catch (error) {
-          lastError = error;
-          if (attempt < this.maxRetries) {
-            await wait(this.retryBaseDelayMs * 2 ** (attempt - 1));
+    const central = await generateCentralStructuredResponse({
+      openai: this.openai,
+      openaiModel: this.openaiModel,
+      prompt,
+      schemaName: "pipeline_classification",
+      schema: PIPELINE_CLASSIFICATION_SCHEMA,
+      maxOutputTokens: 1200,
+      parse: (rawText) => parsePipelineClassificationResponse(rawText, input.stages),
+      fallback: async (): Promise<UnparsedFallbackResult> => {
+        let lastError: unknown = null;
+        for (const modelName of this.models) {
+          const model = this.gemini.getGenerativeModel({
+            model: modelName,
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 1200,
+              responseMimeType: "application/json",
+            },
+          });
+          for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
+            try {
+              const result = await model.generateContent(prompt);
+              const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
+              return {
+                rawText: result.response.text(),
+                modelName,
+                attempt,
+                tokensIn: typeof usage.promptTokenCount === "number" ? usage.promptTokenCount : null,
+                tokensOut: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
+                usageLineItems: geminiUsageLineItems(usage),
+              };
+            } catch (error) {
+              lastError = error;
+              if (attempt < this.maxRetries) {
+                await wait(this.retryBaseDelayMs * 2 ** (attempt - 1));
+              }
+            }
           }
         }
-      }
-    }
+        throw lastError instanceof Error
+          ? lastError
+          : new Error("Nao foi possivel classificar a conversa");
+      },
+      onUsage,
+    });
 
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Nao foi possivel classificar a conversa");
+    return {
+      ...central.parsed,
+      modelName: central.modelName,
+      tokensInput: central.tokensIn,
+      tokensOutput: central.tokensOut,
+      provider: central.provider,
+      providerRequestId: central.providerRequestId,
+      usedFallback: central.usedFallback,
+      attempt: central.attempt,
+    };
   }
 }

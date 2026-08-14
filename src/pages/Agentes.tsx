@@ -27,9 +27,11 @@ export default function Agentes() {
   const {
     agents,
     loading,
+    saving,
     statusAgentId,
     deletingAgentId,
     refetch,
+    upsertAgent,
     toggleAgentStatus,
     deleteAgent,
   } = useAgents();
@@ -80,7 +82,11 @@ export default function Agentes() {
     setModalOpen(false);
     setEditingAgent(null);
     setCreationTemplate(null);
-    void refetch();
+  }
+
+  async function handleAgentSaved() {
+    await refetch();
+    closeModal();
   }
 
   async function confirmDeleteAgent() {
@@ -148,11 +154,15 @@ export default function Agentes() {
       <AgentConfigModal
         open={modalOpen}
         agent={editingAgent}
+        agents={agents}
+        saving={saving}
+        upsertAgent={upsertAgent}
         agentType={modalMode.type}
         parentAgentId={modalMode.parentId}
         templateKey={!editingAgent && modalMode.type === "primary" ? creationTemplate?.key ?? null : null}
         templateName={!editingAgent && modalMode.type === "primary" ? creationTemplate?.name ?? null : null}
         onClose={closeModal}
+        onSaved={handleAgentSaved}
       />
 
       <AgentToolsDialog

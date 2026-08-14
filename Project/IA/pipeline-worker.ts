@@ -2,7 +2,8 @@ import "./load-env.js";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-import { tokenLineItems, tryRecordAiUsage } from "./ai-costs.js";
+import { tryRecordAiUsage } from "./ai-costs.js";
+import { requireAiBudget } from "./ai-budget.js";
 import {
   PipelineClassifier,
   type PipelineClassifierMessage,
@@ -205,6 +206,8 @@ export function startPipelineWorker() {
   );
   const classifier = new PipelineClassifier({
     apiKey: requireEnv("GEMINI_API_KEY"),
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    openaiModel: process.env.PIPELINE_OPENAI_MODEL ?? process.env.OPENAI_CRM_ANALYSIS_MODEL,
     modelName:
       process.env.PIPELINE_CLASSIFIER_MODEL ??
       process.env.CRM_ANALYSIS_WORKER_MODEL,
@@ -252,6 +255,7 @@ export function startPipelineWorker() {
       }
 
       const mode = claim.check_at ? "incremental" : "full";
+      await requireAiBudget(crmClient, claim.aces_id);
       const result = await classifier.classify({
         mode,
         lead: {
@@ -269,24 +273,27 @@ export function startPipelineWorker() {
             ? { id: claim.origin_stage_id, name: claim.origin_stage_name }
             : null,
         cutoffAt: claim.cutoff_at,
-      });
-
-      await tryRecordAiUsage(crmClient, {
-        idempotencyKey: `pipeline:${claim.lead_id}:${claim.cutoff_at}:classifier`,
-        acesId: claim.aces_id,
-        featureKey: "pipeline_classifier",
-        provider: "google_gemini",
-        model: result.modelName,
-        lineItems: tokenLineItems(result.tokensInput, result.tokensOutput),
-        leadId: claim.lead_id,
-        instanceName: claim.instance_name,
-        occurredAt: new Date().toISOString(),
-        metadata: {
-          pipeline_id: claim.pipeline_id,
-          mode,
-          cutoff_at: claim.cutoff_at,
-          followup_enabled: claim.followup_enabled,
-        },
+      }, async (usage) => {
+        await tryRecordAiUsage(crmClient, {
+          idempotencyKey: `pipeline:${claim.lead_id}:${claim.cutoff_at}:classifier`,
+          acesId: claim.aces_id,
+          featureKey: "pipeline_classifier",
+          provider: usage.provider,
+          model: usage.modelName,
+          lineItems: usage.usageLineItems,
+          providerRequestId: usage.providerRequestId,
+          leadId: claim.lead_id,
+          instanceName: claim.instance_name,
+          occurredAt: new Date().toISOString(),
+          metadata: {
+            pipeline_id: claim.pipeline_id,
+            mode,
+            cutoff_at: claim.cutoff_at,
+            followup_enabled: claim.followup_enabled,
+            used_fallback_model: usage.usedFallback,
+            generation_attempt: usage.attempt,
+          },
+        });
       });
 
       const { data, error } = await crmClient.rpc(

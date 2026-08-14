@@ -1,5 +1,9 @@
 import { Badge } from "@/components/ui/badge";
-import { type AutomationJourney, type AutomationStep } from "@/lib/automation";
+import {
+  formatTriggerEventStatusLabel,
+  type AutomationJourney,
+  type AutomationStep,
+} from "@/lib/automation";
 import { cn } from "@/lib/utils";
 import { PenSquare } from "lucide-react";
 import type { PipelineStage } from "@/types";
@@ -18,7 +22,10 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
   const firstStepSummary = orderedSteps[0]
     ? `Primeira: ${formatDelayLabel(orderedSteps[0].delay_minutes, journey.anchor_event)}`
     : null;
-  const stageName = stages.find((stage) => stage.id === journey.trigger_stage_id)?.name;
+  const contextLabel =
+    journey.entry_source === "calendar_event"
+      ? formatTriggerEventStatusLabel(journey.trigger_event_status)
+      : stages.find((stage) => stage.id === journey.trigger_stage_id)?.name;
 
   return (
     <button
@@ -38,8 +45,8 @@ export function AutomationCard({ journey, stages, steps, onEdit }: AutomationCar
             <Badge variant={journey.is_active ? "default" : "outline"} className="h-5 rounded-full px-2 text-[11px]">
               {journey.is_active ? "Ativa" : "Inativa"}
             </Badge>
-            <span className="truncate" title={stageName || journey.instance_name}>
-              {stageName || journey.instance_name}
+            <span className="truncate" title={contextLabel || journey.instance_name}>
+              {contextLabel || journey.instance_name}
             </span>
           </div>
         </div>

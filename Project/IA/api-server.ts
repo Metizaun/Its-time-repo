@@ -18,6 +18,7 @@ import { startPipelineWorker } from "./pipeline-worker.js";
 import { RbBillingWorker } from "./rb-billing-worker.js";
 import { RbConnectionService } from "./rb-connection-service.js";
 import { RbVisagismService } from "./rb-visagism-service.js";
+import { invalidateAiBudgetCache } from "./ai-budget.js";
 import { MetaWebhookProcessor } from "./meta-webhook.js";
 import { MetaTemplateService } from "./meta-template-service.js";
 import { MetaAdminService } from "./meta-admin-service.js";
@@ -42,6 +43,7 @@ type RawBodyRequest = Request & {
 
 type CrmUserRole = "NENHUM" | "VENDEDOR" | "ADMIN";
 type AgentPersonalityProfile = "surgical" | "consultative" | "balanced" | "dynamic" | "enthusiastic";
+type AgentInstanceChangePolicy = "humanize" | "deactivate";
 
 function asAgentPersonalityProfile(value: unknown): AgentPersonalityProfile | undefined {
   return value === "surgical"
@@ -51,6 +53,14 @@ function asAgentPersonalityProfile(value: unknown): AgentPersonalityProfile | un
     || value === "enthusiastic"
     ? value
     : undefined;
+}
+
+function asAgentInstanceChangePolicy(value: unknown): AgentInstanceChangePolicy | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === "humanize" || value === "deactivate") return value;
+  throw new HttpError(400, "Decisao de troca de instancia invalida", {
+    code: "AGENT_INSTANCE_CHANGE_POLICY_INVALID",
+  });
 }
 
 function asString(value: unknown): string | null {
@@ -371,6 +381,8 @@ const manager = new AgentManager({
   ),
   crmAnalysisWorkerModel: process.env.CRM_ANALYSIS_WORKER_MODEL,
   openaiApiKey: process.env.OPENAI_API_KEY,
+  openaiAgentModel: process.env.OPENAI_AGENT_MODEL,
+  openaiCrmAnalysisModel: process.env.OPENAI_CRM_ANALYSIS_MODEL,
   openaiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL,
   openaiVisionModel: process.env.OPENAI_VISION_MODEL,
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
@@ -706,6 +718,132 @@ app.post(
     res.json({ token, aces_id: rbAcesId, exp: String(exp) });
   }),
 );
+
+const requireStaff = asyncHandler(
+  async (req: AuthenticatedRequest, _res, next) => {
+    if (!req.authContext || !(await manager.isAdminStaff(req.authContext.authUserId))) {
+      throw new HttpError(403, "Acesso restrito ao superadmin");
+    }
+    next();
+  },
+);
+
+function adminNumber(value: unknown, field: string, options?: { min?: number; integer?: boolean }) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || (options?.integer && !Number.isInteger(parsed))) {
+    throw new HttpError(400, `${field} invalido`);
+  }
+  if (options?.min !== undefined && parsed < options.min) {
+    throw new HttpError(400, `${field} deve ser maior ou igual a ${options.min}`);
+  }
+  return parsed;
+}
+
+function adminMonth(value: unknown, field: string) {
+  const month = String(value ?? "");
+  if (!/^\d{4}-\d{2}-01$/.test(month)) throw new HttpError(400, `${field} deve ser o primeiro dia do mes`);
+  return month;
+}
+
+function parseAdminPlan(body: unknown, partial = false) {
+  const input = asRecord(body);
+  const output: Record<string, unknown> = {};
+  const stringField = (source: string, target: string) => {
+    if (!(source in input)) return;
+    const value = asString(input[source]);
+    if (!value) throw new HttpError(400, `${source} e obrigatorio`);
+    output[target] = value;
+  };
+  stringField("code", "code");
+  stringField("name", "name");
+  for (const field of ["mensalidadeBrl", "implantacaoBrl"] as const) {
+    if (field in input) output[field] = adminNumber(input[field], field, { min: 0 });
+  }
+  if ("aiBudgetBrl" in input) output.aiBudgetBrl = input.aiBudgetBrl === null ? null : adminNumber(input.aiBudgetBrl, "aiBudgetBrl", { min: 0 });
+  if ("warnThresholdPct" in input) {
+    const threshold = adminNumber(input.warnThresholdPct, "warnThresholdPct", { min: 0 });
+    if (threshold <= 0 || threshold > 100) throw new HttpError(400, "warnThresholdPct deve estar entre 0 e 100");
+    output.warnThresholdPct = threshold;
+  }
+  for (const field of ["maxUsuarios", "maxInstancias"] as const) {
+    if (field in input) output[field] = input[field] === null ? null : adminNumber(input[field], field, { min: 0, integer: true });
+  }
+  if ("isActive" in input) output.isActive = input.isActive === true;
+  if (!partial && (!output.code || !output.name || output.mensalidadeBrl === undefined || output.implantacaoBrl === undefined)) {
+    throw new HttpError(400, "code, name, mensalidadeBrl e implantacaoBrl sao obrigatorios");
+  }
+  return output;
+}
+
+function parseAdminRevenue(body: unknown, partial = false) {
+  const input = asRecord(body);
+  const output: Record<string, unknown> = {};
+  if ("acesId" in input) output.acesId = adminNumber(input.acesId, "acesId", { min: 1, integer: true });
+  if ("competencia" in input) output.competencia = adminMonth(input.competencia, "competencia");
+  if ("tipo" in input) {
+    const tipo = String(input.tipo);
+    if (!["mensalidade", "implantacao", "avulso", "desconto"].includes(tipo)) throw new HttpError(400, "tipo de receita invalido");
+    output.tipo = tipo;
+  }
+  if ("valorBrl" in input) output.valorBrl = adminNumber(input.valorBrl, "valorBrl");
+  if (output.tipo === "desconto" && Number(output.valorBrl) > 0) throw new HttpError(400, "Desconto deve ser negativo ou zero");
+  if (output.tipo && output.tipo !== "desconto" && Number(output.valorBrl) < 0) throw new HttpError(400, "Receita nao pode ser negativa");
+  if ("status" in input) {
+    const status = String(input.status);
+    if (!["previsto", "pago"].includes(status)) throw new HttpError(400, "status de receita invalido");
+    output.status = status;
+  }
+  if ("pagoEm" in input) output.pagoEm = input.pagoEm === null ? null : String(input.pagoEm);
+  if (output.status === "pago" && !output.pagoEm) throw new HttpError(400, "pagoEm e obrigatorio para receita paga");
+  if ("descricao" in input) output.descricao = input.descricao === null ? null : String(input.descricao);
+  if (!partial && ["acesId", "competencia", "tipo", "valorBrl"].some((field) => output[field] === undefined)) {
+    throw new HttpError(400, "acesId, competencia, tipo e valorBrl sao obrigatorios");
+  }
+  return output;
+}
+
+function parseAdminFixedCost(body: unknown, partial = false) {
+  const input = asRecord(body);
+  const output: Record<string, unknown> = {};
+  if ("nome" in input) output.nome = asString(input.nome);
+  if ("categoria" in input) {
+    const value = String(input.categoria);
+    if (!["infra", "ferramenta", "pessoal", "outro"].includes(value)) throw new HttpError(400, "categoria invalida");
+    output.categoria = value;
+  }
+  if ("valorBrl" in input) output.valorBrl = adminNumber(input.valorBrl, "valorBrl", { min: 0 });
+  if ("recorrencia" in input) {
+    const value = String(input.recorrencia);
+    if (!["mensal", "anual", "unico"].includes(value)) throw new HttpError(400, "recorrencia invalida");
+    output.recorrencia = value;
+  }
+  if ("vigenciaInicio" in input) output.vigenciaInicio = adminMonth(input.vigenciaInicio, "vigenciaInicio");
+  if ("vigenciaFim" in input) output.vigenciaFim = input.vigenciaFim === null ? null : adminMonth(input.vigenciaFim, "vigenciaFim");
+  if (!partial && ["nome", "categoria", "valorBrl", "recorrencia", "vigenciaInicio"].some((field) => output[field] === undefined || output[field] === null)) {
+    throw new HttpError(400, "Campos obrigatorios do custo fixo ausentes");
+  }
+  return output;
+}
+
+function parseAdminExchangeRate(body: unknown, partial = false) {
+  const input = asRecord(body);
+  const output: Record<string, unknown> = {};
+  if ("fromCurrency" in input) output.fromCurrency = String(input.fromCurrency).toUpperCase();
+  if ("toCurrency" in input) output.toCurrency = String(input.toCurrency).toUpperCase();
+  if ("rate" in input) output.rate = adminNumber(input.rate, "rate", { min: Number.MIN_VALUE });
+  if ("rateKind" in input) {
+    const value = String(input.rateKind);
+    if (!["internal", "provider"].includes(value)) throw new HttpError(400, "rateKind invalido");
+    output.rateKind = value;
+  }
+  if ("source" in input) output.source = asString(input.source);
+  if ("effectiveAt" in input) output.effectiveAt = String(input.effectiveAt);
+  if ("metadata" in input) output.metadata = asRecord(input.metadata);
+  if (!partial && ["rate", "rateKind", "source", "effectiveAt"].some((field) => output[field] === undefined || output[field] === null)) {
+    throw new HttpError(400, "rate, rateKind, source e effectiveAt sao obrigatorios");
+  }
+  return output;
+}
 
 app.post(
   "/webhook/image",
@@ -2432,7 +2570,7 @@ app.patch(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const agent = await manager.updateAgent(req.authContext!, agentId, {
+    const result = await manager.updateAgent(req.authContext!, agentId, {
       name: typeof req.body.name === "string" ? req.body.name : undefined,
       instanceName:
         typeof req.body.instanceName === "string"
@@ -2483,9 +2621,10 @@ app.patch(
         typeof req.body.unansweredFollowupEnabled === "boolean"
           ? req.body.unansweredFollowupEnabled
           : undefined,
+      instanceChangePolicy: asAgentInstanceChangePolicy(req.body.instanceChangePolicy),
     });
 
-    res.json({ success: true, agent });
+    res.json({ success: true, ...result });
   }),
 );
 
@@ -2616,7 +2755,7 @@ app.patch(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
-    const agent = await manager.updateAgent(req.authContext!, agentId, {
+    const result = await manager.updateAgent(req.authContext!, agentId, {
       name:
         typeof req.body.name === "string"
           ? req.body.name
@@ -2659,9 +2798,10 @@ app.patch(
         typeof req.body.unansweredFollowupEnabled === "boolean"
           ? req.body.unansweredFollowupEnabled
           : undefined,
+      instanceChangePolicy: asAgentInstanceChangePolicy(req.body.instanceChangePolicy),
     });
 
-    res.json({ success: true, agent });
+    res.json({ success: true, ...result });
   }),
 );
 
@@ -3073,6 +3213,147 @@ app.delete(
     res.json(result);
   }),
 );
+
+app.get(
+  "/api/admin/access",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json({ isStaff: await manager.isAdminStaff(req.authContext!.authUserId) });
+  }),
+);
+
+app.get(
+  "/api/admin/overview",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (_req, res) => {
+    res.json(await manager.adminRpc("service_admin_overview"));
+  }),
+);
+
+app.get(
+  "/api/admin/accounts",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (_req, res) => {
+    res.json(await manager.adminRpc("service_admin_accounts"));
+  }),
+);
+
+app.get(
+  "/api/admin/accounts/:acesId",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    res.json(await manager.adminRpc("service_admin_account", { p_aces_id: acesId }));
+  }),
+);
+
+app.patch(
+  "/api/admin/accounts/:acesId/subscription",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    const input = asRecord(req.body);
+    const payload: Record<string, unknown> = {};
+    if ("planId" in input) {
+      const planId = String(input.planId);
+      if (!/^[0-9a-f-]{36}$/i.test(planId)) throw new HttpError(400, "planId invalido");
+      payload.planId = planId;
+    }
+    if ("status" in input) {
+      const status = String(input.status);
+      if (!["active", "suspended", "canceled"].includes(status)) throw new HttpError(400, "status de contrato invalido");
+      payload.status = status;
+    }
+    if ("cycleAnchorDay" in input) {
+      const day = adminNumber(input.cycleAnchorDay, "cycleAnchorDay", { min: 1, integer: true });
+      if (day > 31) throw new HttpError(400, "cycleAnchorDay deve estar entre 1 e 31");
+      payload.cycleAnchorDay = day;
+    }
+    for (const field of ["implantacaoBrl", "mensalidadeBrlOverride", "aiBudgetBrlOverride"] as const) {
+      if (field in input) payload[field] = input[field] === null ? null : adminNumber(input[field], field, { min: 0 });
+    }
+    for (const field of ["startedAt", "endedAt", "implantacaoPagaEm"] as const) {
+      if (field in input) payload[field] = input[field] === null ? null : String(input[field]);
+    }
+    if ("enforcementEnabled" in input) payload.enforcementEnabled = input.enforcementEnabled === true;
+    if (!("planId" in payload) && Object.keys(payload).length === 0) throw new HttpError(400, "Nenhuma alteracao de contrato informada");
+    const result = await manager.adminRpc("service_admin_upsert_subscription", {
+      p_aces_id: acesId,
+      p_payload: payload,
+    });
+    invalidateAiBudgetCache(acesId);
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/admin/accounts/:acesId/reset-budget",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    const reason = asString(asRecord(req.body).reason);
+    if (!reason || reason.length < 3) throw new HttpError(400, "Motivo do reset e obrigatorio");
+    const result = await manager.adminRpc("service_admin_reset_budget", {
+      p_aces_id: acesId,
+      p_reason: reason,
+      p_author: req.authContext!.authUserId,
+    });
+    invalidateAiBudgetCache(acesId);
+    res.json(result);
+  }),
+);
+
+function registerAdminResourceRoutes(
+  path: string,
+  resource: string,
+  catalogKey: string,
+  parser: (body: unknown, partial?: boolean) => Record<string, unknown>,
+) {
+  app.get(path, authMiddleware, requireStaff, asyncHandler(async (_req, res) => {
+    const catalog = asRecord(await manager.adminRpc("service_admin_finance_catalog"));
+    res.json({ [catalogKey]: catalog[catalogKey] ?? [] });
+  }));
+  app.post(path, authMiddleware, requireStaff, asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const item = await manager.adminRpc("service_admin_mutate", {
+      p_resource: resource,
+      p_action: "create",
+      p_id: null,
+      p_payload: parser(req.body, false),
+      p_author: req.authContext!.authUserId,
+    });
+    res.status(201).json(item);
+  }));
+  app.patch(`${path}/:id`, authMiddleware, requireStaff, asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const item = await manager.adminRpc("service_admin_mutate", {
+      p_resource: resource,
+      p_action: "update",
+      p_id: getSingleParam(req.params.id),
+      p_payload: parser(req.body, true),
+      p_author: req.authContext!.authUserId,
+    });
+    res.json(item);
+  }));
+  app.delete(`${path}/:id`, authMiddleware, requireStaff, asyncHandler(async (req: AuthenticatedRequest, res) => {
+    await manager.adminRpc("service_admin_mutate", {
+      p_resource: resource,
+      p_action: "delete",
+      p_id: getSingleParam(req.params.id),
+      p_payload: {},
+      p_author: req.authContext!.authUserId,
+    });
+    res.status(204).send();
+  }));
+}
+
+registerAdminResourceRoutes("/api/admin/plans", "plans", "plans", parseAdminPlan);
+registerAdminResourceRoutes("/api/admin/revenue-entries", "revenue", "revenue", parseAdminRevenue);
+registerAdminResourceRoutes("/api/admin/fixed-costs", "fixed-costs", "fixedCosts", parseAdminFixedCost);
+registerAdminResourceRoutes("/api/admin/exchange-rates", "exchange-rates", "exchangeRates", parseAdminExchangeRate);
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof HttpError) {

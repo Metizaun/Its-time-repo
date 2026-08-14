@@ -41,6 +41,9 @@ import { useAutomationMessageFlow } from "@/hooks/useAutomationMessageFlow";
 import type { Instance } from "@/hooks/useInstances";
 import type { Lead } from "@/hooks/useLeads";
 import {
+  AUTOMATION_CALENDAR_ANCHOR_EVENT_OPTIONS,
+  AUTOMATION_TRIGGER_EVENT_STATUS_OPTIONS,
+  createEmptyRuleGroup,
   createDefaultEntryRule,
   createDefaultExitRule,
   createRuleGroup,
@@ -51,6 +54,8 @@ import {
   updateDefaultEntryRuleInstance,
   updateDefaultEntryRuleStage,
   timeUnitToMinutes,
+  type AutomationAnchorEvent,
+  type AutomationTriggerEventStatus,
   type AutomationExecution,
   type AutomationJourney,
   type AutomationLeadSourceOption,
@@ -134,10 +139,15 @@ const RB_MESSAGE_VARIABLES = [
   },
 ] as const;
 
+const CALENDAR_ANCHOR_EVENTS = new Set<AutomationAnchorEvent>(
+  AUTOMATION_CALENDAR_ANCHOR_EVENT_OPTIONS.map((option) => option.value),
+);
+
 type JourneyFormState = {
   id: string | null;
   name: string;
   trigger_stage_id: string;
+  trigger_event_status: AutomationTriggerEventStatus;
   instance_name: string;
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
@@ -150,7 +160,7 @@ type JourneyFormState = {
   entry_source: AutomationJourneyEntrySource;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
-  anchor_event: "stage_entered_at" | "last_outbound" | "last_inbound";
+  anchor_event: AutomationAnchorEvent;
   reentry_mode: "restart_on_match" | "ignore_if_active" | "allow_parallel";
   reply_target_stage_id: string;
   builder_version: number;
@@ -423,6 +433,7 @@ function buildInitialJourneyForm(params: {
   journey: AutomationJourney | null;
   stages: PipelineStage[];
   preselectedStageId: string | null;
+  preselectedEntrySource: AutomationJourneyEntrySource;
   preselectedInstanceName: string | null;
 }): JourneyFormState {
   const defaultStageId =
@@ -430,10 +441,13 @@ function buildInitialJourneyForm(params: {
   const atendimentoStageId = findAtendimentoStageId(params.stages);
 
   if (!params.journey) {
+    const startsOnCalendar = params.preselectedEntrySource === "calendar_event";
+
     return {
       id: null,
       name: "",
       trigger_stage_id: defaultStageId,
+      trigger_event_status: "done",
       instance_name: params.preselectedInstanceName || "",
       is_active: true,
       humanized_dispatch_enabled: false,
@@ -443,13 +457,14 @@ function buildInitialJourneyForm(params: {
       daily_dispatch_enabled: false,
       daily_dispatch_weekends_enabled: false,
       daily_dispatch_time: "08:00",
-      entry_source: "conditions",
-      entry_rule: createDefaultEntryRule(
-        defaultStageId,
-        params.preselectedInstanceName,
-      ),
-      exit_rule: createDefaultExitRule(),
-      anchor_event: "stage_entered_at",
+      entry_source: startsOnCalendar ? "calendar_event" : "conditions",
+      entry_rule: startsOnCalendar
+        ? createEmptyRuleGroup()
+        : createDefaultEntryRule(defaultStageId, params.preselectedInstanceName),
+      exit_rule: startsOnCalendar
+        ? createEmptyRuleGroup()
+        : createDefaultExitRule(),
+      anchor_event: startsOnCalendar ? "event_end_time" : "stage_entered_at",
       reentry_mode: "restart_on_match",
       reply_target_stage_id: atendimentoStageId,
       builder_version: 2,
@@ -459,7 +474,8 @@ function buildInitialJourneyForm(params: {
   return {
     id: params.journey.id,
     name: params.journey.name,
-    trigger_stage_id: params.journey.trigger_stage_id,
+    trigger_stage_id: params.journey.trigger_stage_id || defaultStageId,
+    trigger_event_status: params.journey.trigger_event_status || "done",
     instance_name: params.journey.instance_name,
     is_active: params.journey.is_active,
     humanized_dispatch_enabled: params.journey.humanized_dispatch_enabled,
@@ -477,20 +493,23 @@ function buildInitialJourneyForm(params: {
       params.journey.daily_dispatch_weekends_enabled ?? false,
     daily_dispatch_time: toHHMM(params.journey.daily_dispatch_time, "08:00"),
     entry_source: params.journey.entry_source ?? "conditions",
-    entry_rule: updateDefaultEntryRuleInstance(
-      normalizeRuleNode(
-        params.journey.entry_rule,
-        createDefaultEntryRule(
-          params.journey.trigger_stage_id,
-          params.journey.instance_name,
-        ),
-      ),
-      params.journey.instance_name,
-    ),
-    exit_rule: normalizeRuleNode(
-      params.journey.exit_rule,
-      createDefaultExitRule(),
-    ),
+    entry_rule:
+      params.journey.entry_source === "calendar_event"
+        ? normalizeRuleNode(params.journey.entry_rule, createEmptyRuleGroup())
+        : updateDefaultEntryRuleInstance(
+            normalizeRuleNode(
+              params.journey.entry_rule,
+              createDefaultEntryRule(
+                params.journey.trigger_stage_id,
+                params.journey.instance_name,
+              ),
+            ),
+            params.journey.instance_name,
+          ),
+    exit_rule:
+      params.journey.entry_source === "calendar_event"
+        ? normalizeRuleNode(params.journey.exit_rule, createEmptyRuleGroup())
+        : normalizeRuleNode(params.journey.exit_rule, createDefaultExitRule()),
     anchor_event: params.journey.anchor_event,
     reentry_mode: params.journey.reentry_mode,
     reply_target_stage_id:
@@ -1693,6 +1712,7 @@ interface AutomationMessageModalProps {
   previewLoading: boolean;
   onRunPreview: (leadId: string) => Promise<void>;
   preselectedStageId: string | null;
+  preselectedEntrySource: AutomationJourneyEntrySource;
   preselectedInstanceName: string | null;
   onSelectJourney: (journeyId: string | null) => void;
   createJourney: (
@@ -1735,6 +1755,7 @@ export function AutomationMessageModal({
   previewLoading,
   onRunPreview,
   preselectedStageId,
+  preselectedEntrySource,
   preselectedInstanceName,
   onSelectJourney,
   createJourney,
@@ -1752,6 +1773,7 @@ export function AutomationMessageModal({
       journey,
       stages,
       preselectedStageId,
+      preselectedEntrySource,
       preselectedInstanceName,
     }),
   );
@@ -1829,6 +1851,7 @@ export function AutomationMessageModal({
     const initializationKey = [
       journey?.id ?? "new",
       preselectedStageId ?? "",
+      preselectedEntrySource,
       preselectedInstanceName ?? "",
       stages.map((stage) => stage.id).join(","),
       steps.map((step) => `${step.id}:${step.rb_days_offset}:${step.rb_message_kind}:${step.rb_payment_type_ids.join(",")}`).join("|"),
@@ -1844,6 +1867,7 @@ export function AutomationMessageModal({
         journey,
         stages,
         preselectedStageId,
+        preselectedEntrySource,
         preselectedInstanceName,
       }),
     );
@@ -1889,7 +1913,15 @@ export function AutomationMessageModal({
     setStepEditorOpen(false);
     setPendingMediaFile(null);
     setActiveTab("entry");
-  }, [journey, open, preselectedInstanceName, preselectedStageId, stages, steps]);
+  }, [
+    journey,
+    open,
+    preselectedEntrySource,
+    preselectedInstanceName,
+    preselectedStageId,
+    stages,
+    steps,
+  ]);
 
   useEffect(() => {
     if (previewLeads.length === 0) {
@@ -2007,12 +2039,37 @@ export function AutomationMessageModal({
       if (
         field === "instance_name" &&
         typeof value === "string" &&
-        value.length > 0
+        value.length > 0 &&
+        previous.entry_source !== "calendar_event"
       ) {
         nextState.entry_rule = updateDefaultEntryRuleInstance(
           previous.entry_rule,
           value,
         );
+      }
+
+      // Cada origem tem o seu proprio conjunto de referencias de tempo.
+      if (field === "entry_source") {
+        const goingToCalendar = value === "calendar_event";
+        const isCalendarAnchor = CALENDAR_ANCHOR_EVENTS.has(
+          previous.anchor_event,
+        );
+
+        if (goingToCalendar) {
+          nextState.entry_rule = createEmptyRuleGroup();
+          nextState.exit_rule = createEmptyRuleGroup();
+
+          if (!isCalendarAnchor) {
+            nextState.anchor_event = "event_end_time";
+          }
+        } else if (isCalendarAnchor) {
+          nextState.anchor_event = "stage_entered_at";
+          nextState.entry_rule = createDefaultEntryRule(
+            previous.trigger_stage_id,
+            previous.instance_name,
+          );
+          nextState.exit_rule = createDefaultExitRule();
+        }
       }
 
       return nextState;
@@ -2025,8 +2082,15 @@ export function AutomationMessageModal({
       return;
     }
 
-    if (!journeyForm.trigger_stage_id) {
+    const isCalendarEntry = journeyForm.entry_source === "calendar_event";
+
+    if (!isCalendarEntry && !journeyForm.trigger_stage_id) {
       toast.error("Selecione a etapa do pipeline");
+      return;
+    }
+
+    if (isCalendarEntry && !journeyForm.trigger_event_status) {
+      toast.error("Selecione o status do agendamento");
       return;
     }
 
@@ -2061,7 +2125,10 @@ export function AutomationMessageModal({
 
       const payload: AutomationJourneyPayload = {
         name: journeyForm.name.trim(),
-        trigger_stage_id: journeyForm.trigger_stage_id,
+        trigger_stage_id: isCalendarEntry ? null : journeyForm.trigger_stage_id,
+        trigger_event_status: isCalendarEntry
+          ? journeyForm.trigger_event_status
+          : null,
         instance_name: journeyForm.instance_name,
         is_active: journeyForm.is_active,
         humanized_dispatch_enabled: journeyForm.humanized_dispatch_enabled,
@@ -2085,25 +2152,26 @@ export function AutomationMessageModal({
             ? normalizeTimeForDb(journeyForm.daily_dispatch_time)
             : null,
         entry_source: journeyForm.entry_source,
-        entry_rule: normalizeRuleNode(
-          journeyForm.entry_source === "rb"
-            ? createDefaultEntryRule(
+        entry_rule: isCalendarEntry
+          ? createEmptyRuleGroup()
+          : normalizeRuleNode(
+              journeyForm.entry_source === "rb"
+                ? createDefaultEntryRule(
+                    journeyForm.trigger_stage_id,
+                    journeyForm.instance_name,
+                  )
+                : updateDefaultEntryRuleInstance(
+                    journeyForm.entry_rule,
+                    journeyForm.instance_name,
+                  ),
+              createDefaultEntryRule(
                 journeyForm.trigger_stage_id,
                 journeyForm.instance_name,
-              )
-            : updateDefaultEntryRuleInstance(
-                journeyForm.entry_rule,
-                journeyForm.instance_name,
               ),
-          createDefaultEntryRule(
-            journeyForm.trigger_stage_id,
-            journeyForm.instance_name,
-          ),
-        ),
-        exit_rule: normalizeRuleNode(
-          journeyForm.exit_rule,
-          createDefaultExitRule(),
-        ),
+            ),
+        exit_rule: isCalendarEntry
+          ? createEmptyRuleGroup()
+          : normalizeRuleNode(journeyForm.exit_rule, createDefaultExitRule()),
         anchor_event: journeyForm.anchor_event,
         reentry_mode: journeyForm.reentry_mode,
         reply_target_stage_id: journeyForm.reply_target_stage_id || null,
@@ -2190,6 +2258,7 @@ export function AutomationMessageModal({
           journey: savedJourney,
           stages,
           preselectedStageId,
+          preselectedEntrySource,
           preselectedInstanceName,
         }),
       );
@@ -2414,7 +2483,14 @@ export function AutomationMessageModal({
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
           <div className="space-y-6">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
+            <div
+              className={cn(
+                "grid gap-4",
+                journeyForm.entry_source === "calendar_event"
+                  ? "xl:grid-cols-[minmax(0,1fr)_220px_220px]"
+                  : "xl:grid-cols-[minmax(0,1fr)_220px_220px_220px]",
+              )}
+            >
               <div className="space-y-2">
                 <Label htmlFor="journey-name">Nome da automacao</Label>
                 <Input
@@ -2427,26 +2503,28 @@ export function AutomationMessageModal({
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label>Etapa do Funil</Label>
-                <Select
-                  value={journeyForm.trigger_stage_id}
-                  onValueChange={(value) =>
-                    handleJourneyFieldChange("trigger_stage_id", value)
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione a etapa" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {stages.map((stage) => (
-                      <SelectItem key={stage.id} value={stage.id}>
-                        {stage.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {journeyForm.entry_source === "calendar_event" ? null : (
+                <div className="space-y-2">
+                  <Label>Etapa do Funil</Label>
+                  <Select
+                    value={journeyForm.trigger_stage_id}
+                    onValueChange={(value) =>
+                      handleJourneyFieldChange("trigger_stage_id", value)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione a etapa" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {stages.map((stage) => (
+                        <SelectItem key={stage.id} value={stage.id}>
+                          {stage.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>Instancia</Label>
@@ -2560,6 +2638,11 @@ export function AutomationMessageModal({
                           label: "RB",
                           disabled: !rbEntryAvailable,
                         },
+                        {
+                          value: "calendar_event",
+                          label: "Agenda",
+                          disabled: false,
+                        },
                       ].map((option) => {
                         const selected =
                           journeyForm.entry_source === option.value;
@@ -2590,6 +2673,69 @@ export function AutomationMessageModal({
                       })}
                     </div>
                   </div>
+
+                  {journeyForm.entry_source === "calendar_event" ? (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label className="text-[var(--color-gray-600)]">
+                          Momento de referencia
+                        </Label>
+                        <Select
+                          value={journeyForm.anchor_event}
+                          onValueChange={(value: AutomationAnchorEvent) =>
+                            handleJourneyFieldChange("anchor_event", value)
+                          }
+                        >
+                          <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                            <SelectValue placeholder="Selecione a referencia" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AUTOMATION_CALENDAR_ANCHOR_EVENT_OPTIONS.map(
+                              (option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {option.label}
+                                </SelectItem>
+                              ),
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-[var(--color-gray-600)]">
+                          Quando o agendamento ficar
+                        </Label>
+                        <Select
+                          value={journeyForm.trigger_event_status}
+                          onValueChange={(value: AutomationTriggerEventStatus) =>
+                            handleJourneyFieldChange(
+                              "trigger_event_status",
+                              value,
+                            )
+                          }
+                        >
+                          <SelectTrigger className="border-[var(--border-input)] bg-[var(--color-surface-1)] text-[var(--color-gray-900)]">
+                            <SelectValue placeholder="Selecione o status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AUTOMATION_TRIGGER_EVENT_STATUS_OPTIONS.map(
+                              (option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {option.label}
+                                </SelectItem>
+                              ),
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {journeyForm.entry_source === "rb" ? (
                     <div className="space-y-5">
@@ -2699,7 +2845,7 @@ export function AutomationMessageModal({
                         ) : null}
                       </div>
                     </div>
-                  ) : (
+                  ) : journeyForm.entry_source === "conditions" ? (
                     <AutomationConditionComposer
                       title="Quando essa jornada deve entrar"
                       value={journeyForm.entry_rule}
@@ -2712,9 +2858,9 @@ export function AutomationMessageModal({
                       instances={instances}
                       compact
                     />
-                  )}
+                  ) : null}
 
-                  {!rbEntryAvailable ? (
+                  {journeyForm.entry_source === "rb" && !rbEntryAvailable ? (
                     <p className="text-xs text-[var(--color-gray-500)]">
                       Selecione uma instancia com RB ativo para usar essa
                       entrada.

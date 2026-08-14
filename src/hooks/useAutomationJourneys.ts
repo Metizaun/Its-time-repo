@@ -15,6 +15,7 @@ import {
   type AutomationStepContentMode,
   type AutomationStepMediaKind,
   type AutomationStepRbMessageKind,
+  type AutomationTriggerEventStatus,
 } from "@/lib/automation";
 
 const EMPTY_JOURNEYS: AutomationJourney[] = [];
@@ -22,7 +23,8 @@ const EMPTY_STEPS: AutomationStep[] = [];
 
 export interface AutomationJourneyPayload {
   name: string;
-  trigger_stage_id: string;
+  trigger_stage_id: string | null;
+  trigger_event_status: AutomationTriggerEventStatus | null;
   instance_name: string;
   is_active: boolean;
   humanized_dispatch_enabled: boolean;
@@ -62,7 +64,15 @@ export interface AutomationStepPayload {
 
 function normalizeJourney(row: Record<string, unknown>) {
   return {
-    ...(row as Omit<AutomationJourney, "entry_rule" | "exit_rule" | "anchor_event" | "reentry_mode">),
+    ...(row as Omit<
+      AutomationJourney,
+      | "entry_rule"
+      | "exit_rule"
+      | "anchor_event"
+      | "reentry_mode"
+      | "trigger_stage_id"
+      | "trigger_event_status"
+    >),
     entry_rule: normalizeRuleNode(row.entry_rule),
     exit_rule: normalizeRuleNode(row.exit_rule),
     humanized_dispatch_enabled: Boolean(row.humanized_dispatch_enabled),
@@ -72,7 +82,12 @@ function normalizeJourney(row: Record<string, unknown>) {
     daily_dispatch_enabled: Boolean(row.daily_dispatch_enabled),
     daily_dispatch_weekends_enabled: Boolean(row.daily_dispatch_weekends_enabled),
     daily_dispatch_time: typeof row.daily_dispatch_time === "string" ? row.daily_dispatch_time : null,
-    entry_source: row.entry_source === "rb" ? "rb" : "conditions",
+    entry_source:
+      row.entry_source === "rb" || row.entry_source === "calendar_event"
+        ? row.entry_source
+        : "conditions",
+    trigger_stage_id: (row.trigger_stage_id as string | null) ?? null,
+    trigger_event_status: (row.trigger_event_status as AutomationTriggerEventStatus | null) ?? null,
     anchor_event: (row.anchor_event as AutomationAnchorEvent | null) ?? "stage_entered_at",
     reentry_mode: (row.reentry_mode as AutomationReentryMode | null) ?? "restart_on_match",
     reply_target_stage_id: (row.reply_target_stage_id as string | null) ?? null,
