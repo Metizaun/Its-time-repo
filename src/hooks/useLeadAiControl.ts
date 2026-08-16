@@ -56,6 +56,7 @@ export function useLeadAiControl(
         const nextState = await getLeadAiState({
           accessToken,
           leadId,
+          instanceName,
         });
 
         setState(nextState);
@@ -76,7 +77,7 @@ export function useLeadAiControl(
         }
       }
     },
-    [hookEnabled, leadId]
+    [hookEnabled, instanceName, leadId]
   );
 
   const toggle = useCallback(
@@ -112,6 +113,7 @@ export function useLeadAiControl(
           accessToken,
           leadId,
           enabled: nextEnabled,
+          instanceName,
         });
 
         setState(nextState);
@@ -128,7 +130,7 @@ export function useLeadAiControl(
         setSaving(false);
       }
     },
-    [hookEnabled, leadId, loading, saving, state]
+    [hookEnabled, instanceName, leadId, loading, saving, state]
   );
 
   useEffect(() => {
@@ -159,7 +161,7 @@ export function useLeadAiControl(
     return () => {
       supabase.removeChannel(messageChannel);
     };
-  }, [fetchState, hookEnabled, leadId]);
+  }, [fetchState, hookEnabled, instanceName, leadId]);
 
   return {
     state,

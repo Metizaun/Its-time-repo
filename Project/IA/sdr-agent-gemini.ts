@@ -696,6 +696,7 @@ type LeadAiReason =
 type LeadAiStateRow = {
   agent_id: string;
   lead_id: string;
+  interaction_mode: "ai" | "human";
   freeze_until: string | null;
   pause_origin: string | null;
   pause_reference: string | null;
@@ -886,6 +887,7 @@ type SendManualMessageInput = {
 type FinalizeHumanHandoffInput = {
   leadId: string;
   stageId: string;
+  instanceName?: string | null;
 };
 
 type TestHandoffInput = {
@@ -5975,6 +5977,7 @@ export class AgentManager {
       {
         agent_id: agentId,
         lead_id: leadId,
+        interaction_mode: "ai",
         freeze_until: null,
         status: "active",
         pause_origin: null,
@@ -5992,23 +5995,26 @@ export class AgentManager {
     return { success: true };
   }
 
-  async getLeadAiState(context: AuthContext, leadId: string) {
+  async getLeadAiState(context: AuthContext, leadId: string, requestedInstanceName?: string | null) {
     const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    const selectedInstanceName = requestedInstanceName?.trim() || lead.instancia?.trim() || null;
     const agent =
-      lead.instancia?.trim()
-        ? await this.getAnyAgentByInstance(lead.instancia, context.acesId, context.crmUserId, context.role)
+      selectedInstanceName
+        ? await this.getAnyAgentByInstance(selectedInstanceName, context.acesId, context.crmUserId, context.role)
         : null;
 
-    return this.resolveLeadAiState(lead.id, agent, lead.instancia, lead.interaction_mode);
+    return this.resolveLeadAiState(lead.id, agent, selectedInstanceName, lead.interaction_mode);
   }
 
-  async updateLeadAiState(context: AuthContext, leadId: string, enabled: boolean) {
+  async updateLeadAiState(
+    context: AuthContext,
+    leadId: string,
+    enabled: boolean,
+    requestedInstanceName?: string | null,
+  ) {
     const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
-    if (enabled && lead.interaction_mode === "human") {
-      throw new HttpError(409, "Finalize o atendimento humano antes de reativar a IA.");
-    }
 
-    const instanceName = lead.instancia?.trim() ?? "";
+    const instanceName = requestedInstanceName?.trim() || lead.instancia?.trim() || "";
     if (!instanceName) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
@@ -6021,6 +6027,11 @@ export class AgentManager {
     );
     if (!agent) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
+    }
+
+    const currentState = await this.getLeadState(agent.id, lead.id);
+    if (enabled && currentState?.interaction_mode === "human") {
+      throw new HttpError(409, "Finalize o atendimento humano antes de reativar a IA.");
     }
 
     await this.upsertLeadState(agent.id, lead.id, enabled
@@ -6039,15 +6050,11 @@ export class AgentManager {
 
   async finalizeHumanHandoff(context: AuthContext, input: FinalizeHumanHandoffInput) {
     const lead = await this.loadLeadById(input.leadId, context.acesId, context.crmUserId, context.role);
-    if (lead.interaction_mode !== "human") {
-      throw new HttpError(409, "Este lead nao esta em atendimento humano.");
-    }
-
     if (!isUuid(input.stageId)) {
       throw new HttpError(400, "stageId invalido");
     }
 
-    const instanceName = lead.instancia?.trim() ?? "";
+    const instanceName = input.instanceName?.trim() || lead.instancia?.trim() || "";
     if (!instanceName) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
@@ -6060,6 +6067,11 @@ export class AgentManager {
     );
     if (!agent) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
+    }
+
+    const currentState = await this.getLeadState(agent.id, lead.id);
+    if (currentState?.interaction_mode !== "human") {
+      throw new HttpError(409, "Esta instancia nao esta em atendimento humano.");
     }
 
     const { error: moveStageError } = await this.serviceClient.rpc("service_move_lead_to_stage", {
@@ -6086,7 +6098,6 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel encerrar o atendimento especializado", transferError);
     }
 
-    await this.updateLeadInteractionMode(context.acesId, lead.id, "ai");
     await this.upsertLeadState(agent.id, lead.id, this.buildEnabledLeadAiPayload(agent));
     await this.saveMessage({
       leadId: lead.id,
@@ -7056,17 +7067,18 @@ export class AgentManager {
     return (data as MessageRow | null) ?? null;
   }
 
-  private chatMessagesCacheKey(acesId: number, leadId: string) {
-    return `crm-chat:messages:v3:${acesId}:${leadId}`;
+  private chatMessagesCacheKey(acesId: number, leadId: string, instanceName?: string | null) {
+    const instanceKey = encodeURIComponent(instanceName?.trim() || "primary");
+    return `crm-chat:messages:v4:${acesId}:${leadId}:${instanceKey}`;
   }
 
-  private async invalidateChatMessagesCache(acesId: number, leadId: string) {
+  private async invalidateChatMessagesCache(acesId: number, leadId: string, instanceName?: string | null) {
     if (!this.redis) {
       return;
     }
 
     try {
-      await this.redis.del(this.chatMessagesCacheKey(acesId, leadId));
+      await this.redis.del(this.chatMessagesCacheKey(acesId, leadId, instanceName));
     } catch (error) {
       console.warn("[crm-ai] Falha ao invalidar cache de mensagens do chat:", {
         acesId,
@@ -7629,11 +7641,12 @@ export class AgentManager {
     return data as LeadRow;
   }
 
-  private async fetchRecentConversation(leadId: string) {
+  private async fetchRecentConversation(leadId: string, instanceName?: string | null) {
     const { data, error } = await this.serviceClient
       .from("message_history")
       .select("id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id")
       .eq("lead_id", leadId)
+      .eq("instance", instanceName ?? "")
       .order("sent_at", { ascending: false })
       .limit(15);
 
@@ -7705,11 +7718,12 @@ export class AgentManager {
     }
   }
 
-  private async fetchLatestLeadInboundMessage(leadId: string) {
+  private async fetchLatestLeadInboundMessage(leadId: string, instanceName?: string | null) {
     const { data, error } = await this.serviceClient
       .from("message_history")
       .select("id, content, sent_at")
       .eq("lead_id", leadId)
+      .eq("instance", instanceName ?? "")
       .eq("source_type", "lead")
       .order("sent_at", { ascending: false })
       .limit(1)
@@ -7789,7 +7803,7 @@ export class AgentManager {
     leadId: string,
     agent: AgentRow | null,
     instanceName?: string | null,
-    interactionMode?: "ai" | "human" | null
+    _legacyInteractionMode?: "ai" | "human" | null
   ): Promise<LeadAiControlState> {
     if (!agent) {
       return {
@@ -7825,7 +7839,19 @@ export class AgentManager {
       pausedUntil,
     };
 
-    if (interactionMode === "human") {
+    // The legacy crm.leads.interaction_mode is account-wide and cannot decide
+    // whether this specific instance is in human attendance. New state rows
+    // carry the mode per agent/instance. During rollout, only the per-agent
+    // pause fields are used as a fallback; the account-wide flag is ignored.
+    const legacyHumanState =
+      leadState?.pause_origin === "manual_send" ||
+      leadState?.pause_origin === "human_webhook" ||
+      (leadState?.pause_origin === "ai_policy" && leadState.status === "paused");
+    const effectiveInteractionMode =
+      leadState?.interaction_mode ??
+      (legacyHumanState ? "human" : "ai");
+
+    if (effectiveInteractionMode === "human") {
       return {
         ...baseState,
         enabled: false,
@@ -7879,16 +7905,37 @@ export class AgentManager {
   }
 
   private async upsertLeadState(agentId: string, leadId: string, payload: JsonRecord) {
-    const { error } = await this.agentsClient.from("ai_lead_state").upsert(
-      {
-        agent_id: agentId,
-        lead_id: leadId,
-        ...payload,
-        updated_at: new Date().toISOString(),
-      },
+    const statePayload = {
+      agent_id: agentId,
+      lead_id: leadId,
+      ...payload,
+      updated_at: new Date().toISOString(),
+    };
+    let { error } = await this.agentsClient.from("ai_lead_state").upsert(
+      statePayload,
       { onConflict: "agent_id,lead_id" }
     );
 
+    // Keep the rollout safe if the backend image starts before PostgREST has
+    // refreshed the schema cache for the new column. The legacy pause fields
+    // still preserve the per-agent behavior until the migration is visible.
+    if (
+      error &&
+      Object.prototype.hasOwnProperty.call(payload, "interaction_mode") &&
+      String((error as { message?: string }).message ?? "").toLowerCase().includes("interaction_mode")
+    ) {
+      const legacyPayload = { ...statePayload } as Record<string, unknown>;
+      delete legacyPayload.interaction_mode;
+      ({ error } = await this.agentsClient.from("ai_lead_state").upsert(
+        legacyPayload,
+        { onConflict: "agent_id,lead_id" }
+      ));
+    }
+
+    /*
+     * Keep this check after the compatibility retry so a real database error
+     * is still surfaced to the caller.
+     */
     if (error) {
       console.error("[crm-ai-backend] Falha ao atualizar ai_lead_state:", {
         agentId,
@@ -7905,6 +7952,7 @@ export class AgentManager {
 
   private buildEnabledLeadAiPayload(agent: AgentRow): JsonRecord {
     return {
+      interaction_mode: "ai",
       manual_ai_enabled: agent.is_active ? null : true,
       freeze_until: null,
       status: "active",
@@ -7914,30 +7962,12 @@ export class AgentManager {
     };
   }
 
-  private async updateLeadInteractionMode(
-    acesId: number,
-    leadId: string,
-    interactionMode: "ai" | "human"
-  ) {
-    const { error } = await this.serviceClient
-      .from("leads")
-      .update({
-        interaction_mode: interactionMode,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", leadId)
-      .eq("aces_id", acesId);
-
-    if (error) {
-      throw new HttpError(500, "Nao foi possivel atualizar o modo de interacao do lead", error);
-    }
-  }
-
   private async freezeLead(
     agent: AgentRow,
     leadId: string,
     pauseOrigin: "manual_send" | "human_webhook" | "ai_policy" | "manual_override",
     pauseReference?: string | null,
+    interactionMode?: "ai" | "human",
   ) {
     const freezeUntil = new Date(Date.now() + agent.human_pause_minutes * 60_000).toISOString();
     await this.upsertLeadState(agent.id, leadId, {
@@ -7946,6 +7976,7 @@ export class AgentManager {
       pause_origin: pauseOrigin,
       pause_reference: pauseReference ?? null,
       paused_at: new Date().toISOString(),
+      ...(interactionMode ? { interaction_mode: interactionMode } : {}),
     });
     return freezeUntil;
   }
@@ -8452,12 +8483,13 @@ export class AgentManager {
     return "evolution";
   }
 
-  private async resolveLatestLeadInboundAt(lead: LeadRow) {
+  private async resolveLatestLeadInboundAt(lead: LeadRow, instanceName?: string | null) {
     const { data, error } = await this.serviceClient
       .from("message_history")
       .select("sent_at")
       .eq("aces_id", lead.aces_id)
       .eq("lead_id", lead.id)
+      .eq("instance", instanceName?.trim() || lead.instancia?.trim() || "")
       .eq("direction", "inbound")
       .eq("source_type", "lead")
       .order("sent_at", { ascending: false })
@@ -8468,7 +8500,7 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel calcular a janela de atendimento", error);
     }
 
-    const candidates = [lead.last_lead_inbound_at, data?.sent_at]
+    const candidates = [data?.sent_at]
       .map((value) => (typeof value === "string" ? value.trim() : ""))
       .map((value) => ({ value, timestamp: Date.parse(value) }))
       .filter((candidate) => candidate.value && Number.isFinite(candidate.timestamp))
@@ -8481,10 +8513,10 @@ export class AgentManager {
     const provider = await this.resolveInstanceTextProvider(instanceName, lead.aces_id);
 
     if (provider !== "gupshup") {
-      return buildChatSendPolicy(provider, lead.last_lead_inbound_at);
+      return buildChatSendPolicy(provider, await this.resolveLatestLeadInboundAt(lead, instanceName));
     }
 
-    const lastInboundAt = await this.resolveLatestLeadInboundAt(lead);
+    const lastInboundAt = await this.resolveLatestLeadInboundAt(lead, instanceName);
     return buildChatSendPolicy(provider, lastInboundAt);
   }
 
@@ -10043,8 +10075,7 @@ export class AgentManager {
       });
     }
 
-    await this.updateLeadInteractionMode(agent.aces_id, lead.id, "human");
-    await this.freezeLead(agent, lead.id, "ai_policy", reason);
+    await this.freezeLead(agent, lead.id, "ai_policy", reason, "human");
     await this.saveMessage({
       leadId: lead.id,
       acesId: agent.aces_id,
@@ -10083,8 +10114,7 @@ export class AgentManager {
     const latestLeadMessage = [...params.messages]
       .reverse()
       .find((message) => message.source_type === "lead")?.content?.trim();
-    await this.updateLeadInteractionMode(params.agent.aces_id, params.lead.id, "human");
-    await this.freezeLead(params.agent, params.lead.id, "ai_policy", params.reason);
+    await this.freezeLead(params.agent, params.lead.id, "ai_policy", params.reason, "human");
     await this.saveMessage({
       leadId: params.lead.id,
       acesId: params.agent.aces_id,
@@ -11706,7 +11736,7 @@ export class AgentManager {
       handoffRequired ? "handoff_humano_recomendado=true" : null,
       status !== "parsed" ? "instrucao=solicitar uma nova foto nitida e completa do receituario" : null,
       status === "parsed" && axisUncertain
-        ? "instrucao=eixo do astigmatismo nao ficou nitido; informe o grau esferico ao cliente e peca para a equipe confirmar o eixo antes de fechar o pedido"
+        ? "instrucao=receita lida; o campo de eixo de um dos olhos nao foi informado. Informe todos os graus extraidos e peca apenas a confirmacao desse campo antes de fechar o pedido. Nunca diga que a receita ou a imagem esta ilegivel, pouco clara ou que nao foi possivel ler a receita."
         : null,
       "[/ANALISE_DE_RECEITUARIO]",
     ].filter((line): line is string => Boolean(line)).join("\n");
@@ -12139,7 +12169,7 @@ export class AgentManager {
     const opticsImageAnalyses = await this.processBufferedOpticsImages(agent, lead, bufferedEntries);
 
     let leadState = await this.getLeadState(agent.id, lead.id);
-    const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id);
+    const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id, agent.instance_name);
     if (
       !this.shouldAnalyzeLead(
         latestInbound?.sent_at ?? null,
@@ -12159,7 +12189,7 @@ export class AgentManager {
 
     let rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
     const tags = await this.getTagsForAccount(agent.aces_id);
-    const conversation = await this.fetchRecentConversation(lead.id);
+    const conversation = await this.fetchRecentConversation(lead.id, agent.instance_name);
     const temporalContext = buildNativeTemporalContext();
     const inboundMessages = bufferedEntries
       .map((entry) => entry.messageId)
@@ -13144,18 +13174,22 @@ export class AgentManager {
     };
   }
 
-  async listChatMessages(context: AuthContext, leadIdInput: string) {
+  async listChatMessages(
+    context: AuthContext,
+    leadIdInput: string,
+    requestedInstanceName?: string | null,
+  ) {
     const leadId = String(leadIdInput ?? "").trim();
     if (!isUuid(leadId)) {
       throw new HttpError(400, "leadId invalido");
     }
 
     const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
-    const instanceName = lead.instancia?.trim();
+    const instanceName = requestedInstanceName?.trim() || lead.instancia?.trim();
     const sendPolicy = instanceName
       ? await this.resolveChatSendPolicy(lead, instanceName)
       : buildChatSendPolicy("evolution", lead.last_lead_inbound_at);
-    const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id);
+    const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id, instanceName);
 
     if (this.redis) {
       try {
@@ -13187,6 +13221,7 @@ export class AgentManager {
       )
       .eq("lead_id", lead.id)
       .eq("aces_id", context.acesId)
+      .eq("instance", instanceName ?? "")
       .order("sent_at", { ascending: true })
       .order("id", { ascending: true });
 
@@ -13633,18 +13668,18 @@ export class AgentManager {
     context: AuthContext;
     configuredAgent: AgentRow | null;
     lead: LeadRow;
+    instanceName: string;
     aiState: { reason: LeadAiReason } | null;
     summary: string;
   }) {
-    if (params.lead.interaction_mode !== "human") {
-      await this.updateLeadInteractionMode(params.context.acesId, params.lead.id, "human");
+    if (params.aiState?.reason !== "human_handoff") {
       await this.saveMessage({
         leadId: params.lead.id,
         acesId: params.context.acesId,
         content: INTERNAL_HANDOFF_TRANSITION_MESSAGE,
         direction: "outbound",
         sourceType: "system",
-        instanceName: params.lead.instancia,
+        instanceName: params.instanceName,
         conversationId: null,
       });
       await this.saveMessage({
@@ -13656,7 +13691,7 @@ export class AgentManager {
         ),
         direction: "outbound",
         sourceType: "system",
-        instanceName: params.lead.instancia,
+        instanceName: params.instanceName,
         conversationId: null,
       });
     }
@@ -13674,6 +13709,7 @@ export class AgentManager {
       params.lead.id,
       "manual_send",
       params.context.crmUserId,
+      "human",
     );
     await this.createRun({
       agentId: params.configuredAgent.id,
@@ -13820,6 +13856,7 @@ export class AgentManager {
       context: params.context,
       configuredAgent: params.configuredAgent,
       lead: params.lead,
+      instanceName: params.instanceName,
       aiState: params.aiState,
       summary: caption || intent.file_name || "Anexo enviado pelo operador.",
     });
@@ -13889,7 +13926,14 @@ export class AgentManager {
       createdBy: context.crmUserId,
     });
 
-    await this.pauseAgentAfterManualSend({ context, configuredAgent, lead, aiState, summary: content });
+    await this.pauseAgentAfterManualSend({
+      context,
+      configuredAgent,
+      lead,
+      instanceName,
+      aiState,
+      summary: content,
+    });
 
     return { success: true };
   }

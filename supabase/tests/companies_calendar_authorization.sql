@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(13);
+SELECT plan(17);
 
 SELECT is(
   crm.normalize_cnpj('12.ABC.345/01DE-35'),
@@ -229,6 +229,82 @@ SELECT ok(
     LIMIT 1
   ),
   'cancelamento preserva motivo e auditoria'
+);
+
+RESET ROLE;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config(
+  'request.jwt.claims',
+  '{"sub":"94000000-0000-0000-0000-000000000002","role":"authenticated"}',
+  TRUE
+);
+
+INSERT INTO calendar.events (
+  id,
+  title,
+  start_time,
+  end_time,
+  lead_id
+)
+VALUES (
+  '94500000-0000-0000-0000-000000000001',
+  'Evento para exclusao logica',
+  now() + interval '2 days',
+  now() + interval '2 days 1 hour',
+  '94300000-0000-0000-0000-000000000002'
+);
+
+SELECT is(
+  (
+    SELECT owner_user_id
+    FROM calendar.events
+    WHERE id = '94500000-0000-0000-0000-000000000001'
+  ),
+  '94100000-0000-0000-0000-000000000002'::uuid,
+  'evento manual pertence ao vendedor que o criou'
+);
+
+SELECT set_config(
+  'request.jwt.claims',
+  '{"sub":"94000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  TRUE
+);
+
+SELECT lives_ok(
+  $sql$
+    UPDATE calendar.events
+    SET deleted_at = now()
+    WHERE id = '94500000-0000-0000-0000-000000000001'
+  $sql$,
+  'admin pode excluir logicamente evento autorizado sem violar RLS'
+);
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM calendar.events
+    WHERE id = '94500000-0000-0000-0000-000000000001'
+      AND deleted_at IS NOT NULL
+  ),
+  1,
+  'admin mantem acesso de auditoria ao evento excluido'
+);
+
+SELECT set_config(
+  'request.jwt.claims',
+  '{"sub":"94000000-0000-0000-0000-000000000003","role":"authenticated"}',
+  TRUE
+);
+
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM calendar.events
+    WHERE id = '94500000-0000-0000-0000-000000000001'
+  ),
+  0,
+  'outro vendedor nao ve evento excluido de outro responsavel'
 );
 
 RESET ROLE;

@@ -13,20 +13,25 @@ import type { ChatComposerPayload, ChatMessage, ChatSendPolicy } from "@/types/c
 
 export type { ChatMessage } from "@/types/chat";
 
-export function useChat(leadId: string | null) {
+export function useChat(leadId: string | null, instanceName?: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sendPolicy, setSendPolicy] = useState<ChatSendPolicy | null>(null);
   const [loading, setLoading] = useState(false);
   const activeLeadIdRef = useRef(leadId);
   activeLeadIdRef.current = leadId;
+  const activeInstanceNameRef = useRef(instanceName);
+  activeInstanceNameRef.current = instanceName;
 
   const fetchMessages = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!leadId) return;
 
     if (!options.silent) setLoading(true);
     try {
-      const result = await listChatMessages(leadId);
-      if (activeLeadIdRef.current !== leadId) return;
+      const result = await listChatMessages(leadId, instanceName);
+      if (
+        activeLeadIdRef.current !== leadId ||
+        activeInstanceNameRef.current !== instanceName
+      ) return;
       setMessages(result.messages);
       setSendPolicy(result.sendPolicy);
     } catch (error: unknown) {
@@ -37,7 +42,7 @@ export function useChat(leadId: string | null) {
     } finally {
       if (!options.silent && activeLeadIdRef.current === leadId) setLoading(false);
     }
-  }, [leadId]);
+  }, [instanceName, leadId]);
 
   const sendMessage = async (
     payload: ChatComposerPayload,
@@ -159,8 +164,11 @@ export function useChat(leadId: string | null) {
         async (payload) => {
           console.log("Realtime detectou nova mensagem:", payload);
 
-          const newMessage = payload.new as { direction?: string };
-          if (newMessage.direction === "inbound" || newMessage.direction === "outbound") {
+          const newMessage = payload.new as { direction?: string; instance?: string | null };
+          if (
+            newMessage.instance === (instanceName?.trim() || null) &&
+            (newMessage.direction === "inbound" || newMessage.direction === "outbound")
+          ) {
             await fetchMessages({ silent: true });
           }
         }
@@ -206,7 +214,7 @@ export function useChat(leadId: string | null) {
       document.removeEventListener("visibilitychange", handleResume);
       void supabase.removeChannel(channel);
     };
-  }, [fetchMessages, leadId]);
+  }, [fetchMessages, instanceName, leadId]);
 
   useEffect(() => {
     if (

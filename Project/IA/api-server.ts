@@ -2284,6 +2284,7 @@ app.get(
     const result = await manager.listChatMessages(
       req.authContext!,
       getSingleParam(req.params.leadId),
+      asString(req.query.instanceName),
     );
     res.json(result);
   }),
@@ -2294,7 +2295,7 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const leadId = getSingleParam(req.params.leadId);
-    const result = await manager.getLeadAiState(req.authContext!, leadId);
+    const result = await manager.getLeadAiState(req.authContext!, leadId, asString(req.query.instanceName));
     res.json(result);
   }),
 );
@@ -2312,6 +2313,7 @@ app.put(
       req.authContext!,
       leadId,
       req.body.enabled,
+      asString(req.body.instanceName),
     );
     res.json(result);
   }),
@@ -2325,6 +2327,7 @@ app.post(
     const result = await manager.finalizeHumanHandoff(req.authContext!, {
       leadId,
       stageId: String(req.body.stageId ?? ""),
+      instanceName: asString(req.body.instanceName),
     });
     res.json(result);
   }),

@@ -229,9 +229,12 @@ function normalizeSendPolicy(policy: ChatSendPolicy | null | undefined): ChatSen
   };
 }
 
-export async function listChatMessages(leadId: string) {
+export async function listChatMessages(leadId: string, instanceName?: string | null) {
+  const query = instanceName?.trim()
+    ? `?instanceName=${encodeURIComponent(instanceName.trim())}`
+    : "";
   const response = await getCrmBackend<ListChatMessagesResponse>(
-    `/api/chat/leads/${encodeURIComponent(leadId)}/messages`
+    `/api/chat/leads/${encodeURIComponent(leadId)}/messages${query}`
   );
 
   return {
@@ -265,7 +268,7 @@ export async function sendManualMessage(leadId: string, payload: ChatSendPayload
   });
 }
 
-export async function finalizeHumanHandoff(leadId: string, stageId: string) {
+export async function finalizeHumanHandoff(leadId: string, stageId: string, instanceName?: string | null) {
   return postCrmBackend<{
     success: boolean;
     leadId: string;
@@ -273,5 +276,6 @@ export async function finalizeHumanHandoff(leadId: string, stageId: string) {
     stageId: string;
   }>(`/api/chat/leads/${encodeURIComponent(leadId)}/handoff/finalize`, {
     stageId,
+    instanceName: instanceName ?? null,
   });
 }
