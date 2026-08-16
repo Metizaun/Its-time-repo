@@ -56,8 +56,12 @@ export default function Chat() {
   const [finalizeStageId, setFinalizeStageId] = useState("");
   const [finalizePipelineId, setFinalizePipelineId] = useState("");
   const [finalizingHandoff, setFinalizingHandoff] = useState(false);
+  const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
 
-  const { messages, sendPolicy, loading: messagesLoading, sendMessage } = useChat(selectedLeadId);
+  const { messages, sendPolicy, loading: messagesLoading, sendMessage } = useChat(
+    selectedLeadId,
+    selectedLead?.instance_name ?? null,
+  );
   const { byLead: unreadByLead, markRead } = useChatUnread();
   const { stages, loading: stagesLoading } = usePipelineStages(
     finalizePipelineId || null,
@@ -167,7 +171,6 @@ export default function Chat() {
     setSearchParams({});
   };
 
-  const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
   const selectedRouting = selectedLeadId ? routingQueue.byLead.get(selectedLeadId) ?? null : null;
 
   useEffect(() => {
@@ -246,7 +249,7 @@ export default function Chat() {
     setFinalizingHandoff(true);
 
     try {
-      await finalizeHumanHandoff(selectedLead.id, finalizeStageId);
+      await finalizeHumanHandoff(selectedLead.id, finalizeStageId, selectedLead.instance_name);
       if (selectedRouting?.status === "claimed") {
         await routingQueue.close(selectedRouting.routingEventId).catch((error) => {
           console.error("Atendimento finalizado, mas a fila nao foi fechada:", error);
@@ -336,7 +339,7 @@ export default function Chat() {
                 onBack={() => handleSelectLead(null)}
                 onOpenDetails={() => setEditingLead(selectedLead)}
                 onSchedule={handleSchedule}
-                showFinalizeButton={selectedLead.interaction_mode === "human"}
+                showFinalizeButton={leadAiControl.reason === "human_handoff"}
                 onFinalize={openFinalizeDialog}
                 aiControl={
                   isAdmin

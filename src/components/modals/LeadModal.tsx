@@ -30,6 +30,7 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
   const { stages, loading: stagesLoading } = usePipelineStages();
   const { instances, loading: instancesLoading } = useInstances();
   const currentCrmUser = users.find((crmUser) => crmUser.auth_user_id === user?.id) ?? null;
+  const isAccountAdmin = currentCrmUser?.role === "ADMIN";
 
   const [formData, setFormData] = useState({
     name: "",
@@ -120,7 +121,9 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
         <DialogHeader>
           <DialogTitle>Novo Lead</DialogTitle>
           <DialogDescription>
-            A instância escolhida define automaticamente o responsável do lead no banco. Aguarde o carregamento completo antes de salvar.
+            {isAccountAdmin
+              ? "Como Admin, você pode criar Leads em qualquer instância da sua conta. O responsável será você."
+              : "A instância escolhida define automaticamente o responsável do Lead. Aguarde o carregamento completo antes de salvar."}
           </DialogDescription>
         </DialogHeader>
 
@@ -286,7 +289,17 @@ export function LeadModal({ isOpen, onClose }: LeadModalProps) {
 
             <div className="space-y-2">
               <Label htmlFor="owner_id">Responsavel</Label>
-              <Input id="owner_id" value={formData.instancia ? `Definido pela instância: ${formData.instancia}` : ""} disabled />
+              <Input
+                id="owner_id"
+                value={
+                  isAccountAdmin
+                    ? "Você (Admin)"
+                    : formData.instancia
+                      ? `Definido pela instância: ${formData.instancia}`
+                      : ""
+                }
+                disabled
+              />
             </div>
           </div>
 

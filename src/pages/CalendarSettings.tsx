@@ -85,6 +85,7 @@ export default function CalendarSettings() {
   const [professionalDialogOpen, setProfessionalDialogOpen] = useState(false);
   const [editingProfessionalId, setEditingProfessionalId] = useState<string | null>(null);
   const [serviceDialogOpen, setServiceDialogOpen] = useState(false);
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [serviceOverrideDialogOpen, setServiceOverrideDialogOpen] = useState(false);
   const [professionalForm, setProfessionalForm] = useState({
     name: "",
@@ -231,14 +232,17 @@ export default function CalendarSettings() {
     if (!serviceForm.name.trim()) return;
     const normalizedPrice = serviceForm.price.replace(/[^0-9,.-]/g, "").replace(",", ".");
     const priceNumber = normalizedPrice ? Number(normalizedPrice) : null;
-    const success = await configuration.createService({
+    const input = {
       name: serviceForm.name,
       description: serviceForm.description,
       durationMinutes: serviceForm.durationMinutes,
       priceCents: priceNumber === null || Number.isNaN(priceNumber) ? null : Math.round(priceNumber * 100),
       bufferBeforeMinutes: serviceForm.bufferBeforeMinutes,
       bufferAfterMinutes: serviceForm.bufferAfterMinutes,
-    });
+    };
+    const success = editingServiceId
+      ? await configuration.updateService(editingServiceId, input)
+      : await configuration.createService(input);
     if (success) {
       setServiceForm({
         name: "",
@@ -249,7 +253,34 @@ export default function CalendarSettings() {
         bufferAfterMinutes: 0,
       });
       setServiceDialogOpen(false);
+      setEditingServiceId(null);
     }
+  };
+
+  const openNewService = () => {
+    setEditingServiceId(null);
+    setServiceForm({
+      name: "",
+      description: "",
+      durationMinutes: 30,
+      price: "",
+      bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0,
+    });
+    setServiceDialogOpen(true);
+  };
+
+  const openEditService = (service: typeof configuration.services[number]) => {
+    setEditingServiceId(service.id);
+    setServiceForm({
+      name: service.name,
+      description: service.description ?? "",
+      durationMinutes: service.duration_minutes,
+      price: service.price_cents === null ? "" : (service.price_cents / 100).toFixed(2).replace(".", ","),
+      bufferBeforeMinutes: service.buffer_before_minutes,
+      bufferAfterMinutes: service.buffer_after_minutes,
+    });
+    setServiceDialogOpen(true);
   };
 
   const openServiceOverrides = (
@@ -408,7 +439,7 @@ export default function CalendarSettings() {
                 <h2 className="text-xl font-semibold text-[var(--color-gray-900)]">Serviços</h2>
                 <p className="mt-1 text-sm text-[var(--color-gray-500)]">Defina duração, valor e quem pode realizar.</p>
               </div>
-              <Button onClick={() => setServiceDialogOpen(true)} className="shadow-primary"><Plus />Adicionar</Button>
+              <Button onClick={openNewService} className="shadow-primary"><Plus />Adicionar</Button>
             </div>
             <div className="divide-y divide-[var(--border-default)]">
               {configuration.services.length === 0 ? (
@@ -422,9 +453,15 @@ export default function CalendarSettings() {
                         {service.duration_minutes} min · {formatCurrency(service.price_cents)}
                       </p>
                     </div>
-                    <p className="text-sm text-[var(--color-gray-500)]">
-                      Intervalo: {service.buffer_before_minutes + service.buffer_after_minutes} min
-                    </p>
+                    <div className="flex items-center gap-3">
+                      <p className="text-sm text-[var(--color-gray-500)]">
+                        Intervalo: {service.buffer_before_minutes + service.buffer_after_minutes} min
+                      </p>
+                      <Button type="button" variant="outline" size="sm" onClick={() => openEditService(service)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                        Editar
+                      </Button>
+                    </div>
                   </div>
                   <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {activeLocations.map((location) => {
@@ -640,10 +677,13 @@ export default function CalendarSettings() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={serviceDialogOpen} onOpenChange={setServiceDialogOpen}>
+      <Dialog open={serviceDialogOpen} onOpenChange={(open) => {
+        setServiceDialogOpen(open);
+        if (!open) setEditingServiceId(null);
+      }}>
         <DialogContent className="max-w-xl shadow-modal">
           <form onSubmit={submitService}>
-            <DialogHeader><DialogTitle>Adicionar serviço</DialogTitle><DialogDescription>Defina duração e valor padrão.</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>{editingServiceId ? "Editar serviço" : "Adicionar serviço"}</DialogTitle><DialogDescription>Defina duração e valor padrão.</DialogDescription></DialogHeader>
             <div className="grid gap-5 py-6 sm:grid-cols-2">
               <div className="space-y-2 sm:col-span-2"><Label htmlFor="service-name">Nome</Label><Input id="service-name" required value={serviceForm.name} onChange={(event) => setServiceForm((current) => ({ ...current, name: event.target.value }))} className="shadow-inset" /></div>
               <div className="space-y-2 sm:col-span-2"><Label htmlFor="service-description">Descrição</Label><Textarea id="service-description" value={serviceForm.description} onChange={(event) => setServiceForm((current) => ({ ...current, description: event.target.value }))} className="shadow-inset" /></div>
@@ -653,7 +693,7 @@ export default function CalendarSettings() {
               <div className="space-y-2"><Label htmlFor="buffer-after">Intervalo depois</Label><Input id="buffer-after" type="number" min={0} value={serviceForm.bufferAfterMinutes} onChange={(event) => setServiceForm((current) => ({ ...current, bufferAfterMinutes: Number(event.target.value) }))} className="shadow-inset" /></div>
               <p className="text-xs text-[var(--color-gray-500)] sm:col-span-2">Use 0 para permitir atendimentos consecutivos, como 09:00–09:30 e 09:30–10:00.</p>
             </div>
-            <DialogFooter><Button type="button" variant="ghost" onClick={() => setServiceDialogOpen(false)}>Cancelar</Button><Button type="submit" disabled={configuration.saving} className="shadow-primary">{configuration.saving ? <Loader2 className="animate-spin" /> : null}Adicionar</Button></DialogFooter>
+            <DialogFooter><Button type="button" variant="ghost" onClick={() => setServiceDialogOpen(false)}>Cancelar</Button><Button type="submit" disabled={configuration.saving} className="shadow-primary">{configuration.saving ? <Loader2 className="animate-spin" /> : null}{editingServiceId ? "Salvar" : "Adicionar"}</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

@@ -26,6 +26,7 @@ export type LeadAiControlState = {
 type LeadAiRequestParams = {
   accessToken: string;
   leadId: string;
+  instanceName?: string | null;
 };
 
 type UpdateLeadAiRequestParams = LeadAiRequestParams & {
@@ -50,8 +51,12 @@ async function parseApiError(response: Response) {
 export async function getLeadAiState({
   accessToken,
   leadId,
+  instanceName,
 }: LeadAiRequestParams): Promise<LeadAiControlState> {
-  const response = await fetch(`${CRM_BACKEND_URL}/api/chat/leads/${leadId}/ai-state`, {
+  const query = instanceName?.trim()
+    ? `?instanceName=${encodeURIComponent(instanceName.trim())}`
+    : "";
+  const response = await fetch(`${CRM_BACKEND_URL}/api/chat/leads/${leadId}/ai-state${query}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
@@ -68,6 +73,7 @@ export async function updateLeadAiState({
   accessToken,
   leadId,
   enabled,
+  instanceName,
 }: UpdateLeadAiRequestParams): Promise<LeadAiControlState> {
   const response = await fetch(`${CRM_BACKEND_URL}/api/chat/leads/${leadId}/ai-state`, {
     method: "PUT",
@@ -75,7 +81,7 @@ export async function updateLeadAiState({
       "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify({ enabled, instanceName: instanceName ?? null }),
   });
 
   if (!response.ok) {

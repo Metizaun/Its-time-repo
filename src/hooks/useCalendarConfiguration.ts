@@ -406,6 +406,28 @@ export function useCalendarConfiguration(acesId: number | null, enabled = true) 
     [acesId, runMutation],
   );
 
+  const updateService = useCallback(
+    (serviceId: string, input: ServiceInput) =>
+      runMutation(async () => {
+        if (acesId === null) throw new Error("Conta não identificada.");
+        const { error } = await supabase
+          .schema("calendar")
+          .from("services")
+          .update({
+            name: input.name.trim(),
+            description: input.description?.trim() || null,
+            duration_minutes: input.durationMinutes,
+            price_cents: input.priceCents,
+            buffer_before_minutes: input.bufferBeforeMinutes,
+            buffer_after_minutes: input.bufferAfterMinutes,
+          })
+          .eq("id", serviceId)
+          .eq("aces_id", acesId);
+        if (error) throw error;
+      }, "Serviço atualizado"),
+    [acesId, runMutation],
+  );
+
   const toggleProfessionalService = useCallback(
     (professionalLocationId: string, serviceId: string, enabledForLocation: boolean) =>
       runMutation(async () => {
@@ -535,6 +557,7 @@ export function useCalendarConfiguration(acesId: number | null, enabled = true) 
     setProfessionalActive,
     updateProfessional,
     createService,
+    updateService,
     toggleProfessionalService,
     saveProfessionalServiceOverrides,
     createAvailabilityRules,

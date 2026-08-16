@@ -64,6 +64,19 @@ test("receituario com eixo faltando fica valido (leitura de grau), mas nao cota 
   assert.equal(matchLensPriceRule(extraction, [baseRule]), null, "sem eixo nao deve cotar preco");
 });
 
+test("receita multifocal com eixo OD em branco continua lida e pronta para atendimento", () => {
+  const extraction = buildExtraction({
+    odSphere: -4, odCylinder: -0.5, odAxis: null,
+    oeSphere: -7, oeCylinder: -0.5, oeAxis: 180,
+    addition: 2,
+    confidence: 2,
+  });
+  const readiness = evaluatePrescriptionReadiness(extraction);
+  assert.equal(readiness.valid, true);
+  assert.deepEqual(readiness.blockingErrors, []);
+  assert.ok(readiness.errors.includes("od_axis_missing"));
+});
+
 test("receituario sem nenhum dado de um dos olhos continua bloqueado", () => {
   const extraction = buildExtraction({
     odSphere: null, odCylinder: null, odAxis: null,
