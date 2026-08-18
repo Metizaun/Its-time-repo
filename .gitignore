@@ -64,3 +64,12 @@ exemples/
 
 # Local VPS diagnostics may contain machine-specific access details.
 /scripts/*vps*.js
+
+# Local/client-specific material intentionally excluded from deployment commits.
+/Project/IA/client-configs/
+/Project/IA/tests/
+/Project/IA/fixtures/
+/Project/IA/scripts/recover-*
+/Project/IA/evolution-template-backfill.ts
+/supabase/migrations/*dr_oculos*.sql
+/dist-production-check/

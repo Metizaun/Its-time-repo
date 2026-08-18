@@ -3,7 +3,8 @@ import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { MessageAttachment } from "./MessageAttachment";
 import { QuickReplyOptions, QuickReplyQuote } from "./QuickReplyDisplay";
-import type { ChatAttachment, ChatMessage, ChatQuickReply, ChatSystemKind } from "@/types/chat";
+import { TemplateCardDisplay } from "./TemplateCardDisplay";
+import type { ChatAttachment, ChatMessage, ChatQuickReply, ChatSystemKind, ChatTemplateCard } from "@/types/chat";
 
 interface MessageBubbleProps {
   content: string;
@@ -14,6 +15,7 @@ interface MessageBubbleProps {
   sourceType?: string;
   systemKind?: ChatSystemKind | null;
   quickReply?: ChatQuickReply | null;
+  templateCard?: ChatTemplateCard | null;
   replyToMessage?: ChatMessage | null;
 }
 
@@ -39,16 +41,20 @@ export function MessageBubble({
   sourceType = "human",
   systemKind = null,
   quickReply = null,
+  templateCard = null,
   replyToMessage = null,
 }: MessageBubbleProps) {
   const time = format(new Date(sentAt), "HH:mm", { locale: ptBR });
   const normalizedContent = content.trim();
   const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
-  const visibleContent =
+  const visibleContent = templateCard
+    ? ""
+    :
     hasAudioAttachment || (attachments.length > 0 && ATTACHMENT_PLACEHOLDERS.has(normalizedContent.toLowerCase()))
       ? ""
       : normalizedContent;
   const hasAttachments = attachments.length > 0;
+  const hasRichCard = Boolean(templateCard);
   const replyPreviewContent = replyToMessage?.attachments.some((attachment) => attachment.kind === "audio")
     ? "Áudio"
     : replyToMessage?.content;
@@ -91,7 +97,7 @@ export function MessageBubble({
         <div className={cn(
           "px-4 py-2.5 text-sm shadow-sm",
           isOutbound
-            ? hasAttachments
+            ? hasAttachments || hasRichCard
               ? "rounded-[18px] rounded-br-[4px] border border-[var(--color-primary-100)] bg-[var(--color-primary-50)] text-[var(--color-gray-800)]"
               : "rounded-[18px] rounded-br-[4px] bg-[var(--color-primary-500)] text-[var(--color-surface-1)] shadow-primary"
             : "rounded-[18px] rounded-bl-[4px] border border-[var(--border-default)] bg-[var(--color-surface-1)] text-[var(--color-gray-700)]"
@@ -104,7 +110,13 @@ export function MessageBubble({
           {quickReply?.kind === "selection" && replyPreviewContent && (
             <QuickReplyQuote content={replyPreviewContent} />
           )}
-          {attachments.length > 0 && (
+          {templateCard ? (
+            <TemplateCardDisplay
+              attachments={attachments}
+              card={templateCard}
+              isOutbound={isOutbound}
+            />
+          ) : attachments.length > 0 && (
             <div className={cn("flex flex-col gap-2", visibleContent && "mb-2")}>
               {attachments.map((attachment) => (
                 <MessageAttachment key={attachment.id} attachment={attachment} isOutbound={isOutbound} />
@@ -122,7 +134,7 @@ export function MessageBubble({
           <p className={cn(
             "mt-1 text-right text-[10px]",
             isOutbound
-              ? hasAttachments
+              ? hasAttachments || hasRichCard
                 ? "text-[var(--color-gray-500)]"
                 : "text-[var(--color-primary-100)]"
               : "text-[var(--color-gray-500)]"

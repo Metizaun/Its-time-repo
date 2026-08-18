@@ -72,6 +72,47 @@ export function extractProviderQuickReplySelection(
   }
 
   const raw = Object.keys(asRecord(summary.raw)).length > 0 ? asRecord(summary.raw) : summary;
+  const evolutionMessage = asRecord(asRecord(raw.data).message);
+  const evolutionCandidates = [
+    asRecord(evolutionMessage.templateButtonReplyMessage),
+    asRecord(evolutionMessage.buttonsResponseMessage),
+    asRecord(evolutionMessage.listResponseMessage),
+  ];
+  for (const candidate of evolutionCandidates) {
+    const singleSelectReply = asRecord(candidate.singleSelectReply);
+    const title =
+      asString(candidate.selectedDisplayText) ??
+      asString(candidate.title) ??
+      asString(singleSelectReply.title);
+    if (!title) continue;
+    return {
+      selectedOption: {
+        id:
+          asString(candidate.selectedId) ??
+          asString(candidate.selectedButtonId) ??
+          asString(singleSelectReply.selectedRowId),
+        title,
+      },
+      contextMessageIds: extractEvolutionContextMessageIds(candidate),
+    };
+  }
+
+  const nativeFlow = asRecord(asRecord(evolutionMessage.interactiveResponseMessage).nativeFlowResponseMessage);
+  const nativeFlowParams = parseJsonRecord(nativeFlow.paramsJson);
+  const nativeFlowTitle =
+    asString(nativeFlowParams.title) ??
+    asString(nativeFlowParams.display_text) ??
+    asString(nativeFlowParams.text);
+  if (nativeFlowTitle) {
+    return {
+      selectedOption: {
+        id: asString(nativeFlowParams.id) ?? asString(nativeFlowParams.row_id),
+        title: nativeFlowTitle,
+      },
+      contextMessageIds: extractEvolutionContextMessageIds(asRecord(evolutionMessage.interactiveResponseMessage)),
+    };
+  }
+
   const v2Message = asRecord(raw.payload);
   const v2Payload = asRecord(v2Message.payload);
   const v2Context = mergeRecords(asRecord(v2Message.context), asRecord(v2Payload.context));
@@ -233,6 +274,25 @@ function extractContextMessageIds(context: Record<string, unknown>) {
     asString(context.gsid),
     asString(context.id),
   ]);
+}
+
+function extractEvolutionContextMessageIds(message: Record<string, unknown>) {
+  const context = asRecord(message.contextInfo);
+  return uniqueStrings([
+    asString(context.stanzaId),
+    asString(context.stanzaID),
+    asString(message.contextMessageId),
+  ]);
+}
+
+function parseJsonRecord(value: unknown) {
+  const json = asString(value);
+  if (!json) return {};
+  try {
+    return asRecord(JSON.parse(json));
+  } catch {
+    return {};
+  }
 }
 
 function uniqueStrings(values: Array<string | null>) {

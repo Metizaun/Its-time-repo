@@ -27,6 +27,14 @@ import {
   type ChatQuickReplyInteraction,
 } from "./chat-quick-replies.js";
 import {
+  extractEvolutionFirstTouchAttribution,
+  extractStoredEvolutionTemplateCard,
+  inferLeadNameFromEvolutionTemplate,
+  inspectEvolutionWebhookContent,
+  type EvolutionFirstTouchAttribution,
+  type EvolutionTemplateCard,
+} from "./evolution-webhook-content.js";
+import {
   allowsEvolutionMediaFallback,
   downloadGupshupMedia,
   GupshupMediaDownloadError,
@@ -642,6 +650,7 @@ type ChatMessageResponse = {
   systemKind: ChatSystemKind | null;
   providerStatus?: string | null;
   quickReply: ChatQuickReplyInteraction | null;
+  templateCard: EvolutionTemplateCard | null;
   attachments: ChatMessageAttachmentResponse[];
 };
 
@@ -742,10 +751,12 @@ export type ParsedWebhookMessage = {
   mediaKind: "audio" | "image" | "document" | null;
   mediaMimeType: string | null;
   mediaBase64: string | null;
+  mediaThumbnailBase64?: string | null;
   mediaUrl: string | null;
   mediaUrlExpiresAt?: string | null;
   messageType: string | null;
   fileName?: string | null;
+  unsupportedMediaKind?: "video" | null;
   provider: WhatsAppProviderName;
   raw: JsonRecord;
 };
@@ -1392,6 +1403,7 @@ export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWeb
   const data = asRecord(root.data);
   const key = asRecord(data.key);
   const message = asRecord(data.message);
+  const inspectedContent = inspectEvolutionWebhookContent(payload);
   const messageContext = asRecord(root.message ?? data.messageData ?? data);
   const messageType =
     asString(data.messageType) ??
@@ -1432,62 +1444,45 @@ export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWeb
       : new Date(String(sentAtRaw)).toISOString();
 
   const textCandidates = [
-    asString(message.conversation),
-    asString(asRecord(message.extendedTextMessage).text),
-    asString(asRecord(message.imageMessage).caption),
-    asString(asRecord(message.videoMessage).caption),
+    ...inspectedContent.textCandidates,
     asString(asRecord(root.text).text),
     asString(root.body),
     asString(data.body),
     asString(messageContext.content),
   ].filter((item): item is string => Boolean(item));
 
-  const imageMessage = asRecord(message.imageMessage);
-  const audioMessage = asRecord(message.audioMessage);
-  const documentMessage = asRecord(message.documentMessage);
   const sharedMediaBase64 =
     asString(message.base64) ??
     asString(messageContext.base64) ??
     asString(data.base64) ??
     asString(root.base64);
-  const imageUrl =
-    asString(imageMessage.url) ??
-    asString(imageMessage.mediaUrl) ??
-    asString(asRecord(root.image).url);
-  const audioUrl =
-    asString(audioMessage.url) ??
-    asString(audioMessage.mediaUrl) ??
-    asString(asRecord(root.audio).url) ??
-    asString(documentMessage.url);
-  const inferredAudio =
-    messageType === "audioMessage" ||
-    Object.keys(audioMessage).length > 0 ||
-    (Object.keys(documentMessage).length > 0 &&
-      ((asString(documentMessage.mimetype) ?? asString(documentMessage.mime_type) ?? "").startsWith("audio/")));
-  const inferredImage = messageType === "imageMessage" || Object.keys(imageMessage).length > 0;
-  const imageBase64 =
-    asString(imageMessage.base64) ??
-    asString(asRecord(root.image).base64) ??
-    (inferredImage ? sharedMediaBase64 : null);
-  const audioBase64 =
-    asString(audioMessage.base64) ??
-    asString(asRecord(root.audio).base64) ??
-    asString(documentMessage.base64) ??
-    (inferredAudio ? sharedMediaBase64 : null);
-  const mediaKind =
-    inferredAudio || audioBase64 || audioUrl
+  const inferredKind = inspectedContent.mediaKind ??
+    (messageType === "audioMessage"
       ? "audio"
-      : inferredImage || imageBase64 || imageUrl
+      : messageType === "imageMessage"
         ? "image"
-        : null;
+        : messageType === "documentMessage"
+          ? "document"
+          : null);
+  const mediaBase64 =
+    inspectedContent.mediaBase64 ??
+    (inferredKind === "image" ? asString(asRecord(root.image).base64) : null) ??
+    (inferredKind === "audio" ? asString(asRecord(root.audio).base64) : null) ??
+    (inferredKind ? sharedMediaBase64 : null);
+  const mediaUrl =
+    inspectedContent.mediaUrl ??
+    (inferredKind === "image" ? asString(asRecord(root.image).url) : null) ??
+    (inferredKind === "audio" ? asString(asRecord(root.audio).url) : null);
+  const mediaKind = inferredKind;
   const mediaMimeType =
-    asString(audioMessage.mimetype) ??
-    asString(audioMessage.mime_type) ??
-    asString(imageMessage.mimetype) ??
-    asString(imageMessage.mime_type) ??
-    asString(documentMessage.mimetype) ??
-    asString(documentMessage.mime_type) ??
-    (mediaKind === "audio" ? "audio/ogg" : mediaKind === "image" ? "image/jpeg" : null);
+    inspectedContent.mediaMimeType ??
+    (mediaKind === "audio"
+      ? "audio/ogg"
+      : mediaKind === "image"
+        ? "image/jpeg"
+        : mediaKind === "document"
+          ? "application/pdf"
+          : null);
 
   if (!instanceName) {
     throw new HttpError(400, "Webhook sem instancia identificavel");
@@ -1507,9 +1502,12 @@ export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWeb
     pushName,
     mediaKind,
     mediaMimeType,
-    mediaBase64: audioBase64 ?? imageBase64 ?? null,
-    mediaUrl: audioUrl ?? imageUrl ?? null,
+    mediaBase64,
+    mediaThumbnailBase64: inspectedContent.mediaThumbnailBase64,
+    mediaUrl,
     messageType,
+    fileName: inspectedContent.fileName,
+    unsupportedMediaKind: inspectedContent.unsupportedMediaKind,
     provider: "evolution",
     raw: {
       ...root,
@@ -1520,6 +1518,27 @@ export function parseEvolutionWebhookPayload(payload: WebhookPayload): ParsedWeb
       senderLid: identity.senderLid ?? root.senderLid ?? null,
       _crmWebhookIdentity: identity,
     },
+  };
+}
+
+export function buildEvolutionProviderPayloadSummary(
+  message: Pick<ParsedWebhookMessage, "raw">,
+  options?: { mediaDegraded?: boolean },
+) {
+  const raw = summarizeProviderPayload(message.raw);
+  const quickReplySelection = extractProviderQuickReplySelection(message.raw);
+  const extractedCard = inspectEvolutionWebhookContent(message.raw).templateCard;
+  const templateCard = extractedCard
+    ? { ...extractedCard, mediaDegraded: options?.mediaDegraded === true }
+    : null;
+
+  if (!quickReplySelection && !templateCard) return raw;
+  return {
+    raw,
+    ...(quickReplySelection
+      ? { chatInteraction: toStoredQuickReplyInteraction(quickReplySelection) }
+      : {}),
+    ...(templateCard ? { templateCard } : {}),
   };
 }
 
@@ -1670,6 +1689,39 @@ export function normalizePrescriptionConfidence(value: unknown): PrescriptionCon
   // Compatibilidade de leitura com o contrato legado [0, 1].
   if (value > 0 && value < 1) return value < 0.5 ? 0 : value < 0.8 ? 1 : 2;
   return value < 1 ? 0 : value < 2 ? 1 : 2;
+}
+
+function detectBinaryMediaMimeType(buffer: Buffer): string | null {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) return "image/gif";
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  if (buffer.length >= 4 && buffer.subarray(0, 4).toString("ascii") === "%PDF") return "application/pdf";
+  if (buffer.length >= 4 && buffer.subarray(0, 4).toString("ascii") === "OggS") return "audio/ogg";
+  if (buffer.length >= 3 && buffer.subarray(0, 3).toString("ascii") === "ID3") return "audio/mpeg";
+  if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) return "audio/mpeg";
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WAVE") return "audio/wav";
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4";
+  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
+  return null;
+}
+
+function validateEvolutionMediaBuffer(buffer: Buffer, expectedMimeType: string) {
+  if (buffer.length === 0 || isProbablyTextPayload(buffer)) return null;
+  const detectedMimeType = detectBinaryMediaMimeType(buffer);
+  const expected = normalizeMimeType(expectedMimeType);
+  if (expected.startsWith("image/") && !detectedMimeType?.startsWith("image/")) return null;
+  if (expected.startsWith("audio/") && !detectedMimeType?.startsWith("audio/")) return null;
+  if (expected === "application/pdf" && detectedMimeType !== "application/pdf") return null;
+  return detectedMimeType ?? expectedMimeType;
+}
+
+function isEncryptedEvolutionMediaUrl(value: string) {
+  try {
+    return new URL(value).pathname.toLowerCase().endsWith(".enc");
+  } catch {
+    return value.toLowerCase().split("?", 1)[0]?.endsWith(".enc") ?? false;
+  }
 }
 
 export function evaluatePrescriptionReadiness(
@@ -7069,7 +7121,7 @@ export class AgentManager {
 
   private chatMessagesCacheKey(acesId: number, leadId: string, instanceName?: string | null) {
     const instanceKey = encodeURIComponent(instanceName?.trim() || "primary");
-    return `crm-chat:messages:v4:${acesId}:${leadId}:${instanceKey}`;
+    return `crm-chat:messages:v5:${acesId}:${leadId}:${instanceKey}`;
   }
 
   private async invalidateChatMessagesCache(acesId: number, leadId: string, instanceName?: string | null) {
@@ -7308,6 +7360,89 @@ export class AgentManager {
     await this.invalidateChatMessagesCache(params.acesId, params.leadId);
 
     return data as MessageRow;
+  }
+
+  private async updateEvolutionMessageMetadata(params: {
+    acesId: number;
+    leadId: string;
+    messageHistoryId: string;
+    message: ParsedWebhookMessage;
+  }) {
+    const payload: Record<string, unknown> = {
+      provider: "evolution",
+      provider_status: "accepted",
+      provider_payload_summary: buildEvolutionProviderPayloadSummary(params.message),
+    };
+    if (params.message.messageId) {
+      payload.provider_message_id = params.message.messageId;
+    }
+
+    const { error } = await this.serviceClient
+      .from("message_history")
+      .update(payload)
+      .eq("id", params.messageHistoryId)
+      .eq("aces_id", params.acesId)
+      .eq("lead_id", params.leadId);
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel atualizar os metadados Evolution da mensagem", error);
+    }
+    await this.invalidateChatMessagesCache(params.acesId, params.leadId);
+  }
+
+  private async persistEvolutionFirstTouchAttribution(params: {
+    acesId: number;
+    leadId: string;
+    message: ParsedWebhookMessage;
+  }) {
+    if (!params.message.fromMe) return false;
+    const attribution = extractEvolutionFirstTouchAttribution({
+      payload: params.message.raw,
+      providerMessageId: params.message.messageId,
+      capturedAt: params.message.sentAt,
+    });
+    if (!attribution) return false;
+
+    const { data: leadData, error: leadError } = await this.serviceClient
+      .from("leads")
+      .select("id, name, contact_phone")
+      .eq("id", params.leadId)
+      .eq("aces_id", params.acesId)
+      .maybeSingle();
+    if (leadError) {
+      throw new HttpError(500, "Nao foi possivel carregar o lead para atribuicao", leadError);
+    }
+
+    const inferredName = inferLeadNameFromEvolutionTemplate(params.message.raw);
+    const currentName = asString(leadData?.name);
+    const currentPhone = asString(leadData?.contact_phone) ?? params.message.phone ?? "";
+    const payload: Record<string, unknown> = {
+      first_touch_attribution: {
+        ...attribution,
+        external_ad_reply: attribution.external_ad_reply
+          ? asRecord(summarizeProviderPayload(attribution.external_ad_reply))
+          : null,
+      } satisfies EvolutionFirstTouchAttribution,
+      Fonte: "WhatsApp Disparo",
+      Plataform: "Meta Template",
+      updated_at: new Date().toISOString(),
+    };
+    if (inferredName && isFallbackLeadName(currentName, currentPhone)) {
+      payload.name = inferredName;
+    }
+
+    const { data, error } = await this.serviceClient
+      .from("leads")
+      .update(payload)
+      .eq("id", params.leadId)
+      .eq("aces_id", params.acesId)
+      .is("first_touch_attribution", null)
+      .select("id")
+      .maybeSingle();
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel registrar a atribuicao de primeiro toque", error);
+    }
+
+    return Boolean(data?.id);
   }
 
   private async canAccessLead(
@@ -8252,6 +8387,15 @@ export class AgentManager {
       const buffer = decodeBase64Payload(message.mediaBase64);
       if (buffer.length === 0 || isProbablyTextPayload(buffer)) {
         console.warn("[crm-ai] Base64 de midia invalido ou nao binario; tentando outras fontes");
+      } else if (message.provider === "evolution") {
+        const validatedMimeType = validateEvolutionMediaBuffer(buffer, mimeType);
+        if (validatedMimeType) {
+          return { mimeType: validatedMimeType, buffer };
+        }
+        console.warn("[crm-ai] Base64 Evolution nao corresponde ao tipo de midia esperado; tentando fallback", {
+          messageId: message.messageId,
+          expectedMimeType: mimeType,
+        });
       } else {
         return {
           mimeType,
@@ -8274,6 +8418,18 @@ export class AgentManager {
     const evolutionMedia = await this.fetchMediaFromEvolution(message, mimeType);
     if (evolutionMedia) {
       return evolutionMedia;
+    }
+
+    if (message.mediaKind === "image" && message.mediaThumbnailBase64) {
+      const thumbnail = decodeBase64Payload(message.mediaThumbnailBase64);
+      const validatedMimeType = validateEvolutionMediaBuffer(thumbnail, "image/jpeg");
+      if (validatedMimeType) {
+        console.warn("[crm-ai] Usando thumbnail degradado como fallback de midia Evolution", {
+          messageId: message.messageId,
+          bytes: thumbnail.byteLength,
+        });
+        return { mimeType: validatedMimeType, buffer: thumbnail, degraded: true };
+      }
     }
 
     return null;
@@ -8304,6 +8460,14 @@ export class AgentManager {
       }
     }
 
+    if (message.provider === "evolution" && isEncryptedEvolutionMediaUrl(mediaUrl)) {
+      console.info("[crm-ai] URL .enc sera resolvida pela API de midia da Evolution", {
+        instanceName: message.instanceName,
+        messageId: message.messageId,
+      });
+      return null;
+    }
+
     const attempts: Array<{ headers?: Record<string, string> }> = [{}];
     const transport = await this.resolveEvolutionTransport(message.instanceName);
     if (this.isSameUrlOrigin(mediaUrl, transport.apiUrl)) {
@@ -8330,10 +8494,18 @@ export class AgentManager {
           continue;
         }
 
-        return {
-          mimeType: responseMimeType,
-          buffer,
-        };
+        const validatedMimeType = message.provider === "evolution"
+          ? validateEvolutionMediaBuffer(buffer, responseMimeType || mimeType)
+          : responseMimeType;
+        if (!validatedMimeType) {
+          console.warn("[crm-ai] Download Evolution nao corresponde a midia descriptografada", {
+            mediaUrl,
+            expectedMimeType: mimeType,
+            contentType: response.headers["content-type"],
+          });
+          continue;
+        }
+        return { mimeType: validatedMimeType, buffer };
       } catch (error: any) {
         console.warn("[crm-ai] Falha ao baixar midia por URL", {
           mediaUrl,
@@ -8381,16 +8553,18 @@ export class AgentManager {
       }
 
       const buffer = decodeBase64Payload(base64);
-      if (buffer.length === 0 || isProbablyTextPayload(buffer)) {
-        console.warn("[crm-ai] Base64 retornado pela Evolution nao parece midia binaria", {
+      const validatedMimeType = validateEvolutionMediaBuffer(buffer, mimeType);
+      if (!validatedMimeType) {
+        console.warn("[crm-ai] Base64 retornado pela Evolution nao corresponde a midia esperada", {
           messageId: message.messageId,
           bytes: buffer.length,
+          expectedMimeType: mimeType,
         });
         return null;
       }
 
       return {
-        mimeType,
+        mimeType: validatedMimeType,
         buffer,
       };
     } catch (error: any) {
@@ -12579,6 +12753,17 @@ export class AgentManager {
         crm_remote_instance: parsedMessage.instanceName,
       },
     };
+    const providerPayloadSummary = buildEvolutionProviderPayloadSummary(message);
+
+    if (message.unsupportedMediaKind) {
+      console.warn("[crm-ai-webhook] Tipo de midia Evolution ainda nao suportado", {
+        acesId: instance.aces_id,
+        instanceName: message.instanceName,
+        messageId: message.messageId,
+        messageType: message.messageType,
+        mediaKind: message.unsupportedMediaKind,
+      });
+    }
 
     if (!message.phone) {
       console.warn("[crm-ai] Webhook recebido sem PN resolvido para identificador LID:", {
@@ -12607,6 +12792,23 @@ export class AgentManager {
     );
     const expectedDirection = message.fromMe ? "outbound" : "inbound";
     if (existingProviderMessage && existingProviderMessage.direction === expectedDirection) {
+      await this.updateEvolutionMessageMetadata({
+        acesId: instance.aces_id,
+        leadId: existingProviderMessage.lead_id,
+        messageHistoryId: existingProviderMessage.id,
+        message,
+      });
+      await this.persistEvolutionFirstTouchAttribution({
+        acesId: instance.aces_id,
+        leadId: existingProviderMessage.lead_id,
+        message,
+      });
+      await this.tryPersistWebhookMediaAttachment({
+        acesId: instance.aces_id,
+        leadId: existingProviderMessage.lead_id,
+        messageId: existingProviderMessage.id,
+        message,
+      });
       console.info("[crm-ai-webhook] Mensagem Evolution ja registrada no CRM:", {
         acesId: instance.aces_id,
         leadId: existingProviderMessage.lead_id,
@@ -12689,6 +12891,19 @@ export class AgentManager {
           conversationId: matchedOutbound.conversationId ?? message.conversationId,
           origin: matchedOutbound.origin,
         });
+        if (echoMessageId && matchedOutbound.leadId) {
+          await this.updateEvolutionMessageMetadata({
+            acesId: instance.aces_id,
+            leadId: matchedOutbound.leadId,
+            messageHistoryId: echoMessageId,
+            message,
+          });
+          await this.persistEvolutionFirstTouchAttribution({
+            acesId: instance.aces_id,
+            leadId: matchedOutbound.leadId,
+            message,
+          });
+        }
         await this.tryPersistWebhookMediaAttachment({
           acesId: instance.aces_id,
           leadId: matchedOutbound.leadId,
@@ -12720,7 +12935,7 @@ export class AgentManager {
         instance.aces_id,
         message.phone,
         message.instanceName,
-        null,
+        inferLeadNameFromEvolutionTemplate(message.raw),
         ownerIdForLead
       );
 
@@ -12731,10 +12946,23 @@ export class AgentManager {
       );
       if (fallbackMatch) {
         await this.invalidateChatMessagesCache(instance.aces_id, lead.id);
+        if (fallbackMatch.messageId) {
+          await this.updateEvolutionMessageMetadata({
+            acesId: instance.aces_id,
+            leadId: lead.id,
+            messageHistoryId: fallbackMatch.messageId,
+            message,
+          });
+        }
         await this.tryPersistWebhookMediaAttachment({
           acesId: instance.aces_id,
           leadId: lead.id,
           messageId: fallbackMatch.messageId,
+          message,
+        });
+        await this.persistEvolutionFirstTouchAttribution({
+          acesId: instance.aces_id,
+          leadId: lead.id,
           message,
         });
 
@@ -12774,7 +13002,14 @@ export class AgentManager {
         conversationId: message.conversationId,
         sentAt: message.sentAt,
         provider: "evolution",
+        providerMessageId: message.messageId,
         providerStatus: "accepted",
+        providerPayloadSummary,
+      });
+      await this.persistEvolutionFirstTouchAttribution({
+        acesId: instance.aces_id,
+        leadId: lead.id,
+        message,
       });
       await this.tryPersistWebhookMediaAttachment({
         acesId: instance.aces_id,
@@ -12850,6 +13085,7 @@ export class AgentManager {
       provider: "evolution",
       providerMessageId: message.messageId,
       providerStatus: "accepted",
+      providerPayloadSummary,
     });
     await this.tryPersistWebhookMediaAttachment({
       acesId: instance.aces_id,
@@ -13319,6 +13555,7 @@ export class AgentManager {
         systemKind: deriveChatSystemKind(message),
         providerStatus: message.provider_status ?? null,
         quickReply: normalized?.quickReply ?? null,
+        templateCard: extractStoredEvolutionTemplateCard(message.provider_payload_summary),
         attachments: attachmentsByMessageId.get(message.id) ?? [],
       };
     });
@@ -13422,20 +13659,9 @@ export class AgentManager {
   }
 
   private getWebhookMediaFileName(message: ParsedWebhookMessage, mimeType: string) {
-    const data = asRecord(message.raw.data);
-    const payloadMessage = asRecord(data.message);
-    const mediaPayload =
-      message.mediaKind === "audio"
-        ? asRecord(payloadMessage.audioMessage)
-        : message.mediaKind === "document"
-          ? asRecord(payloadMessage.documentMessage)
-          : asRecord(payloadMessage.imageMessage);
-    const documentPayload = asRecord(payloadMessage.documentMessage);
     const providedFileName =
-      asString(mediaPayload.fileName) ??
-      asString(mediaPayload.file_name) ??
-      asString(documentPayload.fileName) ??
-      asString(documentPayload.file_name);
+      message.fileName ??
+      inspectEvolutionWebhookContent(message.raw).fileName;
 
     if (providedFileName) {
       return providedFileName;
@@ -13485,6 +13711,42 @@ export class AgentManager {
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel registrar o anexo da mensagem", error);
+    }
+  }
+
+  private async markMessageMediaDegraded(params: {
+    acesId: number;
+    leadId: string;
+    messageId: string;
+  }) {
+    const { data, error } = await this.serviceClient
+      .from("message_history")
+      .select("provider_payload_summary")
+      .eq("id", params.messageId)
+      .eq("aces_id", params.acesId)
+      .eq("lead_id", params.leadId)
+      .maybeSingle();
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel ler o resumo da mensagem degradada", error);
+    }
+
+    const summary = asRecord(data?.provider_payload_summary);
+    const templateCard = extractStoredEvolutionTemplateCard(summary);
+    if (!templateCard) return;
+
+    const { error: updateError } = await this.serviceClient
+      .from("message_history")
+      .update({
+        provider_payload_summary: {
+          ...summary,
+          templateCard: { ...templateCard, mediaDegraded: true },
+        },
+      })
+      .eq("id", params.messageId)
+      .eq("aces_id", params.acesId)
+      .eq("lead_id", params.leadId);
+    if (updateError) {
+      throw new HttpError(500, "Nao foi possivel marcar a midia degradada", updateError);
     }
   }
 
@@ -13565,6 +13827,13 @@ export class AgentManager {
       fileName,
       fileSize,
     });
+    if (media.degraded) {
+      await this.markMessageMediaDegraded({
+        acesId: params.acesId,
+        leadId: params.leadId,
+        messageId: params.messageId,
+      });
+    }
     await this.invalidateChatMessagesCache(params.acesId, params.leadId);
 
     return attachmentId;

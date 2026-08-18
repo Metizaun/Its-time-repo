@@ -70,6 +70,7 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
             system_kind: null,
             provider_status: null,
             quick_reply: null,
+            template_card: null,
             attachments: [],
           }
       : null;

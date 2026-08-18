@@ -27,6 +27,22 @@ export type ChatQuickReply =
       replyToMessageId: string | null;
     };
 
+export type ChatTemplateButton = {
+  kind: "url" | "quick_reply" | "call";
+  text: string;
+  target: string | null;
+};
+
+export type ChatTemplateCard = {
+  templateId: string | null;
+  title: string | null;
+  body: string;
+  footer: string | null;
+  buttons: ChatTemplateButton[];
+  hasMedia: boolean;
+  mediaDegraded: boolean;
+};
+
 export interface ChatAttachment {
   id: string;
   kind: ChatAttachmentKind;
@@ -51,6 +67,7 @@ export interface ChatMessage {
   system_kind: ChatSystemKind | null;
   provider_status?: string | null;
   quick_reply: ChatQuickReply | null;
+  template_card: ChatTemplateCard | null;
   attachments: ChatAttachment[];
 }
 

@@ -112,6 +112,7 @@ export function MessageList({ messages, loading }: MessageListProps) {
                 systemKind={message.system_kind}
                 attachments={message.attachments}
                 quickReply={message.quick_reply}
+                templateCard={message.template_card}
                 replyToMessage={
                   message.quick_reply?.kind === "selection" && message.quick_reply.replyToMessageId
                     ? messagesById.get(message.quick_reply.replyToMessageId) ?? null

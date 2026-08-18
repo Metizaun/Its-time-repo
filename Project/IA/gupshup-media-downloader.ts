@@ -23,6 +23,7 @@ export type GupshupMediaFailureKind =
 export type ResolvedInboundMedia = {
   mimeType: string;
   buffer: Buffer;
+  degraded?: boolean;
 };
 
 type DownloadResponse = {

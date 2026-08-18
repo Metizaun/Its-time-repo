@@ -7,6 +7,7 @@ import type {
   ChatSendPolicy,
   ChatSendPayload,
   ChatSystemKind,
+  ChatTemplateCard,
   ChatUploadIntent,
 } from "@/types/chat";
 
@@ -103,6 +104,7 @@ type BackendChatMessage = {
   systemKind?: ChatSystemKind | null;
   providerStatus?: string | null;
   quickReply?: ChatQuickReply | null;
+  templateCard?: ChatTemplateCard | null;
   attachments?: BackendChatAttachment[];
 };
 
@@ -203,6 +205,7 @@ function normalizeMessage(message: BackendChatMessage): ChatMessage {
     system_kind: message.systemKind ?? null,
     provider_status: message.providerStatus ?? null,
     quick_reply: message.quickReply ?? null,
+    template_card: message.templateCard ?? null,
     attachments: (message.attachments ?? []).map(normalizeAttachment),
   };
 }

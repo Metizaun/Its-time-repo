@@ -39,6 +39,8 @@ const STRUCTURED_PERSONALITY_MIGRATION =
   "supabase/migrations/20260724210256_add_structured_agent_personality.sql";
 const FEATURE_CLOSING_MIGRATION =
   "supabase/migrations/20260727133949_close_companies_calendar_routing_v1.sql";
+const LEAD_FIRST_TOUCH_ATTRIBUTION_MIGRATION =
+  "supabase/migrations/20260817205108_add_lead_first_touch_attribution.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -1029,6 +1031,13 @@ export async function assertRuntimeSchemaCompatibility(
       ["id", "last_lead_inbound_at"],
       "crm.leads (janela de atendimento Gupshup)",
       GUPSHUP_CHAT_WINDOW_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "leads",
+      ["id", "first_touch_attribution"],
+      "crm.leads (atribuicao de primeiro toque)",
+      LEAD_FIRST_TOUCH_ATTRIBUTION_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
