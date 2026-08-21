@@ -54,6 +54,9 @@ export function CalendarToolConfigPanel({
     reschedule: tool.config.reschedule === true,
     cancel: tool.config.cancel === true,
   });
+  const [professionalsRepresentLocations, setProfessionalsRepresentLocations] = useState(
+    tool.config.professionalsRepresentLocations === true,
+  );
   const [saving, setSaving] = useState(false);
 
   function togglePermission(key: CalendarPermission, enabled: boolean) {
@@ -77,7 +80,9 @@ export function CalendarToolConfigPanel({
 
     setSaving(true);
     try {
-      await updateAgentTool(agentId, "calendar", { config: permissions });
+      await updateAgentTool(agentId, "calendar", {
+        config: { ...permissions, professionalsRepresentLocations },
+      });
       toast.success("Permissões da Agenda salvas.");
       onChanged();
       onClose();
@@ -119,6 +124,22 @@ export function CalendarToolConfigPanel({
           </label>
         ))}
       </div>
+
+      <label className="mt-4 flex cursor-pointer items-center gap-4 border-t border-[var(--border-default)] pt-4">
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-[var(--color-gray-900)]">
+            Profissionais representam unidades
+          </span>
+          <span className="mt-0.5 block text-xs text-[var(--color-gray-500)]">
+            Mantém todas as buscas na unidade escolhida pelo cliente.
+          </span>
+        </span>
+        <Switch
+          checked={professionalsRepresentLocations}
+          onCheckedChange={setProfessionalsRepresentLocations}
+          aria-label="Profissionais representam unidades"
+        />
+      </label>
 
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>Cancelar</Button>

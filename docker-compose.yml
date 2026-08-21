@@ -20,7 +20,7 @@ services:
     env_file:
       - .env.local
     environment:
-      - SUPABASE_URL=http://host.docker.internal:54321
+      - SUPABASE_URL=http://host.docker.internal:55321
       - REDIS_URL=redis://redis:6379
       - RB_WEBHOOK_JWT_SECRET=${RB_WEBHOOK_JWT_SECRET:-local-only-rb-webhook-secret}
       - RB_API_BASE_URL=${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}

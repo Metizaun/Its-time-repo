@@ -56,6 +56,19 @@ export type AgendaConversationContext = {
   confirmation: "unknown" | "yes" | "no";
 };
 
+export type CompanyLookupAttempt = {
+  strategy: "strict" | "without_service" | "without_filters" | "unit_fragment" | "normalized_terms";
+  query: string;
+  serviceQuery: string | null;
+  professionalQuery: string | null;
+};
+
+export type AgendaAvailabilityAttempt = {
+  dateFrom: string;
+  dateUntil: string;
+  period: AgendaPeriod | null;
+};
+
 const VALID_INTENTS = new Set<AgendaIntent>([
   "none",
   "company_info",
@@ -70,6 +83,32 @@ const VALID_PERIODS = new Set<AgendaPeriod>(["morning", "afternoon", "evening"])
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
 export const AGENDA_OPTIONS_TTL_MS = 30 * 60 * 1000;
+const GENERIC_SERVICE_QUERIES = new Set([
+  "agenda",
+  "agendamento",
+  "agendar",
+  "atendimento",
+  "consulta",
+  "consultas",
+  "horario",
+  "marcar",
+]);
+const GENERIC_OPTION_TERMS = new Set([
+  "a",
+  "as",
+  "da",
+  "das",
+  "de",
+  "do",
+  "dos",
+  "em",
+  "empresa",
+  "filial",
+  "loja",
+  "o",
+  "os",
+  "unidade",
+]);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -89,6 +128,86 @@ function optionalDate(value: unknown): string | undefined {
     return undefined;
   }
   return text;
+}
+
+export function normalizeAgendaText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function referencesSameCompany(left: string, right: string) {
+  const normalizedLeft = normalizeAgendaText(left);
+  const normalizedRight = normalizeAgendaText(right);
+  if (normalizedLeft === normalizedRight) return true;
+  const leftTerms = normalizedLeft.split(" ").filter((term) => term.length > 1 && !GENERIC_OPTION_TERMS.has(term));
+  const rightTerms = normalizedRight.split(" ").filter((term) => term.length > 1 && !GENERIC_OPTION_TERMS.has(term));
+  if (!leftTerms.length || !rightTerms.length) return false;
+  const shorter = leftTerms.length <= rightTerms.length ? leftTerms : rightTerms;
+  const longer = new Set(leftTerms.length <= rightTerms.length ? rightTerms : leftTerms);
+  return shorter.every((term) => longer.has(term));
+}
+
+export function buildCompanyLookupAttempts(
+  companyQuery: string,
+  serviceQuery?: string | null,
+  professionalQuery?: string | null,
+): CompanyLookupAttempt[] {
+  const query = companyQuery.trim().replace(/\s+/g, " ");
+  const fragments = query.split(/\s*(?:-|–|—|,|\/)\s*/u).map((item) => item.trim()).filter(Boolean);
+  const unitFragment = fragments.at(-1) ?? query;
+  const normalizedTerms = normalizeAgendaText(query)
+    .split(" ")
+    .filter((term) => term.length > 1 && !GENERIC_OPTION_TERMS.has(term))
+    .join(" ") || normalizeAgendaText(query);
+  const strictService = isGenericAgendaServiceQuery(serviceQuery) ? null : serviceQuery?.trim() || null;
+
+  return [
+    { strategy: "strict", query, serviceQuery: strictService, professionalQuery: professionalQuery?.trim() || null },
+    { strategy: "without_service", query, serviceQuery: null, professionalQuery: professionalQuery?.trim() || null },
+    { strategy: "without_filters", query, serviceQuery: null, professionalQuery: null },
+    { strategy: "unit_fragment", query: unitFragment, serviceQuery: null, professionalQuery: null },
+    { strategy: "normalized_terms", query: normalizedTerms, serviceQuery: null, professionalQuery: null },
+  ];
+}
+
+function addIsoDays(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function buildAgendaAvailabilityAttempts(input: {
+  today: string;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  period?: AgendaPeriod | null;
+  horizonDays?: number;
+}): AgendaAvailabilityAttempt[] {
+  const horizonDays = Math.min(730, Math.max(1, Math.trunc(input.horizonDays ?? 90)));
+  const horizonUntil = addIsoDays(input.today, horizonDays - 1);
+  const dateFrom = input.dateFrom ?? input.today;
+  const requestedUntil = input.dateTo ?? input.dateFrom ?? addIsoDays(input.today, 6);
+  const effectiveHorizonUntil = horizonUntil < dateFrom ? dateFrom : horizonUntil;
+  const clampUntil = (candidate: string) => candidate > effectiveHorizonUntil ? effectiveHorizonUntil : candidate;
+  const expansionDays = input.dateFrom ? [0, 0, 7, 14, 30] : [6, 13, 29, 59, horizonDays - 1];
+
+  return expansionDays.map((days, index) => ({
+    dateFrom,
+    dateUntil: clampUntil(index === 0 ? requestedUntil : addIsoDays(dateFrom, days)),
+    period: index === 0 ? input.period ?? null : null,
+  }));
+}
+
+export function isGenericAgendaServiceQuery(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const normalized = normalizeAgendaText(value);
+  if (GENERIC_SERVICE_QUERIES.has(normalized)) return true;
+  const terms = normalized.split(" ").filter(Boolean);
+  return terms.length > 0 && terms.every((term) => GENERIC_SERVICE_QUERIES.has(term));
 }
 
 export function parseAgendaRequest(value: unknown): AgendaRequest {
@@ -214,18 +333,32 @@ export function resolveAgendaOption(
   context: AgendaConversationContext,
   reference: string | undefined,
   now = new Date(),
+  kind?: AgendaPresentedOption["kind"],
 ): AgendaPresentedOption | null {
   if (!reference || !context.optionsPresentedAt) return null;
   const age = now.getTime() - Date.parse(context.optionsPresentedAt);
   if (!Number.isFinite(age) || age < 0 || age > AGENDA_OPTIONS_TTL_MS) return null;
+  const options = kind
+    ? context.presentedOptions.filter((option) => option.kind === kind)
+    : context.presentedOptions;
   const ordinal = optionNumber(reference);
-  if (ordinal && context.presentedOptions[ordinal - 1]) return context.presentedOptions[ordinal - 1];
-  const normalized = reference.toLocaleLowerCase("pt-BR");
-  return (
-    context.presentedOptions.find((option) =>
-      option.label.toLocaleLowerCase("pt-BR").includes(normalized),
-    ) ?? null
-  );
+  if (ordinal && context.presentedOptions[ordinal - 1]) {
+    const selected = context.presentedOptions[ordinal - 1];
+    return !kind || selected.kind === kind ? selected : null;
+  }
+  const normalized = normalizeAgendaText(reference);
+  if (!normalized) return null;
+  const exactMatches = options.filter((option) => normalizeAgendaText(option.label) === normalized);
+  if (exactMatches.length === 1) return exactMatches[0];
+  const referenceTerms = normalized
+    .split(" ")
+    .filter((term) => term.length > 1 && !GENERIC_OPTION_TERMS.has(term));
+  if (!referenceTerms.length) return null;
+  const semanticMatches = options.filter((option) => {
+    const labelTerms = new Set(normalizeAgendaText(option.label).split(" ").filter(Boolean));
+    return referenceTerms.every((term) => labelTerms.has(term));
+  });
+  return semanticMatches.length === 1 ? semanticMatches[0] : null;
 }
 
 export function mergeAgendaRequest(
@@ -234,7 +367,11 @@ export function mergeAgendaRequest(
   now = new Date(),
 ): AgendaConversationContext {
   const context = readAgendaContext(current, now);
-  const companyChanged = Boolean(request.companyQuery && request.companyQuery !== context.companyQuery);
+  const companyChanged = Boolean(
+    request.companyQuery
+    && context.companyQuery
+    && !referencesSameCompany(request.companyQuery, context.companyQuery),
+  );
   const professionalChanged = Boolean(
     request.professionalQuery && request.professionalQuery !== context.professionalQuery,
   );
@@ -255,7 +392,19 @@ export function mergeAgendaRequest(
     context.serviceId = null;
   }
 
-  const selected = resolveAgendaOption(context, request.optionReference, now);
+  const selectedCandidate =
+    resolveAgendaOption(context, request.optionReference, now)
+    ?? resolveAgendaOption(context, request.companyQuery, now, "company")
+    ?? resolveAgendaOption(context, request.professionalQuery, now, "professional");
+  const candidateOrPendingConfirmation = selectedCandidate
+    ?? (request.confirmation === "yes" || request.confirmation === "no" ? context.selectedOption : null);
+  const selected =
+    context.companyId
+      && candidateOrPendingConfirmation?.kind !== "company"
+      && candidateOrPendingConfirmation?.companyId
+      && candidateOrPendingConfirmation.companyId !== context.companyId
+      ? null
+      : candidateOrPendingConfirmation;
   context.companyQuery = request.companyQuery ?? context.companyQuery;
   context.professionalQuery = request.professionalQuery ?? context.professionalQuery;
   context.serviceQuery = request.serviceQuery ?? context.serviceQuery;
@@ -267,7 +416,7 @@ export function mergeAgendaRequest(
   context.updatedAt = now.toISOString();
   context.expiresAt = new Date(now.getTime() + CONTEXT_TTL_MS).toISOString();
 
-  if (selected?.companyId || selected?.kind === "company") {
+  if ((selected?.companyId || selected?.kind === "company") && request.confirmation !== "no") {
     context.companyId = selected.companyId ?? selected.id;
   }
   if (selected?.professionalId || selected?.kind === "professional") {

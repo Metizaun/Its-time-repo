@@ -39,6 +39,8 @@ const STRUCTURED_PERSONALITY_MIGRATION =
   "supabase/migrations/20260724210256_add_structured_agent_personality.sql";
 const FEATURE_CLOSING_MIGRATION =
   "supabase/migrations/20260727133949_close_companies_calendar_routing_v1.sql";
+const INTELLIGENT_COMPANY_DIRECTORY_MIGRATION =
+  "supabase/migrations/20260821154844_intelligent_company_directory_v2.sql";
 const LEAD_FIRST_TOUCH_ATTRIBUTION_MIGRATION =
   "supabase/migrations/20260817205108_add_lead_first_touch_attribution.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
@@ -537,6 +539,27 @@ async function validateCompaniesCalendarRoutingRpcs(
     : null;
 }
 
+async function validateIntelligentCompanyDirectoryRpc(
+  serviceClient: SupabaseClient<any, any, any>
+) {
+  const { error } = await serviceClient.rpc("lookup_company_directory_v2", {
+    p_query: "schema-preflight",
+    p_service_query: null,
+    p_professional_query: null,
+    p_limit: 1,
+    p_aces_id: -1,
+    p_require_calendar: false,
+  });
+
+  return error
+    ? buildSchemaFailure(
+        "crm.lookup_company_directory_v2",
+        INTELLIGENT_COMPANY_DIRECTORY_MIGRATION,
+        error
+      )
+    : null;
+}
+
 async function validateCalendarToolDefinition(agentsClient: SupabaseClient<any, any, any>) {
   const { data, error } = await agentsClient
     .from("tool_definitions")
@@ -761,6 +784,7 @@ export async function assertRuntimeSchemaCompatibility(
     validateChatAttachmentsStorage(serviceClient),
     validateAutomationMediaStorage(serviceClient),
     validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
+    validateIntelligentCompanyDirectoryRpc(serviceClient),
     validateCalendarToolDefinition(agentsClient),
     validateSelectedColumns(
       agentsClient,
@@ -814,6 +838,13 @@ export async function assertRuntimeSchemaCompatibility(
       ],
       "crm.empresas",
       FEATURE_CLOSING_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "empresas",
+      ["id", "search_aliases"],
+      "crm.empresas.search_aliases",
+      INTELLIGENT_COMPANY_DIRECTORY_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,

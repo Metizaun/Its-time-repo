@@ -282,3 +282,22 @@ export async function finalizeHumanHandoff(leadId: string, stageId: string, inst
     instanceName: instanceName ?? null,
   });
 }
+
+export async function forwardHumanHandoff(
+  leadId: string,
+  targetUserId: string,
+  idempotencyKey: string,
+) {
+  return postCrmBackend<{
+    success: true;
+    forwarded: true;
+    idempotent: boolean;
+    routing_event_id: string;
+    lead_id: string;
+    target_user_id: string;
+    target_user_name: string;
+  }>(`/api/chat/leads/${encodeURIComponent(leadId)}/handoff/forward`, {
+    targetUserId,
+    idempotencyKey,
+  });
+}

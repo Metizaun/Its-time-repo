@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/hooks/useChat";
+import { useCrmUsers } from "@/hooks/useCrmUsers";
 import { useLeadAiControl } from "@/hooks/useLeadAiControl";
 import { useInstances } from "@/hooks/useInstances";
 import { type Lead, useLeads } from "@/hooks/useLeads";
@@ -34,15 +35,19 @@ import { useRoutingQueue } from "@/hooks/useRoutingQueue";
 import { useChatUnread } from "@/contexts/ChatUnreadContext";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { finalizeHumanHandoff } from "@/services/chatService";
+import { finalizeHumanHandoff, forwardHumanHandoff } from "@/services/chatService";
 import type { ChatComposerPayload } from "@/types/chat";
+
+type HandoffDialogView = "choice" | "forward" | "finalize";
 
 export default function Chat() {
   const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
   const { pipelines, loading: pipelinesLoading } = usePipelines();
   const { instances, loading: instancesLoading } = useInstances();
   const { setSearchQuery, ui } = useApp();
-  const { userRole } = useAuth();
+  const { user, userRole } = useAuth();
+  const isAdmin = userRole === "ADMIN";
+  const { users: crmUsers, loading: crmUsersLoading } = useCrmUsers(isAdmin);
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const location = useLocation();
@@ -53,8 +58,13 @@ export default function Chat() {
   const [selectedInstance, setSelectedInstance] = useState("all");
   const [selectedCompany, setSelectedCompany] = useState("all");
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
+  const [handoffDialogView, setHandoffDialogView] = useState<HandoffDialogView>("choice");
   const [finalizeStageId, setFinalizeStageId] = useState("");
   const [finalizePipelineId, setFinalizePipelineId] = useState("");
+  const [forwardUserId, setForwardUserId] = useState("");
+  const [forwardRequestId, setForwardRequestId] = useState("");
+  const [preparingFinalize, setPreparingFinalize] = useState(false);
+  const [forwardingHandoff, setForwardingHandoff] = useState(false);
   const [finalizingHandoff, setFinalizingHandoff] = useState(false);
   const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
 
@@ -65,7 +75,7 @@ export default function Chat() {
   const { byLead: unreadByLead, markRead } = useChatUnread();
   const { stages, loading: stagesLoading } = usePipelineStages(
     finalizePipelineId || null,
-    finalizeDialogOpen && Boolean(finalizePipelineId)
+    finalizeDialogOpen && handoffDialogView === "finalize" && Boolean(finalizePipelineId)
   );
   const routingQueue = useRoutingQueue();
 
@@ -137,6 +147,18 @@ export default function Chat() {
     return instanceFilteredLeads;
   }, [activeFilter, instanceFilteredLeads, routingQueue.byLead, unreadByLead]);
 
+  const handoffRecipients = useMemo(
+    () => crmUsers
+      .filter((crmUser) =>
+        crmUser.auth_user_id !== user?.id &&
+        (crmUser.role === "ADMIN" || crmUser.role === "VENDEDOR")
+      )
+      .sort((left, right) =>
+        (left.name || left.email).localeCompare(right.name || right.email, "pt-BR")
+      ),
+    [crmUsers, user?.id],
+  );
+
   useEffect(() => {
     if (selectedCompany === "all") return;
     if (companyOptions.some((company) => company.id === selectedCompany)) return;
@@ -196,7 +218,6 @@ export default function Chat() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [markRead, selectedLeadId]);
 
-  const isAdmin = userRole === "ADMIN";
   const gupshupWindowClosed =
     sendPolicy?.provider === "gupshup" && sendPolicy.mode === "template_required";
   const leadAiControl = useLeadAiControl(
@@ -220,20 +241,75 @@ export default function Chat() {
     navigate(`/calendar?leadId=${selectedLead.id}&new=1`);
   };
 
-  const openFinalizeDialog = async () => {
+  const resetHandoffDialog = () => {
+    setHandoffDialogView("choice");
+    setFinalizeStageId("");
+    setFinalizePipelineId("");
+    setForwardUserId("");
+    setForwardRequestId("");
+    setPreparingFinalize(false);
+  };
+
+  const closeHandoffDialog = () => {
+    setFinalizeDialogOpen(false);
+    resetHandoffDialog();
+  };
+
+  const openHandoffDialog = () => {
+    if (!selectedLead) return;
+    resetHandoffDialog();
+    setForwardRequestId(crypto.randomUUID());
+    setFinalizeDialogOpen(true);
+  };
+
+  const prepareFinalizeForm = async () => {
     if (!selectedLead) {
       return;
     }
 
-    let currentPipelineId = "";
-    if (selectedLead.stage_id) {
-      const { data } = await supabase.from("pipeline_stages").select("pipeline_id").eq("id", selectedLead.stage_id).maybeSingle();
-      currentPipelineId = String(data?.pipeline_id ?? "");
+    setPreparingFinalize(true);
+    try {
+      let currentPipelineId = "";
+      if (selectedLead.stage_id) {
+        const { data } = await supabase.from("pipeline_stages").select("pipeline_id").eq("id", selectedLead.stage_id).maybeSingle();
+        currentPipelineId = String(data?.pipeline_id ?? "");
+      }
+      const fallbackPipelineId = pipelines.find((pipeline) => pipeline.is_default)?.id ?? pipelines[0]?.id ?? "";
+      setFinalizePipelineId(currentPipelineId || fallbackPipelineId);
+      setFinalizeStageId(selectedLead.stage_id ?? "");
+      setHandoffDialogView("finalize");
+    } finally {
+      setPreparingFinalize(false);
     }
-    const fallbackPipelineId = pipelines.find((pipeline) => pipeline.is_default)?.id ?? pipelines[0]?.id ?? "";
-    setFinalizePipelineId(currentPipelineId || fallbackPipelineId);
-    setFinalizeStageId(selectedLead.stage_id ?? "");
-    setFinalizeDialogOpen(true);
+  };
+
+  const handleForwardHandoff = async () => {
+    if (!selectedLead?.id || !forwardUserId || !forwardRequestId) return;
+
+    const recipient = handoffRecipients.find((crmUser) => crmUser.id === forwardUserId);
+    if (!recipient) {
+      toast.error("Selecione um colega valido");
+      return;
+    }
+
+    setForwardingHandoff(true);
+    try {
+      await forwardHumanHandoff(selectedLead.id, recipient.id, forwardRequestId);
+      await Promise.all([
+        refetch({ showLoading: false }),
+        routingQueue.refetch(true),
+        leadAiControl.refetch({ silent: true }),
+      ]);
+      closeHandoffDialog();
+      toast.success(`Atendimento encaminhado para ${recipient.name || recipient.email}`);
+    } catch (error) {
+      console.error("Erro ao encaminhar atendimento humano:", error);
+      toast.error("Erro ao encaminhar atendimento", {
+        description: error instanceof Error ? error.message : "Tente novamente em instantes.",
+      });
+    } finally {
+      setForwardingHandoff(false);
+    }
   };
 
   const handleFinalizeHandoff = async () => {
@@ -261,9 +337,7 @@ export default function Chat() {
         leadAiControl.refetch({ silent: true }),
       ]);
 
-      setFinalizeDialogOpen(false);
-      setFinalizeStageId("");
-      setFinalizePipelineId("");
+      closeHandoffDialog();
       toast.success("Atendimento humano finalizado e IA reativada");
     } catch (error) {
       console.error("Erro ao finalizar handoff humano:", error);
@@ -340,7 +414,7 @@ export default function Chat() {
                 onOpenDetails={() => setEditingLead(selectedLead)}
                 onSchedule={handleSchedule}
                 showFinalizeButton={leadAiControl.reason === "human_handoff"}
-                onFinalize={openFinalizeDialog}
+                onFinalize={openHandoffDialog}
                 aiControl={
                   isAdmin
                     ? {
@@ -400,85 +474,182 @@ export default function Chat() {
       <Dialog
         open={finalizeDialogOpen}
         onOpenChange={(open) => {
-          if (finalizingHandoff) {
+          if (finalizingHandoff || forwardingHandoff || preparingFinalize) {
             return;
           }
 
           setFinalizeDialogOpen(open);
           if (!open) {
-            setFinalizeStageId("");
-            setFinalizePipelineId("");
+            resetHandoffDialog();
           }
         }}
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Finalizar atendimento humano</DialogTitle>
+            <DialogTitle>
+              {handoffDialogView === "choice"
+                ? "Concluir atendimento"
+                : handoffDialogView === "forward"
+                  ? "Encaminhar atendimento"
+                  : "Finalizar atendimento humano"}
+            </DialogTitle>
             <DialogDescription>
-              Escolha a etapa em que o lead deve ficar ao devolver a conversa para a IA.
+              {handoffDialogView === "choice"
+                ? "Escolha o que deve acontecer com esta conversa."
+                : handoffDialogView === "forward"
+                  ? "Selecione o colega que continuara o atendimento humano."
+                  : "Escolha a etapa em que o lead deve ficar ao devolver a conversa para a IA."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
-            <div className="rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-subtle)] px-4 py-3">
-              <p className="text-sm font-semibold text-foreground">{selectedLead?.lead_name ?? "Lead selecionado"}</p>
-              <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                A IA sera reativada assim que este handoff for finalizado.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="handoff-final-pipeline" className="text-sm font-medium text-foreground">Pipeline de destino</label>
-              <Select value={finalizePipelineId} onValueChange={(value) => { setFinalizePipelineId(value); setFinalizeStageId(""); }} disabled={pipelinesLoading || finalizingHandoff}>
-                <SelectTrigger id="handoff-final-pipeline" className="rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-surface)]"><SelectValue placeholder={pipelinesLoading ? "Carregando pipelines..." : "Selecione o pipeline"} /></SelectTrigger>
-                <SelectContent className="rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
-                  {pipelines.map((pipeline) => <SelectItem key={pipeline.id} value={pipeline.id}>{pipeline.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="handoff-final-stage" className="text-sm font-medium text-foreground">
-                Etapa de destino
-              </label>
-              <Select value={finalizeStageId} onValueChange={setFinalizeStageId} disabled={stagesLoading || finalizingHandoff}>
-                <SelectTrigger
-                  id="handoff-final-stage"
-                  className="rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-surface)]"
+          {handoffDialogView === "choice" ? (
+            <>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setHandoffDialogView("forward")}
+                  className="h-auto min-h-14 items-center justify-start rounded-[var(--radius-lg)] border-[var(--border-default)] bg-[var(--color-surface-1)] px-4 py-3 text-left shadow-sm hover:bg-[var(--color-surface-2)] hover:shadow-md"
                 >
-                  <SelectValue placeholder={stagesLoading ? "Carregando etapas..." : "Selecione a etapa"} />
-                </SelectTrigger>
-                <SelectContent className="rounded-2xl border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
-                  {stages.map((stage) => (
-                    <SelectItem
-                      key={stage.id}
-                      value={stage.id}
-                      className="text-foreground focus:bg-[var(--color-border-subtle)] focus:text-foreground"
-                    >
-                      {stage.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+                  <span className="min-w-0 whitespace-normal">
+                    <span className="block text-sm font-semibold text-foreground">Encaminhar</span>
+                    <span className="mt-0.5 block text-xs font-normal leading-4 text-[var(--color-text-secondary)]">
+                      Outro colega continua o atendimento.
+                    </span>
+                  </span>
+                </Button>
 
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setFinalizeDialogOpen(false);
-                setFinalizeStageId("");
-                setFinalizePipelineId("");
-              }}
-              disabled={finalizingHandoff}
-            >
-              Cancelar
-            </Button>
-            <Button onClick={() => void handleFinalizeHandoff()} disabled={finalizingHandoff || pipelinesLoading || stagesLoading || !finalizePipelineId || !finalizeStageId}>
-              {finalizingHandoff ? "Finalizando..." : "Finalizar atendimento"}
-            </Button>
-          </DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void prepareFinalizeForm()}
+                  disabled={preparingFinalize}
+                  className="h-auto min-h-14 items-center justify-start rounded-[var(--radius-lg)] border-[var(--border-default)] bg-[var(--color-surface-1)] px-4 py-3 text-left shadow-sm hover:bg-[var(--color-surface-2)] hover:shadow-md"
+                >
+                  <span className="min-w-0 whitespace-normal">
+                    <span className="block text-sm font-semibold text-foreground">
+                      {preparingFinalize ? "Carregando..." : "Finalizar"}
+                    </span>
+                    <span className="mt-0.5 block text-xs font-normal leading-4 text-[var(--color-text-secondary)]">
+                      Define a etapa e reativa a IA.
+                    </span>
+                  </span>
+                </Button>
+              </div>
+
+              <DialogFooter>
+                <Button variant="ghost" onClick={closeHandoffDialog} disabled={preparingFinalize}>
+                  Cancelar
+                </Button>
+              </DialogFooter>
+            </>
+          ) : handoffDialogView === "forward" ? (
+            <>
+              <div className="space-y-3">
+                <div className="rounded-[var(--radius-xl)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-subtle)] px-4 py-3">
+                  <p className="text-sm font-semibold text-foreground">{selectedLead?.lead_name ?? "Lead selecionado"}</p>
+                  <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                    A conversa permanecera em atendimento humano.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="handoff-forward-user" className="text-sm font-medium text-foreground">
+                    Encaminhar para
+                  </label>
+                  <Select value={forwardUserId} onValueChange={setForwardUserId} disabled={crmUsersLoading || forwardingHandoff}>
+                    <SelectTrigger id="handoff-forward-user" className="rounded-[var(--radius-md)] border-[var(--color-border-medium)] bg-[var(--color-bg-surface)]">
+                      <SelectValue placeholder={crmUsersLoading ? "Carregando colegas..." : "Selecione um colega"} />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-[var(--radius-xl)] border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
+                      {handoffRecipients.map((recipient) => (
+                        <SelectItem key={recipient.id} value={recipient.id}>
+                          {recipient.name || recipient.email}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!crmUsersLoading && handoffRecipients.length === 0 ? (
+                    <p className="text-xs text-[var(--color-text-secondary)]">
+                      Nenhum outro colega ativo esta disponivel nesta conta.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2">
+                <Button variant="outline" onClick={() => { setHandoffDialogView("choice"); setForwardUserId(""); }} disabled={forwardingHandoff}>
+                  Voltar
+                </Button>
+                <Button onClick={() => void handleForwardHandoff()} disabled={forwardingHandoff || crmUsersLoading || !forwardUserId}>
+                  {forwardingHandoff ? "Encaminhando..." : "Encaminhar atendimento"}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <div className="space-y-3">
+                <div className="rounded-[var(--radius-xl)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-subtle)] px-4 py-3">
+                  <p className="text-sm font-semibold text-foreground">{selectedLead?.lead_name ?? "Lead selecionado"}</p>
+                  <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                    A IA sera reativada assim que este handoff for finalizado.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="handoff-final-pipeline" className="text-sm font-medium text-foreground">Pipeline de destino</label>
+                  <Select value={finalizePipelineId} onValueChange={(value) => { setFinalizePipelineId(value); setFinalizeStageId(""); }} disabled={pipelinesLoading || finalizingHandoff}>
+                    <SelectTrigger id="handoff-final-pipeline" className="rounded-[var(--radius-md)] border-[var(--color-border-medium)] bg-[var(--color-bg-surface)]"><SelectValue placeholder={pipelinesLoading ? "Carregando pipelines..." : "Selecione o pipeline"} /></SelectTrigger>
+                    <SelectContent className="rounded-[var(--radius-xl)] border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
+                      {pipelines.map((pipeline) => <SelectItem key={pipeline.id} value={pipeline.id}>{pipeline.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="handoff-final-stage" className="text-sm font-medium text-foreground">
+                    Etapa de destino
+                  </label>
+                  <Select value={finalizeStageId} onValueChange={setFinalizeStageId} disabled={stagesLoading || finalizingHandoff}>
+                    <SelectTrigger
+                      id="handoff-final-stage"
+                      className="rounded-[var(--radius-md)] border-[var(--color-border-medium)] bg-[var(--color-bg-surface)]"
+                    >
+                      <SelectValue placeholder={stagesLoading ? "Carregando etapas..." : "Selecione a etapa"} />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-[var(--radius-xl)] border-[var(--color-border-medium)] bg-[var(--color-bg-elevated)]">
+                      {stages.map((stage) => (
+                        <SelectItem
+                          key={stage.id}
+                          value={stage.id}
+                          className="text-foreground focus:bg-[var(--color-border-subtle)] focus:text-foreground"
+                        >
+                          {stage.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setHandoffDialogView("choice");
+                    setFinalizeStageId("");
+                    setFinalizePipelineId("");
+                  }}
+                  disabled={finalizingHandoff}
+                >
+                  Voltar
+                </Button>
+                <Button onClick={() => void handleFinalizeHandoff()} disabled={finalizingHandoff || pipelinesLoading || stagesLoading || !finalizePipelineId || !finalizeStageId}>
+                  {finalizingHandoff ? "Finalizando..." : "Finalizar atendimento"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 

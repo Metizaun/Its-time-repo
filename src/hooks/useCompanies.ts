@@ -15,6 +15,7 @@ export type Company = {
   state: string;
   postalCode: string | null;
   timezone: string;
+  searchAliases: string[];
   isActive: boolean;
   memberCount: number;
   createdAt: string;
@@ -32,6 +33,7 @@ export type CompanyInput = {
   state: string;
   postalCode: string;
   timezone: string;
+  searchAliases: string[];
   isActive: boolean;
 };
 

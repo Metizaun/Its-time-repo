@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { getCrmBackend, patchCrmBackend, postCrmBackend } from "@/services/crmBackend";
 
@@ -30,15 +30,22 @@ export interface CombinedUserOrInvitation {
   isPending: boolean;
 }
 
-export function useCrmUsers() {
+export function useCrmUsers(enabled = true) {
   const [users, setUsers] = useState<CrmUser[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<PendingInvitation[]>([]);
   const [combinedList, setCombinedList] = useState<CombinedUserOrInvitation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [invitationsLoading, setInvitationsLoading] = useState(false);
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
+    if (!enabled) {
+      setUsers([]);
+      setLoading(false);
+      return;
+    }
+
     try {
+      setLoading(true);
       const { users: nextUsers } = await getCrmBackend<{ users: CrmUser[] }>("/api/admin/users");
       setUsers(nextUsers || []);
     } catch (error: any) {
@@ -49,9 +56,15 @@ export function useCrmUsers() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [enabled]);
 
-  const fetchPendingInvitations = async () => {
+  const fetchPendingInvitations = useCallback(async () => {
+    if (!enabled) {
+      setPendingInvitations([]);
+      setInvitationsLoading(false);
+      return;
+    }
+
     setInvitationsLoading(true);
     try {
       const { invitations } = await getCrmBackend<{ invitations: PendingInvitation[] }>(
@@ -66,7 +79,7 @@ export function useCrmUsers() {
     } finally {
       setInvitationsLoading(false);
     }
-  };
+  }, [enabled]);
 
   useEffect(() => {
     const confirmed: CombinedUserOrInvitation[] = users.map((user) => ({
@@ -150,7 +163,7 @@ export function useCrmUsers() {
   useEffect(() => {
     void fetchUsers();
     void fetchPendingInvitations();
-  }, []);
+  }, [fetchPendingInvitations, fetchUsers]);
 
   return {
     users,

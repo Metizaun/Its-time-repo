@@ -1,8 +1,25 @@
 
 [api]
 enabled = true
+port = 55321
 schemas = ["public", "storage", "graphql_public", "crm", "meta", "calendar", "agents", "rb"]
 extra_search_path = ["public", "extensions", "crm", "agents", "meta", "calendar", "rb"]
+
+[db]
+port = 55322
+shadow_port = 55320
+
+[studio]
+port = 55323
+
+[local_smtp]
+port = 55324
+smtp_port = 55325
+pop3_port = 55326
+
+[analytics]
+port = 55327
+vector_port = 55328
 
 [auth]
 enabled = true

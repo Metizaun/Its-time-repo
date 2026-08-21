@@ -72,7 +72,6 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tool, setTool] = useState<AgentTool | null>(null);
-  const [integrationEnabled, setIntegrationEnabled] = useState(false);
   const [empresaIdsText, setEmpresaIdsText] = useState("");
   const [pixMappingByStore, setPixMappingByStore] = useState<Record<string, string>>({});
 
@@ -84,7 +83,6 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
       setTool(currentTool);
 
       const config = asRecord(currentTool?.config);
-      setIntegrationEnabled(Boolean(currentTool?.enabled));
       setEmpresaIdsText(parseCompanyIds(config.rb_empresa_ids));
       setPixMappingByStore(parsePixMapping(config.pix_mapping_by_store));
     } catch (error) {
@@ -113,7 +111,6 @@ export function RbBillingConfigPanel({ agentId, onClose, onChanged }: Props) {
       );
       const currentConfig = asRecord(tool?.config);
       const updated = await updateAgentTool(agentId, "rb_billing", {
-        isEnabled: integrationEnabled,
         config: {
           ...currentConfig,
           pix_mapping_by_store: nextPixMapping,

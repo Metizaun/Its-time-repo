@@ -72,4 +72,12 @@ exemples/
 /Project/IA/scripts/recover-*
 /Project/IA/evolution-template-backfill.ts
 /supabase/migrations/*dr_oculos*.sql
+!/supabase/migrations/20260814202513_update_dr_oculos_billing_agent_prompt.sql
 /dist-production-check/
+
+# Local product research and draft implementation files.
+/Instagram-API/
+/referencias/IA Instituto/
+/Project/IA/agent-tool-activation.ts
+/supabase/migrations/20260821135107_fix_admin_template_agent_instance_ownership.sql
+/supabase/tests/manual_handoff_forwarding.sql

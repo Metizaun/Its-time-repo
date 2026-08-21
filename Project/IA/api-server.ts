@@ -122,6 +122,22 @@ function parseCompanyInput(body: unknown) {
   const state = asString(payload.state)?.toUpperCase() ?? null;
   const postalCode = asString(payload.postalCode)?.replace(/\D/g, "") || null;
   const timezone = asString(payload.timezone) ?? "America/Sao_Paulo";
+  const rawSearchAliases = Array.isArray(payload.searchAliases) ? payload.searchAliases : [];
+  if (rawSearchAliases.length > 20) {
+    throw new HttpError(400, "Informe no maximo 20 nomes alternativos");
+  }
+  const searchAliases = [...new Map(
+    rawSearchAliases
+      .map((value) => asString(value))
+      .filter((value): value is string => Boolean(value))
+      .map((value) => [
+        value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR"),
+        value,
+      ]),
+  ).values()];
+  if (searchAliases.some((value) => value.length > 120)) {
+    throw new HttpError(400, "Cada nome alternativo deve ter no maximo 120 caracteres");
+  }
 
   if (!isValidCnpj(cnpj)) {
     throw new HttpError(400, "CNPJ invalido");
@@ -153,6 +169,7 @@ function parseCompanyInput(body: unknown) {
     state,
     postal_code: postalCode,
     timezone,
+    search_aliases: searchAliases,
     is_active: payload.isActive !== false,
   };
 }
@@ -1834,7 +1851,7 @@ app.get(
       supabaseAdmin
         .from("empresas")
         .select(
-          "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, is_active, created_at, updated_at",
+          "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
         )
         .eq("aces_id", context.acesId)
         .order("name"),
@@ -1873,6 +1890,7 @@ app.get(
         state: company.state,
         postalCode: company.postal_code,
         timezone: company.timezone,
+        searchAliases: company.search_aliases ?? [],
         isActive: company.is_active,
         memberCount: memberCountByCompany.get(String(company.id)) ?? 0,
         createdAt: company.created_at,
@@ -1901,7 +1919,7 @@ app.post(
         ...input,
       })
       .select(
-        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, is_active, created_at, updated_at",
+        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
       )
       .single();
 
@@ -1928,7 +1946,11 @@ app.patch(
       throw new HttpError(403, "Apenas administradores podem editar empresas");
     }
 
-    const input = parseCompanyInput(req.body);
+    const parsedInput = parseCompanyInput(req.body);
+    const { search_aliases: _searchAliases, ...inputWithoutAliases } = parsedInput;
+    const input = Array.isArray(asRecord(req.body).searchAliases)
+      ? parsedInput
+      : inputWithoutAliases;
     const supabaseAdmin = createServiceSupabaseClient();
     const { data, error } = await supabaseAdmin
       .from("empresas")
@@ -1936,7 +1958,7 @@ app.patch(
       .eq("id", getSingleParam(req.params.id))
       .eq("aces_id", context.acesId)
       .select(
-        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, is_active, created_at, updated_at",
+        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
       )
       .maybeSingle();
 
@@ -2330,6 +2352,35 @@ app.post(
       instanceName: asString(req.body.instanceName),
     });
     res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/leads/:leadId/handoff/forward",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (req.authContext?.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem encaminhar atendimentos");
+    }
+
+    const accessToken = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
+    if (!accessToken) throw new HttpError(401, "Sessao invalida");
+
+    const targetUserId = asString(req.body.targetUserId);
+    if (!targetUserId) throw new HttpError(400, "Usuario de destino obrigatorio");
+
+    const client = createUserScopedSupabaseClient(accessToken);
+    const { data, error } = await client.rpc("rpc_forward_human_handoff", {
+      p_lead_id: getSingleParam(req.params.leadId),
+      p_user_id: targetUserId,
+      p_idempotency_key: asString(req.body.idempotencyKey),
+    });
+
+    if (error) {
+      throw new HttpError(409, "Nao foi possivel encaminhar o atendimento", error);
+    }
+
+    res.json(data);
   }),
 );
 

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -44,6 +45,7 @@ const EMPTY_FORM: CompanyInput = {
   state: "",
   postalCode: "",
   timezone: "America/Sao_Paulo",
+  searchAliases: [],
   isActive: true,
 };
 
@@ -73,6 +75,7 @@ export function CompanyManager() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
   const [form, setForm] = useState<CompanyInput>(EMPTY_FORM);
+  const [searchAliasesText, setSearchAliasesText] = useState("");
   const [errors, setErrors] = useState<Partial<Record<keyof CompanyInput, string>>>({});
 
   const filteredCompanies = useMemo(
@@ -83,6 +86,7 @@ export function CompanyManager() {
   const openCreate = () => {
     setEditingCompany(null);
     setForm(EMPTY_FORM);
+    setSearchAliasesText("");
     setErrors({});
     setDialogOpen(true);
   };
@@ -100,8 +104,10 @@ export function CompanyManager() {
       state: company.state,
       postalCode: company.postalCode ?? "",
       timezone: company.timezone,
+      searchAliases: company.searchAliases,
       isActive: company.isActive,
     });
+    setSearchAliasesText(company.searchAliases.join("\n"));
     setErrors({});
     setDialogOpen(true);
   };
@@ -139,6 +145,10 @@ export function CompanyManager() {
         city: form.city.trim(),
         state: form.state.trim().toUpperCase(),
         postalCode: form.postalCode.replace(/\D/g, ""),
+        searchAliases: searchAliasesText
+          .split(/[\n,]/)
+          .map((value) => value.trim())
+          .filter(Boolean),
       },
       editingCompany?.id,
     );
@@ -317,6 +327,19 @@ export function CompanyManager() {
                   className="shadow-inset"
                 />
                 {errors.name ? <p className="text-xs text-[var(--color-error-600)]">{errors.name}</p> : null}
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="company-search-aliases">Nomes alternativos para busca</Label>
+                <Textarea
+                  id="company-search-aliases"
+                  value={searchAliasesText}
+                  onChange={(event) => setSearchAliasesText(event.target.value)}
+                  placeholder={"Um nome por linha, como Campo Largo\nSaúde Perfeita Campo Largo"}
+                  className="min-h-20 resize-y shadow-inset"
+                />
+                <p className="text-xs text-[var(--color-gray-500)]">
+                  A IA combina estes nomes com os dados oficiais cadastrados para reconhecer a unidade.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="company-phone">Telefone</Label>

@@ -97,6 +97,10 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
     () => new Map(setup.agents.map((agent) => [agent.id, agent])),
     [setup.agents],
   );
+  const activeTargetAgents = useMemo(
+    () => setup.agents.filter((agent) => agent.is_active),
+    [setup.agents],
+  );
 
   const resetForm = () => {
     setMode("internal_company");
@@ -122,14 +126,20 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
       : "");
   };
 
-  const selectAgent = (selectedAgentId: string) => {
+  const selectAgent = useCallback((selectedAgentId: string) => {
     const target = agentsById.get(selectedAgentId);
+    if (!target?.is_active) return;
     setTargetAgentId(selectedAgentId);
     setDisplayName(target ? `IA ${target.name}` : "");
     setInstruction(target
       ? `Encaminhe para ${target.name} quando o assunto pertencer ao fluxo especializado desta IA.`
       : "");
-  };
+  }, [agentsById]);
+
+  useEffect(() => {
+    if (mode !== "agent" || targetAgentId || activeTargetAgents.length !== 1) return;
+    selectAgent(activeTargetAgents[0].id);
+  }, [activeTargetAgents, mode, selectAgent, targetAgentId]);
 
   const editDestination = (destination: ForwardingDestination) => {
     if (destination.destination_key === "legacy-handoff") return;
@@ -308,17 +318,30 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
               </>
             ) : mode === "agent" ? (
               <div className="space-y-2">
-                <Label>IA e instancia de destino</Label>
+                <Label>IA principal e instancia de destino</Label>
                 <Select value={targetAgentId} onValueChange={selectAgent}>
                   <SelectTrigger><SelectValue placeholder="Selecione a IA" /></SelectTrigger>
                   <SelectContent>
                     {setup.agents.map((target) => (
-                      <SelectItem key={target.id} value={target.id}>
-                        {target.name} - {target.instance_name}
+                      <SelectItem key={target.id} value={target.id} disabled={!target.is_active}>
+                        {target.name} - {target.instance_name}{target.is_active ? "" : " (Pausada)"}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {setup.agents.length === 0 ? (
+                  <p className="rounded-[var(--radius-lg)] bg-[var(--color-warning-bg)] p-3 text-xs leading-relaxed text-[var(--color-warning-600)]">
+                    Nenhuma outra IA principal foi criada nesta conta. Crie uma IA principal para usar este encaminhamento.
+                  </p>
+                ) : activeTargetAgents.length === 0 ? (
+                  <p className="rounded-[var(--radius-lg)] bg-[var(--color-warning-bg)] p-3 text-xs leading-relaxed text-[var(--color-warning-600)]">
+                    As IAs principais disponíveis estão pausadas. Ative a IA de destino na tela de Agentes para que ela possa assumir a conversa.
+                  </p>
+                ) : activeTargetAgents.length === 1 ? (
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    A única IA principal ativa foi selecionada automaticamente para assumir o atendimento.
+                  </p>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-2">

@@ -22,4 +22,4 @@ END;
 $$;
 
 COMMENT ON COLUMN crm.leads.first_touch_attribution IS
-  'Atribuicao imutavel do primeiro toque capturado pelo canal, preenchida apenas quando nula.';
+  'Atribuicao imutavel do primeiro toque capturado pelo canal, preenchida apenas quando nula.';;
