@@ -4,3 +4,14 @@ DEPLOY_ENV_VPS.local.md
 .env.local
 .env.*.local
 .codex-*
+
+# The Vercel project is the Vite frontend; backend and local artifacts are
+# deployed separately and must not be uploaded with the frontend source.
+node_modules/
+dist/
+Project/
+supabase/
+Instagram-API/
+update/
+.vercel/
+.git/
