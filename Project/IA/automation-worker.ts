@@ -1515,7 +1515,10 @@ export function startAutomationWorker() {
       });
     }
 
-    const providerName = await whatsAppProviders.resolveInstanceProvider(followup.instance_name);
+    const providerName = await whatsAppProviders.resolveInstanceProvider(
+      followup.aces_id,
+      followup.instance_name
+    );
     const provider = whatsAppProviders.getProvider(providerName);
 
     if (
@@ -1848,7 +1851,10 @@ export function startAutomationWorker() {
             }
 
             const sentAt = new Date().toISOString();
-            const providerName = await whatsAppProviders.resolveInstanceProvider(execution.instance_name);
+            const providerName = await whatsAppProviders.resolveInstanceProvider(
+              execution.aces_id,
+              execution.instance_name
+            );
             const provider = whatsAppProviders.getProvider(providerName);
             await assertAutomationConversationWindow(supabase, providerName, execution);
             const sendResult =
@@ -2030,7 +2036,10 @@ export function startAutomationWorker() {
 
             const sentAt = new Date().toISOString();
             await registerCalendarFollowupOutboundEcho(followup, renderedMessage, sentAt);
-            const providerName = await whatsAppProviders.resolveInstanceProvider(followup.instance_name);
+            const providerName = await whatsAppProviders.resolveInstanceProvider(
+              followup.aces_id,
+              followup.instance_name
+            );
             const sendResult = await sendRawWhatsAppText(
               whatsAppProviders.getProvider(providerName),
               followup.instance_name,

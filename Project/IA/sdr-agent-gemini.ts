@@ -7,6 +7,11 @@ import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai"
 import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { RbVisagismService } from "./rb-visagism-service.js";
+import {
+  StoreLocatorError,
+  StoreLocatorService,
+  type StoreInput,
+} from "./store-locator-service.js";
 
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
 import {
@@ -968,6 +973,13 @@ type VisagismDecision = {
   reason: string;
 };
 
+type StoreLocatorDecision = {
+  action: "none" | "search" | "other" | "confirm";
+  locationText: string | null;
+  confirmation: "unknown" | "yes" | "no";
+  preferenceType: "favorite" | "secondary";
+};
+
 type StructuredModelResponse = {
   reply_blocks: string[];
   stage_decision: {
@@ -1002,6 +1014,7 @@ type StructuredModelResponse = {
   native_followup: NativeFollowupDecision;
   visagism: VisagismDecision;
   agenda_request: AgendaRequest;
+  store_locator: StoreLocatorDecision;
 };
 
 type AgendaExecutionResult = {
@@ -1085,6 +1098,9 @@ type ServiceConfig = {
   visagismImageWorkerModel?: string;
   prescriptionWorkerEnabled?: boolean;
   prescriptionWorkerModel?: string;
+  googleMapsApiKey?: string;
+  storeLocatorRouteCacheMinutes?: number;
+  storeLocatorEnabled?: boolean;
   toolMediaAllowedHosts?: string[];
   redisUrl?: string;
   evolutionApiUrl: string;
@@ -1674,12 +1690,13 @@ export function getPrescriptionValidationErrors(prescription: NormalizedPrescrip
   return errors;
 }
 
-// Erros que impedem qualquer leitura util do receituario (nao ha dado nenhum para o olho).
-// Erros "leves" (ex.: eixo nao informado) nao bloqueiam a leitura do grau, apenas impedem
-// a cotacao automatica de preco (matchLensPriceRule permanece estrita) e geram um aviso
-// para o atendimento confirmar o dado antes de fechar o pedido.
-const PRESCRIPTION_BLOCKING_ERROR_CODES = new Set(["od_missing", "oe_missing"]);
-export const PRESCRIPTION_MIN_CONFIDENCE: PrescriptionConfidence = 1;
+// Nenhum campo faltante (od/oe/eixo em branco) ou confianca baixa bloqueia a leitura do
+// receituario: o agente sempre usa os dados extraidos, mesmo parciais. Esses erros continuam
+// sendo reportados em `errors` apenas para impedir a cotacao automatica de preco quando os
+// dados estiverem incompletos (matchLensPriceRule permanece estrita e usa getPrescriptionValidationErrors
+// sem relaxamento). O unico caso que bloqueia a leitura e a imagem nao ser reconhecida como receita.
+const PRESCRIPTION_BLOCKING_ERROR_CODES = new Set<string>([]);
+export const PRESCRIPTION_MIN_CONFIDENCE: PrescriptionConfidence = 0;
 
 /**
  * Contrato canônico do receituário: 0 = low, 1 = medium, 2 = high.
@@ -2045,6 +2062,7 @@ function parseStructuredJson(text: string): StructuredModelResponse {
   const leadVerification = asRecord(parsed.lead_verification);
   const nativeFollowup = asRecord(parsed.native_followup);
   const visagism = asRecord(parsed.visagism);
+  const storeLocator = asRecord(parsed.store_locator);
 
   return {
     reply_blocks: Array.isArray(parsed.reply_blocks)
@@ -2109,6 +2127,16 @@ function parseStructuredJson(text: string): StructuredModelResponse {
       reason: asString(visagism.reason) ?? "",
     },
     agenda_request: parseAgendaRequest(parsed.agenda_request),
+    store_locator: {
+      action: ["search", "other", "confirm"].includes(String(storeLocator.action))
+        ? String(storeLocator.action) as StoreLocatorDecision["action"]
+        : "none",
+      locationText: asString(storeLocator.locationText),
+      confirmation: storeLocator.confirmation === "yes" || storeLocator.confirmation === "no"
+        ? storeLocator.confirmation
+        : "unknown",
+      preferenceType: storeLocator.preferenceType === "secondary" ? "secondary" : "favorite",
+    },
   };
 }
 
@@ -2445,12 +2473,12 @@ export function createUnansweredFollowupGenerator(config: {
 export class AgentManager {
   private static readonly INSTANCE_SETUP_TTL_HOURS = 24;
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
-  private static readonly DEFAULT_CUSTOMER_AGENT_MODEL = "gemini-2.5-flash";
+  private static readonly DEFAULT_CUSTOMER_AGENT_MODEL = "gemini-3.1-flash-lite";
   private static readonly DEFAULT_CRM_ANALYSIS_WORKER_MODEL = "gemini-3.1-flash-lite";
   private static readonly DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.6-luna";
   private static readonly DEFAULT_OPENAI_CRM_ANALYSIS_MODEL = "gpt-5.6-luna";
   private static readonly DEFAULT_GEMINI_FALLBACK_MODELS = [
-    "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
   ];
   private static readonly DEFAULT_GEMINI_MAX_RETRIES = 3;
   private static readonly DEFAULT_GEMINI_RETRY_BASE_DELAY_MS = 1000;
@@ -2464,6 +2492,7 @@ export class AgentManager {
   private readonly authClient: SupabaseClient<any, any, any>;
   private readonly serviceClient: SupabaseClient<any, any, any>;
   private readonly agentsClient: SupabaseClient<any, any, any>;
+  private readonly locatorClient: SupabaseClient<any, any, any>;
   private readonly rbClient: SupabaseClient<any, any, any>;
   private readonly redis: Redis | null;
   private readonly memoryBuffers = new Map<string, ParsedWebhookMessage[]>();
@@ -2494,6 +2523,9 @@ export class AgentManager {
   private readonly visagismImageWorkerModel: string;
   private readonly prescriptionWorkerEnabled: boolean;
   private readonly prescriptionWorkerModel: string;
+  private readonly storeLocator: StoreLocatorService;
+  private readonly googleMapsApiKey: string | null;
+  private readonly storeLocatorEnabled: boolean;
   private readonly toolMediaAllowedHosts: Set<string>;
   private readonly instancePhoneAllowlists: Record<string, string[]>;
   private readonly whatsAppProviders: WhatsAppProviderRegistry;
@@ -2515,6 +2547,11 @@ export class AgentManager {
     this.agentsClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       db: { schema: "agents" },
+    });
+
+    this.locatorClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      db: { schema: "locator" },
     });
 
     this.rbClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
@@ -2559,11 +2596,18 @@ export class AgentManager {
     this.elevenLabsTtsEnabled = config.elevenLabsTtsEnabled === true;
     this.visagismToolEnabled = config.visagismToolEnabled === true;
     this.visagismInternalRuntimeEnabled = config.visagismInternalRuntimeEnabled !== false;
-    this.visagismAnalysisWorkerModel = config.visagismAnalysisWorkerModel?.trim() || "gemini-2.5-flash";
-    this.visagismMatchingWorkerModel = config.visagismMatchingWorkerModel?.trim() || "gemini-2.5-flash";
+    this.visagismAnalysisWorkerModel = config.visagismAnalysisWorkerModel?.trim() || "gemini-3.1-flash-lite";
+    this.visagismMatchingWorkerModel = config.visagismMatchingWorkerModel?.trim() || "gemini-3.1-flash-lite";
     this.visagismImageWorkerModel = config.visagismImageWorkerModel?.trim() || "gpt-image-1";
     this.prescriptionWorkerEnabled = config.prescriptionWorkerEnabled !== false;
-    this.prescriptionWorkerModel = config.prescriptionWorkerModel?.trim() || "gemini-2.5-flash";
+    this.prescriptionWorkerModel = config.prescriptionWorkerModel?.trim() || "gemini-3.1-flash-lite";
+    this.googleMapsApiKey = config.googleMapsApiKey?.trim() || null;
+    this.storeLocatorEnabled = config.storeLocatorEnabled === true;
+    this.storeLocator = new StoreLocatorService(
+      this.locatorClient,
+      this.googleMapsApiKey,
+      parsePositiveInteger(config.storeLocatorRouteCacheMinutes, 30),
+    );
     this.toolMediaAllowedHosts = new Set(
       [
         "drive.google.com",
@@ -3786,6 +3830,40 @@ export class AgentManager {
         throw new HttpError(500, `Nao foi possivel atualizar a Tool ${binding.tool_key}`, updateError);
       }
     }
+
+    await this.syncStoreLocatorReadiness(agentId, acesId, autoEnableReady);
+  }
+
+  private async syncStoreLocatorReadiness(agentId: string, acesId: number, autoEnableReady = false) {
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("id, is_enabled")
+      .eq("agent_id", agentId)
+      .eq("aces_id", acesId)
+      .eq("tool_key", "store_locator")
+      .maybeSingle();
+    if (bindingError) throw new HttpError(500, "Nao foi possivel validar a Tool Busca de filiais", bindingError);
+    if (!binding) return;
+
+    const { count, error: storeError } = await this.locatorClient
+      .from("stores")
+      .select("id", { count: "exact", head: true })
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .eq("ai_visible", true);
+    if (storeError) throw new HttpError(500, "Nao foi possivel validar as filiais", storeError);
+
+    const ready = Boolean(this.storeLocatorEnabled && this.googleMapsApiKey && Number(count ?? 0) > 0);
+    const { error: updateError } = await this.agentsClient
+      .from("agent_tools")
+      .update({
+        readiness: ready ? "ready" : this.storeLocatorEnabled ? "needs_config" : "unavailable",
+        is_enabled: ready ? (autoEnableReady ? true : Boolean(binding.is_enabled)) : false,
+        last_validated_at: new Date().toISOString(),
+      })
+      .eq("id", binding.id)
+      .eq("aces_id", acesId);
+    if (updateError) throw new HttpError(500, "Nao foi possivel atualizar a Tool Busca de filiais", updateError);
   }
 
   private async refreshRbBillingToolReadiness(acesId: number, bindingId: string, autoEnableReady = false) {
@@ -4276,6 +4354,67 @@ export class AgentManager {
     });
   }
 
+  private storeLocatorHttpError(error: unknown): HttpError {
+    if (!(error instanceof StoreLocatorError)) {
+      return new HttpError(500, "Falha inesperada na Tool Busca de filiais", error);
+    }
+    const statusCode = error.code === "invalid_input"
+      ? 400
+      : error.code === "not_found"
+        ? 404
+        : error.code === "provider_unavailable"
+          ? 502
+          : 500;
+    return new HttpError(statusCode, error.message, error.details);
+  }
+
+  async listStoreLocatorStores(
+    context: AuthContext,
+    agentId: string,
+    input: { search?: string; status?: string },
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.listStores(context.acesId, input);
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async saveStoreLocatorStore(context: AuthContext, agentId: string, input: StoreInput) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      const store = await this.storeLocator.saveStore(context.acesId, context.authUserId, input);
+      await this.syncStoreLocatorReadiness(agentId, context.acesId);
+      return store;
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async deactivateStoreLocatorStore(context: AuthContext, agentId: string, storeId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      const store = await this.storeLocator.deactivateStore(context.acesId, context.authUserId, storeId);
+      await this.syncStoreLocatorReadiness(agentId, context.acesId);
+      return store;
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async getLeadStorePreferences(context: AuthContext, leadId: string) {
+    await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.getLeadPreferences(context.acesId, leadId);
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
   private isPortugueseVoice(rawVoice: unknown): boolean {
     const voice = asRecord(rawVoice);
     // Vozes clonadas pelo proprio usuario sao sempre incluidas independente de idioma
@@ -4362,6 +4501,9 @@ export class AgentManager {
   ) {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (toolKey === "store_locator") {
+      await this.syncStoreLocatorReadiness(agentId, context.acesId);
+    }
 
     const { data: current, error: currentError } = await this.agentsClient
       .from("agent_tools")
@@ -9038,8 +9180,7 @@ export class AgentManager {
     mediaUrl: string,
     acesId: number
   ): Promise<SendResult> {
-    void acesId;
-    const providerName = await this.whatsAppProviders.resolveInstanceProvider(instanceName);
+    const providerName = await this.whatsAppProviders.resolveInstanceProvider(acesId, instanceName);
     const provider = this.whatsAppProviders.getProvider(providerName);
     if (!provider.sendVoiceNote) {
       throw new WhatsAppProviderError("Canal sem suporte a audio", { provider: providerName, kind: "permanent" });
@@ -9562,7 +9703,10 @@ export class AgentManager {
         params.agent.instance_name || params.lead.instancia,
         "Instancia de envio nao definida"
       );
-      const providerName = await this.whatsAppProviders.resolveInstanceProvider(instanceName);
+      const providerName = await this.whatsAppProviders.resolveInstanceProvider(
+        params.agent.aces_id,
+        instanceName
+      );
       const provider = this.whatsAppProviders.getProvider(providerName);
       if (!provider.sendMedia) {
         throw new WhatsAppProviderError(`Provider ${providerName} sem suporte a midia`, {
@@ -11472,6 +11616,84 @@ export class AgentManager {
     }
   }
 
+  private async executeStoreLocator(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    decision: StoreLocatorDecision;
+    sourceMessageId: string | null;
+  }) {
+    const ignored = (message = "Nenhuma operacao de filial solicitada.") => ({
+      status: "ignored",
+      message,
+      data: {},
+    });
+    if (params.decision.action === "none") return ignored();
+    if (!this.storeLocatorEnabled) return ignored("A Tool Busca de filiais esta desativada no ambiente.");
+
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_tools")
+      .select("config")
+      .eq("aces_id", params.agent.aces_id)
+      .eq("agent_id", params.agent.id)
+      .eq("tool_key", "store_locator")
+      .eq("is_enabled", true)
+      .eq("readiness", "ready")
+      .maybeSingle();
+    if (bindingError) {
+      return { status: "failed", message: "Nao foi possivel validar a Tool Busca de filiais.", data: {} };
+    }
+    if (!binding) return ignored("A Tool Busca de filiais nao esta ativa neste agente.");
+
+    try {
+      if (params.decision.action === "search") {
+        const config = asRecord(binding.config);
+        const result = await this.storeLocator.recommend({
+          acesId: params.agent.aces_id,
+          leadId: params.lead.id,
+          agentId: params.agent.id,
+          locationText: params.decision.locationText ?? "",
+          sourceMessageId: params.sourceMessageId,
+          candidateLimit: parsePositiveInteger(
+            typeof config.candidateLimit === "number" ? config.candidateLimit : undefined,
+            5,
+          ),
+        });
+        return { status: result.status, message: result.message, data: result };
+      }
+
+      if (params.decision.action === "other") {
+        const store = await this.storeLocator.recommendAlternative(params.agent.aces_id, params.lead.id);
+        if (!store) {
+          return { status: "empty", message: "Nao ha outra filial entre as alternativas calculadas.", data: {} };
+        }
+        return {
+          status: "succeeded",
+          message: `Outra opcao e a ${store.displayName}, na ${store.addressLine}${store.addressNumber ? `, ${store.addressNumber}` : ""}, ${store.neighborhood}.`,
+          data: { recommendation: store, preferenceType: "secondary" },
+        };
+      }
+
+      if (params.decision.confirmation !== "yes") {
+        return { status: "needs_confirmation", message: "A filial apresentada ainda nao foi confirmada.", data: {} };
+      }
+      const confirmed = await this.storeLocator.confirmLatestStore({
+        acesId: params.agent.aces_id,
+        leadId: params.lead.id,
+        requestedPreferenceType: params.decision.preferenceType,
+        sourceMessageId: params.sourceMessageId,
+      });
+      return {
+        status: "confirmed",
+        message: `${confirmed.store.displayName} foi salva como filial ${params.decision.preferenceType === "secondary" ? "secundaria" : "favorita"}.`,
+        data: confirmed,
+      };
+    } catch (error) {
+      console.error("[store-locator] Falha na execucao:", error);
+      const message = error instanceof Error ? error.message : "Falha na Busca de filiais";
+      return { status: "failed", message, data: {} };
+    }
+  }
+
   private async classifyConversation(
     agent: AgentRow,
     lead: LeadRow,
@@ -11517,7 +11739,7 @@ export class AgentManager {
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, store_locator, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
       "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
@@ -11537,7 +11759,7 @@ export class AgentManager {
       "Nao confunda descricao tecnica de uma imagem com resposta de qualificacao. Use null quando nao houver resposta explicita.",
       "agenda_request descreve somente a intencao operacional de empresas, profissionais, precos ou agenda.",
       "agenda_request.intent deve ser: none, company_info, professionals, price, availability, book, reschedule ou cancel.",
-      "Perguntas sobre endereco, localizacao, CEP, telefone ou dados da unidade devem usar company_info para que o backend recupere os dados oficiais.",
+      "Perguntas sobre telefone ou dados de uma empresa ja identificada usam company_info. Pedidos de filial mais proxima por bairro, CEP, endereco ou ponto de referencia usam store_locator.",
       "agenda_request pode conter companyQuery, professionalQuery, serviceQuery, dateFrom, dateTo, period, optionReference e confirmation.",
       "Datas devem usar YYYY-MM-DD. period deve ser morning, afternoon ou evening. confirmation deve ser unknown, yes ou no.",
       "Extraia somente dados informados ou inequivocamente referenciados. Nao invente IDs, datas, horarios, profissionais ou precos.",
@@ -11546,6 +11768,12 @@ export class AgentManager {
       "Falha de busca, empresa ambigua, agenda vazia ou erro temporario da Agenda nunca justificam handoff humano por si so; o subworkflow possui recuperacao automatica.",
       "Quando uma unidade ja foi escolhida, preserve essa empresa e cidade. Nao sugira outra unidade sem pedido ou autorizacao explicita do cliente.",
       "Para assuntos sem relacao com empresa ou agenda, use agenda_request.intent=none.",
+      "store_locator deve conter action, locationText, confirmation e preferenceType.",
+      "Use store_locator.action=search quando o lead informar bairro, CEP, endereco ou ponto de referencia para descobrir a filial mais proxima; copie esse trecho em locationText.",
+      "Use store_locator.action=other quando o lead pedir outra filial depois de uma recomendacao. Use action=confirm somente quando ele confirmar a filial apresentada; confirmation deve ser yes ou no.",
+      "A primeira filial confirmada e favorite. Uma segunda filial pedida e confirmada usa secondary. Nunca substitua a favorita por uma secundaria sem pedido explicito de troca.",
+      "Se nao houver pedido de busca, alternativa ou confirmacao de filial, use store_locator.action=none, locationText=null, confirmation=unknown e preferenceType=favorite.",
+      "Nunca calcule distancia, rota ou escolha de filial por conta propria; o backend executa essa decisao de forma deterministica.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
       "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
@@ -11715,6 +11943,7 @@ export class AgentManager {
       handoffTriggered: boolean;
       visagism: JsonRecord;
       agenda: AgendaExecutionResult;
+      storeLocator: JsonRecord;
     }
   ): Promise<CentralAiExecutionResult<ReplyModelResponse>> {
     const mediaAssets = await this.listAvailableMediaAssets(agent);
@@ -11768,6 +11997,9 @@ export class AgentManager {
       "Se houver handoff humano acionado, prefira nao responder ao lead, a menos que a propria conversa exija uma confirmacao curta.",
       "Se o visagismo estiver waiting_input, pergunte somente o campo faltante indicado. Se estiver succeeded, nao envie texto adicional porque a imagem ja foi enviada.",
       "Quando houver resultado da Agenda, use apenas os dados estruturados retornados. Nunca invente empresa, profissional, preco ou disponibilidade.",
+      "Quando houver resultado de Busca de filiais, use somente store_locator.data. Copie nome, endereco, numero, telefone e horarios exatamente; nunca calcule distancia nem invente dados.",
+      "Nao informe que o trajeto foi calculado de carro. Ao apresentar uma filial, pergunte de modo natural se o lead confirma essa unidade.",
+      "Se store_locator.status=confirmed, apenas confirme que a preferencia foi salva. Se status=reused_favorite, reutilize a favorita sem sugerir nova consulta.",
       "agenda.data.company contem os dados oficiais da unidade. Quando o processo do cliente ou a pergunta atual exigir endereco, copie address, city, state e postalCode exatamente desses dados.",
       "Nunca afirme que o endereco nao foi disponibilizado quando agenda.data.company.address estiver preenchido. A mera presenca do endereco nao obriga envia-lo fora do processo configurado.",
       "Resultado vazio, ambiguo ou falha temporaria da Agenda nao autorizam encaminhamento humano. Confirme a melhor hipotese com o cliente ou apresente as alternativas retornadas.",
@@ -11802,6 +12034,7 @@ export class AgentManager {
         handoff_triggered: executionContext.handoffTriggered,
         visagism: executionContext.visagism,
         agenda: executionContext.agenda,
+        store_locator: executionContext.storeLocator,
       })}`,
       "",
       `Materiais disponiveis: ${JSON.stringify(mediaAssets)}`,
@@ -11833,13 +12066,26 @@ export class AgentManager {
       },
     });
 
+    const parsedReply = enforceAgendaCompanyAddress(
+      generatedReply.parsed,
+      executionContext.agenda.data,
+      lastLeadMsg
+    );
+    const locatorMessage = asString(executionContext.storeLocator.message);
+    const locatorStatus = asString(executionContext.storeLocator.status);
+    if (
+      locatorMessage
+      && locatorStatus
+      && locatorStatus !== "ignored"
+      && locatorStatus !== "failed"
+      && parsedReply.reply_blocks.length === 0
+    ) {
+      parsedReply.reply_blocks = [locatorMessage];
+    }
+
     return {
       ...generatedReply,
-      parsed: enforceAgendaCompanyAddress(
-        generatedReply.parsed,
-        executionContext.agenda.data,
-        lastLeadMsg
-      ),
+      parsed: parsedReply,
     };
   }
 
@@ -12294,10 +12540,11 @@ export class AgentManager {
     extraction: PrescriptionExtraction,
     rule: LensPriceRule | null,
     status: "parsed" | "needs_new_image" | "failed",
-    handoffRequired: boolean,
-    validationErrors: string[] = []
+    handoffRequired: boolean
   ) {
-    const axisUncertain = validationErrors.includes("od_axis_missing") || validationErrors.includes("oe_axis_missing");
+    // Campos faltantes (od/oe/eixo em branco, confianca baixa) nunca bloqueiam a leitura nem
+    // geram pedido de confirmacao: o agente usa os dados extraidos como estao. `validationErrors`
+    // segue disponivel so para a cotacao automatica de preco (matchLensPriceRule permanece estrita).
     return [
       "[ANALISE_DE_RECEITUARIO]",
       `status=${status}`,
@@ -12309,9 +12556,7 @@ export class AgentManager {
       extraction.observations ? `observacoes=${truncateText(extraction.observations, 300)}` : null,
       handoffRequired ? "handoff_humano_recomendado=true" : null,
       status !== "parsed" ? "instrucao=solicitar uma nova foto nitida e completa do receituario" : null,
-      status === "parsed" && axisUncertain
-        ? "instrucao=receita lida; o campo de eixo de um dos olhos nao foi informado. Informe todos os graus extraidos e peca apenas a confirmacao desse campo antes de fechar o pedido. Nunca diga que a receita ou a imagem esta ilegivel, pouco clara ou que nao foi possivel ler a receita."
-        : null,
+      "instrucao=receita lida; use os graus extraidos como estao, mesmo que algum campo esteja em branco. Nunca diga que a receita ou a imagem esta ilegivel, pouco clara ou que nao foi possivel ler a receita, e nao peca confirmacao de campos faltantes.",
       "[/ANALISE_DE_RECEITUARIO]",
     ].filter((line): line is string => Boolean(line)).join("\n");
   }
@@ -12332,10 +12577,19 @@ export class AgentManager {
       ].filter((line): line is string => Boolean(line)).join("\n");
     }
 
+    // kind=document/product/other: nenhum prompt de cliente documenta essa tag alem de
+    // ANALISE_DE_RECEITUARIO, entao sem uma instrucao explicita aqui o agente tende a assumir
+    // que toda imagem enviada e uma receita e pergunta isso por padrao (ex.: foto de boleto,
+    // comprovante ou produto). A instrucao abaixo evita esse fallback incorreto.
+    const nonPrescriptionInstruction =
+      analysis.kind === "product"
+        ? "instrucao=esta imagem nao e uma receita/receituario oftalmologico, parece ser um produto (ex.: armacao, oculos, lente). Nunca pergunte se e para leitura de receituario. Comente o que for relevante ou pergunte com naturalidade o que a pessoa gostaria de saber sobre o item, de acordo com o que ela pediu na mensagem."
+        : "instrucao=esta imagem nao e uma receita/receituario oftalmologico (ex.: pode ser um documento, comprovante, boleto ou foto nao relacionada). Nunca pergunte se e para leitura de receituario nem tente extrair grau dela. Responda de acordo com o que a pessoa pediu na mensagem; se o motivo do envio nao estiver claro, pergunte com naturalidade do que se trata.";
     return [
       "[ANALISE_DE_IMAGEM_OTICA]",
       `kind=${analysis.kind}`,
       analysis.evidence.length > 0 ? `evidencias=${analysis.evidence.join("; ")}` : null,
+      nonPrescriptionInstruction,
       "[/ANALISE_DE_IMAGEM_OTICA]",
     ].filter((line): line is string => Boolean(line)).join("\n");
   }
@@ -12476,7 +12730,7 @@ export class AgentManager {
         .select("id", { count: "exact", head: true }).eq("aces_id", agent.aces_id).eq("lead_id", lead.id)
         .eq("tool_key", "prescription_analyst").eq("status", "waiting_input");
       const handoffRequired = !valid && Number(priorFailures ?? 0) >= 1;
-      const agentContext = this.formatPrescriptionContext(extraction, matchedRule, status, handoffRequired, validationErrors);
+      const agentContext = this.formatPrescriptionContext(extraction, matchedRule, status, handoffRequired);
       const outputSnapshot = {
         occurrence_key: occurrenceKey,
         extraction,
@@ -12579,8 +12833,26 @@ export class AgentManager {
       try {
         const analysis = await this.processPrescriptionImage(agent, lead, entry);
         if (analysis && typeof analysis === "object") analyses.set(entry.messageId, analysis);
-      } catch {
+      } catch (error) {
         // Preserve the conversation even if the internal visual worker is temporarily unavailable.
+        // Without this fallback, message_history keeps the raw "[imagem recebida para analise
+        // optica]" placeholder with zero guidance, and the main agent (which only knows the
+        // ANALISE_DE_RECEITUARIO marker) defaults to assuming every image is a prescription.
+        console.warn("[crm-ai] Falha ao processar imagem otica, aplicando fallback de contexto:", {
+          acesId: agent.aces_id,
+          leadId: lead.id,
+          messageId: entry.messageId,
+          error: error instanceof Error ? error.message : error,
+        });
+        const fallbackContext = [
+          "[ANALISE_DE_IMAGEM_OTICA]",
+          "kind=other",
+          "instrucao=nao foi possivel processar automaticamente esta imagem agora. Ela pode nao ser uma receita/receituario oftalmologico; nunca pergunte se e para leitura de receituario nem afirme que a imagem esta ilegivel. Responda de acordo com o que a pessoa pediu na mensagem ou pergunte com naturalidade do que se trata.",
+          "[/ANALISE_DE_IMAGEM_OTICA]",
+        ].join("\n");
+        await this.serviceClient.from("message_history").update({ content: fallbackContext })
+          .eq("id", entry.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
+        await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
       }
     }
     return analyses;
@@ -12840,6 +13112,12 @@ export class AgentManager {
         storedContext: leadState?.agenda_context,
         runId,
       });
+      const storeLocatorApplication = await this.executeStoreLocator({
+        agent,
+        lead,
+        decision: result.parsed.store_locator,
+        sourceMessageId: latestInbound?.id ?? null,
+      });
       const delegatedToInternalAgent = agent.agent_type === "subagent";
       const requestedCalendarMutation = ["book", "reschedule", "cancel"].includes(
         result.parsed.agenda_request.intent,
@@ -12856,6 +13134,7 @@ export class AgentManager {
         handoffTriggered: result.parsed.should_handoff,
         visagism: asRecord(visagismApplication),
         agenda: agendaApplication,
+        storeLocator: asRecord(storeLocatorApplication),
       });
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const visagismRecord = asRecord(visagismApplication);
@@ -14450,7 +14729,10 @@ export class AgentManager {
     };
 
     let providerResult: SendResult;
-    const providerName = await this.whatsAppProviders.resolveInstanceProvider(params.instanceName);
+    const providerName = await this.whatsAppProviders.resolveInstanceProvider(
+      params.context.acesId,
+      params.instanceName
+    );
     try {
       const provider = this.whatsAppProviders.getProvider(providerName);
       if (!provider.sendMedia) {
@@ -15178,7 +15460,10 @@ export class AgentManager {
         params.agent.instance_name || params.lead.instancia,
         "Instancia de envio nao definida"
       );
-      const providerName = await this.whatsAppProviders.resolveInstanceProvider(instanceName);
+      const providerName = await this.whatsAppProviders.resolveInstanceProvider(
+        params.agent.aces_id,
+        instanceName
+      );
       const provider = this.whatsAppProviders.getProvider(providerName);
       if (!provider.sendMedia) {
         throw new WhatsAppProviderError(`Provider ${providerName} sem suporte a midia`, {

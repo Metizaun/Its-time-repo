@@ -11,6 +11,7 @@ import {
   Power,
   Trash2,
   WalletCards,
+  MapPinned,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -26,6 +27,7 @@ const TOOL_ICONS: Partial<Record<AgentTool["key"], LucideIcon>> = {
   send_media: Files,
   rb_billing: WalletCards,
   visagism: Glasses,
+  store_locator: MapPinned,
 };
 
 type AgentCapabilityFlowProps = {

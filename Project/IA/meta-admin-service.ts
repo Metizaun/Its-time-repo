@@ -22,10 +22,9 @@ type InstanceRow = {
   instancia: string;
 };
 
-type MetaInstanceRow = {
+type InstanceChannelRow = {
   instance_name: string;
-  provider: "evolution" | "meta";
-  meta_channel_id: string | null;
+  provider: "evolution" | "meta" | "gupshup" | "instagram";
 };
 
 type MetaChannelRow = {
@@ -90,13 +89,13 @@ export class MetaAdminService {
       throw instanceError;
     }
 
-    const { data: metaInstances, error: metaInstanceError } = await this.metaClient
-      .from("instance")
-      .select("instance_name, provider, meta_channel_id")
+    const { data: instanceChannels, error: instanceChannelError } = await this.crmClient
+      .from("instance_channels")
+      .select("instance_name, provider")
       .eq("aces_id", acesId);
 
-    if (metaInstanceError) {
-      throw metaInstanceError;
+    if (instanceChannelError) {
+      throw instanceChannelError;
     }
 
     const { data: channels, error: channelError } = await this.metaClient
@@ -108,8 +107,8 @@ export class MetaAdminService {
       throw channelError;
     }
 
-    const metaInstanceByName = new Map(
-      ((metaInstances ?? []) as MetaInstanceRow[]).map((instance) => [
+    const instanceChannelByName = new Map(
+      ((instanceChannels ?? []) as InstanceChannelRow[]).map((instance) => [
         instance.instance_name,
         instance,
       ])
@@ -119,13 +118,13 @@ export class MetaAdminService {
     );
 
     return ((instances ?? []) as InstanceRow[]).map((instance) => {
-      const metaInstance = metaInstanceByName.get(instance.instancia) ?? null;
+      const instanceChannel = instanceChannelByName.get(instance.instancia) ?? null;
       const channel = channelByInstance.get(instance.instancia) ?? null;
 
       return {
         instanceName: instance.instancia,
-        provider: metaInstance?.provider ?? "evolution",
-        metaChannelId: metaInstance?.meta_channel_id ?? channel?.id ?? null,
+        provider: instanceChannel?.provider ?? null,
+        metaChannelId: channel?.id ?? null,
         channel: normalizeChannel(channel),
       };
     });
@@ -133,49 +132,24 @@ export class MetaAdminService {
 
   async upsertChannel(input: UpsertMetaChannelInput) {
     const instance = await this.requireInstance(input.acesId, input.instanceName);
-    const row = {
-      aces_id: input.acesId,
-      instance_name: instance.instancia,
-      waba_id: cleanOptional(input.wabaId),
-      phone_number_id: cleanOptional(input.phoneNumberId),
-      business_id: cleanOptional(input.businessId),
-      display_phone_number: cleanOptional(input.displayPhoneNumber),
-      access_token_secret_ref: cleanOptional(input.accessTokenSecretRef),
-      app_secret_ref: cleanOptional(input.appSecretRef),
-      webhook_verify_token: cleanOptional(input.webhookVerifyToken),
-      status: input.status ?? "draft",
-      updated_at: new Date().toISOString(),
-    };
-
-    const { data, error } = await this.metaClient
-      .from("whatsapp_channels")
-      .upsert(row, { onConflict: "aces_id,instance_name" })
-      .select("*")
-      .single();
+    const { data, error } = await this.crmClient.rpc("rpc_upsert_meta_whatsapp_channel", {
+      p_aces_id: input.acesId,
+      p_instance_name: instance.instancia,
+      p_waba_id: cleanOptional(input.wabaId),
+      p_phone_number_id: cleanOptional(input.phoneNumberId),
+      p_business_id: cleanOptional(input.businessId),
+      p_display_phone_number: cleanOptional(input.displayPhoneNumber),
+      p_access_token_secret_ref: cleanOptional(input.accessTokenSecretRef),
+      p_app_secret_ref: cleanOptional(input.appSecretRef),
+      p_webhook_verify_token: cleanOptional(input.webhookVerifyToken),
+      p_status: input.status ?? "draft",
+    });
 
     if (error) {
       throw error;
     }
 
-    const channel = data as MetaChannelRow;
-    const { error: instanceError } = await this.metaClient
-      .from("instance")
-      .upsert(
-        {
-          aces_id: input.acesId,
-          instance_name: instance.instancia,
-          provider: channel.status === "active" ? "meta" : "evolution",
-          meta_channel_id: channel.id,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "aces_id,instance_name" }
-      );
-
-    if (instanceError) {
-      throw instanceError;
-    }
-
-    return normalizeChannel(channel);
+    return normalizeChannel(data as MetaChannelRow);
   }
 
   async listTemplates(acesId: number, instanceName: string) {

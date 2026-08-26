@@ -77,24 +77,33 @@ test("receita multifocal com eixo OD em branco continua lida e pronta para atend
   assert.ok(readiness.errors.includes("od_axis_missing"));
 });
 
-test("receituario sem nenhum dado de um dos olhos continua bloqueado", () => {
+test("receituario sem nenhum dado de um dos olhos ainda assim fica valido (nao bloqueia leitura)", () => {
   const extraction = buildExtraction({
     odSphere: null, odCylinder: null, odAxis: null,
     oeSphere: -1, oeCylinder: 0, oeAxis: null,
     confidence: 2,
   });
   const readiness = evaluatePrescriptionReadiness(extraction);
-  assert.equal(readiness.valid, false);
-  assert.deepEqual(readiness.blockingErrors, ["od_missing"]);
+  assert.equal(readiness.valid, true);
+  assert.deepEqual(readiness.blockingErrors, []);
+  assert.ok(readiness.errors.includes("od_missing"), "erro continua reportado, so nao bloqueia mais");
+  assert.equal(matchLensPriceRule(extraction, [baseRule]), null, "sem od nao deve cotar preco");
 });
 
-test("confianca abaixo do minimo bloqueia mesmo com dados completos", () => {
+test("confianca baixa nao bloqueia mais a leitura quando ha dados", () => {
   const extraction = buildExtraction({
     odSphere: -1, odCylinder: 0, odAxis: null,
     oeSphere: -1, oeCylinder: 0, oeAxis: null,
     confidence: 0,
   });
-  assert.equal(evaluatePrescriptionReadiness(extraction).valid, false);
+  assert.equal(evaluatePrescriptionReadiness(extraction).valid, true);
+});
+
+test("receita nao reconhecida como prescription continua bloqueada", () => {
+  const extraction = buildExtraction({ isPrescription: false, confidence: 2 });
+  const readiness = evaluatePrescriptionReadiness(extraction);
+  assert.equal(readiness.valid, false);
+  assert.deepEqual(readiness.blockingErrors, ["not_a_prescription"]);
 });
 
 test("multifocal requires a matching addition range", () => {

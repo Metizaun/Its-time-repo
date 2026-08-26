@@ -189,6 +189,26 @@ export const CRM_ANALYSIS_RESPONSE_SCHEMA: Record<string, unknown> = {
       ],
       additionalProperties: false,
     },
+    store_locator: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["none", "search", "other", "confirm"],
+        },
+        locationText: nullableStringSchema,
+        confirmation: {
+          type: "string",
+          enum: ["unknown", "yes", "no"],
+        },
+        preferenceType: {
+          type: "string",
+          enum: ["favorite", "secondary"],
+        },
+      },
+      required: ["action", "locationText", "confirmation", "preferenceType"],
+      additionalProperties: false,
+    },
     confidence: confidenceSchema,
     reason: { type: "string" },
     should_apply_stage: { type: "boolean" },
@@ -209,6 +229,7 @@ export const CRM_ANALYSIS_RESPONSE_SCHEMA: Record<string, unknown> = {
     "native_followup",
     "visagism",
     "agenda_request",
+    "store_locator",
     "confidence",
     "reason",
     "should_apply_stage",

@@ -223,6 +223,17 @@ export default function Auth() {
             </form>
           </TabsContent>
         </Tabs>
+
+        <p className="mt-6 text-center text-xs leading-relaxed text-muted-foreground">
+          Ao utilizar o acesso à plataforma, consulte nossa{" "}
+          <a className="font-medium text-primary underline underline-offset-4" href="/privacidade">
+            Política de Privacidade
+          </a>{" "}
+          e os{" "}
+          <a className="font-medium text-primary underline underline-offset-4" href="/termos">
+            Termos de Serviço
+          </a>.
+        </p>
       </Card>
     </div>
   );

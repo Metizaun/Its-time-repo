@@ -149,6 +149,47 @@ test("decisao de roteamento so cria membership quando ela ainda nao existe", () 
   );
 });
 
+test("reentrega de mensagem existente executa somente reparo e nao chega a IA", async () => {
+  const manager: any = Object.create(AgentManager.prototype);
+  const calls: string[] = [];
+  manager.instancePhoneAllowlists = {};
+  manager.resolveInstanceForEvolutionWebhook = async () => ({ instancia: "comercial_droculos", aces_id: 5 });
+  manager.findMessageByProviderMessageId = async () => ({
+    id: "51000000-0000-0000-0000-000000000099",
+    lead_id: "51000000-0000-0000-0000-000000000001",
+    direction: "outbound",
+    conversation_id: "5562999990000@s.whatsapp.net",
+  });
+  manager.updateEvolutionMessageMetadata = async () => { calls.push("metadata"); };
+  manager.persistEvolutionFirstTouchAttribution = async () => { calls.push("attribution"); };
+  manager.tryPersistWebhookMediaAttachment = async () => { calls.push("attachment"); };
+  manager.getAnyAgentByInstance = async () => { throw new Error("IA nao deve ser consultada no reparo"); };
+
+  const result = await manager.processEvolutionWebhook({
+    event: "messages.upsert",
+    instance: "comercial_droculos",
+    data: {
+      key: {
+        remoteJid: "5562999990000@s.whatsapp.net",
+        fromMe: true,
+        id: "TEMPLATE-EXISTING-1",
+      },
+      messageType: "templateMessage",
+      messageTimestamp: 1_786_903_200,
+      message: {
+        templateMessage: {
+          templateId: "campanha",
+          hydratedTemplate: { hydratedContentText: "Olá, Daniel!" },
+        },
+      },
+    },
+  });
+
+  assert.equal(result.ignored, true);
+  assert.equal(result.reason, "Mensagem Evolution ja registrada no CRM");
+  assert.deepEqual(calls, ["metadata", "attribution", "attachment"]);
+});
+
 test("falha libera a reserva; sucesso continua bloqueando repeticoes", async () => {
   const redis = new FakeRedis() as unknown as DedupeRedis;
   const first = await reserveIncomingMessageDedupe(

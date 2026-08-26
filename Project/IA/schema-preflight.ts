@@ -19,6 +19,12 @@ const META_WHATSAPP_FOUNDATION_MIGRATION =
   "supabase/migrations/20260526023423_add_meta_whatsapp_foundation.sql";
 const GUPSHUP_FOUNDATION_MIGRATION =
   "supabase/migrations/20260707201001_add_gupshup_channel_foundation.sql";
+const INSTAGRAM_CHANNEL_FOUNDATION_MIGRATION =
+  "supabase/migrations/20260821192746_instagram_channel_identity_foundation.sql";
+const INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION =
+  "supabase/migrations/20260821192752_instagram_operational_schema.sql";
+const STORE_LOCATOR_MIGRATION =
+  "supabase/migrations/20260824205648_create_store_locator_foundation.sql";
 const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
@@ -216,6 +222,44 @@ async function validateSelectedColumns(
 ) {
   const { error } = await serviceClient.from(table).select(columns.join(",")).limit(1);
   return error ? buildSchemaFailure(label, migration, error) : null;
+}
+
+async function validateMessagingChannelRpcs(
+  serviceClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    serviceClient.rpc("rpc_find_or_create_channel_lead", {
+      p_channel_id: NIL_UUID,
+      p_provider_user_id: "schema-preflight",
+    }),
+    serviceClient.rpc("rpc_upsert_meta_whatsapp_channel", {
+      p_aces_id: -1,
+      p_instance_name: "schema-preflight",
+    }),
+    serviceClient.rpc("rpc_upsert_gupshup_channel", {
+      p_aces_id: -1,
+      p_instance_name: "schema-preflight",
+      p_app_id: null,
+      p_app_name: "schema-preflight",
+      p_api_key: "schema-preflight",
+      p_phone_number: "5500000000000",
+    }),
+  ];
+
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => {
+    if (!error) return false;
+    const normalized = normalizePostgrestError(error);
+    return normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message);
+  });
+
+  return missing?.error
+    ? buildSchemaFailure(
+        "RPCs da fundacao de canais de mensageria",
+        INSTAGRAM_CHANNEL_FOUNDATION_MIGRATION,
+        missing.error
+      )
+    : null;
 }
 
 async function validatePipelineAttendanceRpcs(
@@ -624,12 +668,12 @@ async function validateOpticsTemplate(agentsClient: SupabaseClient<any, any, any
   if (toolsError) {
     return buildSchemaFailure("agents.agent_template_tools optics-consultant", AGENTS_TOOLS_BI_MIGRATION, toolsError);
   }
-  return count === 5
+  return count === 6
     ? null
     : buildManualSchemaFailure(
         "agents.agent_template_tools optics-consultant",
         AGENTS_TOOLS_BI_MIGRATION,
-        `Esperadas 5 Tools; encontradas ${count ?? 0}`
+        `Esperadas 6 Tools; encontradas ${count ?? 0}`
       );
 }
 
@@ -775,16 +819,104 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const instagramClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "instagram" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const rbClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
     db: { schema: "rb" },
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const locatorClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "locator" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
+    validateSelectedColumns(
+      locatorClient,
+      "stores",
+      ["id", "aces_id", "display_name", "address_hash", "location", "geocode_status", "ai_visible", "weekly_hours"],
+      "locator.stores",
+      STORE_LOCATOR_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "route_cache",
+      ["id", "aces_id", "origin_key", "store_id", "travel_mode", "distance_meters", "duration_seconds", "expires_at"],
+      "locator.route_cache",
+      STORE_LOCATOR_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "lead_store_preferences",
+      ["id", "aces_id", "lead_id", "store_id", "preference_type", "superseded_at"],
+      "locator.lead_store_preferences",
+      STORE_LOCATOR_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "lead_location_events",
+      ["id", "aces_id", "lead_id", "normalized_location_text", "location", "candidate_store_ids", "expires_at"],
+      "locator.lead_location_events",
+      STORE_LOCATOR_MIGRATION,
+    ),
     validateChatAttachmentsStorage(serviceClient),
     validateAutomationMediaStorage(serviceClient),
     validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
     validateIntelligentCompanyDirectoryRpc(serviceClient),
+    validateMessagingChannelRpcs(serviceClient),
+    validateSelectedColumns(
+      serviceClient,
+      "instance_channels",
+      ["id", "aces_id", "instance_name", "channel_type", "provider", "capability", "status"],
+      "crm.instance_channels",
+      INSTAGRAM_CHANNEL_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "lead_channel_identities",
+      ["id", "aces_id", "lead_id", "channel_id", "provider_user_id", "display_username"],
+      "crm.lead_channel_identities",
+      INSTAGRAM_CHANNEL_FOUNDATION_MIGRATION
+    ),
+    validateSelectedColumns(
+      instagramClient,
+      "channels",
+      ["id", "channel_id", "aces_id", "ig_user_id", "health_status", "token_expires_at"],
+      "instagram.channels",
+      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+    ),
+    validateSelectedColumns(
+      instagramClient,
+      "channel_credentials",
+      ["channel_id", "access_token_ciphertext", "iv", "auth_tag", "key_version"],
+      "instagram.channel_credentials",
+      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+    ),
+    validateSelectedColumns(
+      instagramClient,
+      "oauth_states",
+      ["id", "state_hash", "nonce_hash", "aces_id", "instance_name", "expires_at", "status"],
+      "instagram.oauth_states",
+      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+    ),
+    validateSelectedColumns(
+      instagramClient,
+      "webhook_events",
+      ["id", "event_key", "channel_id", "status", "attempt_count", "lease_expires_at"],
+      "instagram.webhook_events",
+      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+    ),
+    validateSelectedColumns(
+      instagramClient,
+      "provider_status_events",
+      ["id", "channel_id", "event_key", "provider_message_id", "status"],
+      "instagram.provider_status_events",
+      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+    ),
     validateCalendarToolDefinition(agentsClient),
     validateSelectedColumns(
       agentsClient,

@@ -30,17 +30,15 @@ type GupshupChannelRow = {
 };
 
 type CrmInstanceRow = { instancia: string };
-type MetaInstanceRow = { instance_name: string; provider: string };
+type InstanceChannelRow = { instance_name: string; provider: string };
 
 export class GupshupAdminService {
   private readonly crmClient;
-  private readonly metaClient;
   private readonly gupshupClient;
 
   constructor(config: GupshupAdminServiceConfig) {
     const opts = { auth: { persistSession: false, autoRefreshToken: false } };
     this.crmClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, { db: { schema: "crm" }, ...opts });
-    this.metaClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, { db: { schema: "meta" }, ...opts });
     this.gupshupClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, { db: { schema: "gupshup" }, ...opts });
   }
 
@@ -49,20 +47,20 @@ export class GupshupAdminService {
       .from("instance").select("instancia").eq("aces_id", acesId).order("instancia");
     if (ie) throw ie;
 
-    const { data: metaInstances, error: me } = await this.metaClient
-      .from("instance").select("instance_name, provider").eq("aces_id", acesId);
-    if (me) throw me;
+    const { data: instanceChannels, error: bindingError } = await this.crmClient
+      .from("instance_channels").select("instance_name, provider").eq("aces_id", acesId);
+    if (bindingError) throw bindingError;
 
     const { data: channels, error: ce } = await this.gupshupClient
       .from("channel").select("*").eq("aces_id", acesId);
     if (ce) throw ce;
 
-    const metaByName = new Map(((metaInstances ?? []) as MetaInstanceRow[]).map((i) => [i.instance_name, i]));
+    const bindingByName = new Map(((instanceChannels ?? []) as InstanceChannelRow[]).map((i) => [i.instance_name, i]));
     const channelByInstance = new Map(((channels ?? []) as GupshupChannelRow[]).map((c) => [c.instance_name, c]));
 
     return ((instances ?? []) as CrmInstanceRow[]).map((i) => ({
       instanceName: i.instancia,
-      provider: metaByName.get(i.instancia)?.provider ?? "evolution",
+      provider: bindingByName.get(i.instancia)?.provider ?? null,
       gupshupChannel: normalizeChannel(channelByInstance.get(i.instancia) ?? null),
     }));
   }
@@ -80,31 +78,18 @@ export class GupshupAdminService {
       throw new Error("Numero do WhatsApp Gupshup invalido");
     }
 
-    const row = {
-      aces_id: input.acesId,
-      instance_name: instance.instancia,
-      app_id: input.appId?.trim() || null,
-      app_name: input.appName.trim(),
-      api_key: apiKey,
-      phone_number: phoneNumber,
-      status: input.status ?? "draft",
-      updated_at: new Date().toISOString(),
-    };
-
-    const { data, error } = await this.gupshupClient
-      .from("channel")
-      .upsert(row, { onConflict: "aces_id,instance_name" })
-      .select("*").single();
+    const { data, error } = await this.crmClient.rpc("rpc_upsert_gupshup_channel", {
+      p_aces_id: input.acesId,
+      p_instance_name: instance.instancia,
+      p_app_id: input.appId?.trim() || existing?.app_id || null,
+      p_app_name: input.appName.trim(),
+      p_api_key: apiKey,
+      p_phone_number: phoneNumber,
+      p_status: input.status ?? "draft",
+    });
     if (error) throw error;
 
     const channel = data as GupshupChannelRow;
-    const newProvider = channel.status === "active" ? "gupshup" : "evolution";
-
-    const { error: providerError } = await this.metaClient.from("instance").upsert(
-      { aces_id: input.acesId, instance_name: instance.instancia, provider: newProvider, updated_at: new Date().toISOString() },
-      { onConflict: "aces_id,instance_name" }
-    );
-    if (providerError) throw providerError;
 
     if (channel.status === "active") {
       const { error: instanceError } = await this.crmClient

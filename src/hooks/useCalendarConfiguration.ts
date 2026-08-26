@@ -388,6 +388,49 @@ export function useCalendarConfiguration(acesId: number | null, enabled = true) 
     [acesId, locations, runMutation],
   );
 
+  const deleteProfessional = useCallback(
+    (professionalId: string) =>
+      runMutation(async () => {
+        if (acesId === null) throw new Error("Conta não identificada.");
+        const calendar = supabase.schema("calendar");
+        const { data: professionalLocations, error: locationsError } = await calendar
+          .from("professional_locations")
+          .select("id")
+          .eq("professional_id", professionalId)
+          .eq("aces_id", acesId);
+        if (locationsError) throw locationsError;
+
+        // Events keep their snapshots, but must lose the structured booking
+        // references before the professional/location rows are removed.
+        const locationIds = (professionalLocations ?? []).map((location) => location.id);
+        if (locationIds.length > 0) {
+          const { error: locationEventsError } = await calendar
+            .from("events")
+            .update({ professional_id: null, professional_location_id: null, service_id: null })
+            .in("professional_location_id", locationIds)
+            .eq("aces_id", acesId);
+          if (locationEventsError) throw locationEventsError;
+        }
+        const { error: professionalEventsError } = await calendar
+          .from("events")
+          .update({ professional_id: null, professional_location_id: null, service_id: null })
+          .eq("professional_id", professionalId)
+          .eq("aces_id", acesId);
+        if (professionalEventsError) throw professionalEventsError;
+
+        const { data, error } = await calendar
+          .from("professionals")
+          .delete()
+          .eq("id", professionalId)
+          .eq("aces_id", acesId)
+          .select("id")
+          .single();
+        if (error) throw error;
+        if (!data) throw new Error("Profissional não encontrado.");
+      }, "Profissional apagado"),
+    [acesId, runMutation],
+  );
+
   const createService = useCallback(
     (input: ServiceInput) =>
       runMutation(async () => {
@@ -425,6 +468,35 @@ export function useCalendarConfiguration(acesId: number | null, enabled = true) 
           .eq("aces_id", acesId);
         if (error) throw error;
       }, "Serviço atualizado"),
+    [acesId, runMutation],
+  );
+
+  const deleteService = useCallback(
+    (serviceId: string) =>
+      runMutation(async () => {
+        if (acesId === null) throw new Error("Conta não identificada.");
+        const calendar = supabase.schema("calendar");
+
+        // The event stores duration/price snapshots, so unlinking the
+        // structured service reference preserves the historical appointment
+        // while allowing the catalog item and its bindings to be removed.
+        const { error: eventsError } = await calendar
+          .from("events")
+          .update({ professional_id: null, professional_location_id: null, service_id: null })
+          .eq("service_id", serviceId)
+          .eq("aces_id", acesId);
+        if (eventsError) throw eventsError;
+
+        const { data, error } = await calendar
+          .from("services")
+          .delete()
+          .eq("id", serviceId)
+          .eq("aces_id", acesId)
+          .select("id")
+          .single();
+        if (error) throw error;
+        if (!data) throw new Error("Serviço não encontrado.");
+      }, "Serviço apagado"),
     [acesId, runMutation],
   );
 
@@ -556,8 +628,10 @@ export function useCalendarConfiguration(acesId: number | null, enabled = true) 
     createProfessional,
     setProfessionalActive,
     updateProfessional,
+    deleteProfessional,
     createService,
     updateService,
+    deleteService,
     toggleProfessionalService,
     saveProfessionalServiceOverrides,
     createAvailabilityRules,

@@ -7,7 +7,7 @@ export interface Lead {
   nome: string;
   cidade: string;
   email: string | null;
-  telefone: string;
+  telefone: string | null;
   origem: string;
   conexao: "Baixa" | "Média" | "Alta";
   valor: number;

@@ -418,6 +418,11 @@ const manager = new AgentManager({
   prescriptionWorkerEnabled:
     process.env.PRESCRIPTION_WORKER_ENABLED !== "false",
   prescriptionWorkerModel: process.env.PRESCRIPTION_WORKER_MODEL,
+  googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
+  storeLocatorRouteCacheMinutes: Number(
+    process.env.STORE_LOCATOR_ROUTE_CACHE_MINUTES ?? 30,
+  ),
+  storeLocatorEnabled: process.env.STORE_LOCATOR_ENABLED === "true",
   toolMediaAllowedHosts: (process.env.TOOL_MEDIA_ALLOWED_HOSTS ?? "")
     .split(",")
     .map((host) => host.trim())
@@ -3074,6 +3079,72 @@ app.get(
       agentId,
     );
     res.json({ success: true, catalog });
+  }),
+);
+
+app.get(
+  "/api/agents/:id/tools/store_locator/stores",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const stores = await manager.listStoreLocatorStores(
+      req.authContext!,
+      agentId,
+      {
+        search: asString(req.query.search) ?? undefined,
+        status: asString(req.query.status) ?? undefined,
+      },
+    );
+    res.json({ success: true, stores });
+  }),
+);
+
+app.post(
+  "/api/agents/:id/tools/store_locator/stores",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const store = await manager.saveStoreLocatorStore(req.authContext!, agentId, {
+      id: asString(req.body.id) ?? undefined,
+      displayName: String(req.body.displayName ?? ""),
+      addressLine: String(req.body.addressLine ?? ""),
+      addressNumber: asString(req.body.addressNumber),
+      addressComplement: asString(req.body.addressComplement),
+      neighborhood: String(req.body.neighborhood ?? ""),
+      city: String(req.body.city ?? ""),
+      state: String(req.body.state ?? ""),
+      postalCode: String(req.body.postalCode ?? ""),
+      phone: asString(req.body.phone),
+      weeklyHours:
+        req.body.weeklyHours && typeof req.body.weeklyHours === "object" && !Array.isArray(req.body.weeklyHours)
+          ? req.body.weeklyHours
+          : {},
+      hoursExceptions: Array.isArray(req.body.hoursExceptions) ? req.body.hoursExceptions : [],
+      hoursNotes: asString(req.body.hoursNotes),
+      isActive: req.body.isActive !== false,
+    });
+    res.status(req.body.id ? 200 : 201).json({ success: true, store });
+  }),
+);
+
+app.delete(
+  "/api/agents/:id/tools/store_locator/stores/:storeId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const storeId = getSingleParam(req.params.storeId);
+    const store = await manager.deactivateStoreLocatorStore(req.authContext!, agentId, storeId);
+    res.json({ success: true, store });
+  }),
+);
+
+app.get(
+  "/api/leads/:leadId/store-preferences",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const leadId = getSingleParam(req.params.leadId);
+    const preferences = await manager.getLeadStorePreferences(req.authContext!, leadId);
+    res.json({ success: true, preferences });
   }),
 );
 

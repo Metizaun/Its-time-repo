@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { EvolutionWhatsAppProvider } from "./evolution-whatsapp-provider.js";
 import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
+import { MessagingChannelResolver } from "./messaging-channel-resolver.js";
 import {
   type MetaChannelConfig,
   MetaWhatsAppProvider,
@@ -30,6 +31,7 @@ export class WhatsAppProviderRegistry {
   private readonly crmClient: SupabaseClient<any, any, any>;
   private readonly metaClient: SupabaseClient<any, any, any>;
   private readonly gupshupClient: SupabaseClient<any, any, any>;
+  private readonly messagingChannels: MessagingChannelResolver;
   private readonly evolutionProvider: WhatsAppProvider;
   private readonly gupshupProvider: WhatsAppProvider;
   private readonly metaProvider: MetaWhatsAppProvider;
@@ -49,6 +51,7 @@ export class WhatsAppProviderRegistry {
       db: { schema: "gupshup" },
       auth: { persistSession: false, autoRefreshToken: false },
     });
+    this.messagingChannels = new MessagingChannelResolver(this.crmClient);
 
     this.defaultEvolutionApiUrl = config.evolutionApiUrl.replace(/\/$/, "");
     this.defaultEvolutionApiKey = config.evolutionApiKey;
@@ -79,20 +82,8 @@ export class WhatsAppProviderRegistry {
     return this.evolutionProvider;
   }
 
-  async resolveInstanceProvider(instanceName: string): Promise<WhatsAppProviderName> {
-    const { data, error } = await this.metaClient
-      .from("instance")
-      .select("provider")
-      .eq("instance_name", instanceName)
-      .maybeSingle();
-
-    if (error) {
-      throw error;
-    }
-
-    if (data?.provider === "meta") return "meta";
-    if (data?.provider === "gupshup") return "gupshup";
-    return "evolution";
+  async resolveInstanceProvider(acesId: number, instanceName: string): Promise<WhatsAppProviderName> {
+    return this.messagingChannels.resolveWhatsAppProvider(acesId, instanceName);
   }
 
   private async resolveMetaChannel(instanceName: string): Promise<MetaChannelConfig | null> {

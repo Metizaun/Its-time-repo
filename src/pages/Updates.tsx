@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ArrowUpRight, BookOpen, ExternalLink, Sparkles } from "lucide-react";
+import { ArrowLeft, BookOpen, FileText, ShieldCheck } from "lucide-react";
 import {
   CURRENT_RELEASE_VERSION,
   isCurrentReleasePublished,
@@ -346,15 +346,10 @@ export default function Updates() {
               <span>Guia do Usuário</span>
             </Link>
 
-            <a
-              href="https://itstime.com.br"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-[#d9d6d1] rounded-full bg-white/60 hover:bg-white text-xs font-mono transition-all duration-200"
-            >
-              <span>Website</span>
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </a>
+            <div className="flex items-center gap-2 text-xs font-mono text-neutral-500">
+              <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-primary-500)]" />
+              <span>Documentos públicos</span>
+            </div>
           </div>
         </div>
       </header>
@@ -381,6 +376,37 @@ export default function Updates() {
               introdução de novos agentes de IA, automações cirúrgicas e
               melhorias operacionais.
             </p>
+          </div>
+        </section>
+
+        <section className="mb-16 rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-1)] p-6 shadow-sm sm:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="max-w-2xl">
+              <div className="mb-3 flex items-center gap-2 font-mono text-xs font-semibold uppercase tracking-wider text-[var(--color-primary-600)]">
+                <span aria-hidden="true" className="h-0.5 w-5 bg-[var(--color-primary-500)]" />
+                Informação importante
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight text-neutral-900">Documentos legais da Its Time</h2>
+              <p className="mt-3 text-sm leading-relaxed text-neutral-600">
+                Publicamos a Política de Privacidade e os Termos de Serviço da plataforma. Consulte os documentos para entender como tratamos dados e como funciona o uso do Its Time CRM.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Link
+                to="/privacidade"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--color-primary-500)] bg-[var(--color-primary-50)] px-4 py-2.5 text-xs font-bold text-[var(--color-primary-600)] shadow-sm transition-colors hover:bg-[var(--color-primary-100)] focus-visible:shadow-focus"
+              >
+                <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                Política de Privacidade
+              </Link>
+              <Link
+                to="/termos"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-2.5 text-xs font-bold text-[var(--color-gray-700)] shadow-sm transition-colors hover:bg-[var(--color-surface-1)] focus-visible:shadow-focus"
+              >
+                <FileText className="h-4 w-4" aria-hidden="true" />
+                Termos de Serviço
+              </Link>
+            </div>
           </div>
         </section>
 
@@ -552,14 +578,12 @@ export default function Updates() {
             <Link to="/" className="hover:text-neutral-900 transition-colors">
               Acessar App
             </Link>
-            <a
-              href="https://itstime.com.br"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-neutral-900 transition-colors"
-            >
-              Website
-            </a>
+            <Link to="/privacidade" className="hover:text-neutral-900 transition-colors">
+              Privacidade
+            </Link>
+            <Link to="/termos" className="hover:text-neutral-900 transition-colors">
+              Termos
+            </Link>
           </div>
         </footer>
       </main>

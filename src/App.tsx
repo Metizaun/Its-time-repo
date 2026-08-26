@@ -26,6 +26,7 @@ const Agentes = lazy(() => import("./pages/Agentes"));
 const Auth = lazy(() => import("./pages/Auth"));
 const Updates = lazy(() => import("./pages/Updates"));
 const AgendaGuide = lazy(() => import("./pages/AgendaGuide"));
+const LegalDocument = lazy(() => import("./pages/LegalDocument"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
@@ -53,6 +54,8 @@ const App = () => (
                   <Route path="/updates" element={<Updates />} />
                   <Route path="/guia-agenda" element={<AgendaGuide />} />
                   <Route path="/guia/empresa-agenda" element={<AgendaGuide />} />
+                  <Route path="/privacidade" element={<LegalDocument document="privacy" />} />
+                  <Route path="/termos" element={<LegalDocument document="terms" />} />
                   <Route path="/" element={<ProtectedRoute><MainLayout><Dashboard /></MainLayout></ProtectedRoute>} />
                   <Route path="/pipeline" element={<ProtectedRoute><MainLayout><Pipeline /></MainLayout></ProtectedRoute>} />
                   <Route path="/chat" element={<ProtectedRoute><MainLayout><Chat /></MainLayout></ProtectedRoute>} />

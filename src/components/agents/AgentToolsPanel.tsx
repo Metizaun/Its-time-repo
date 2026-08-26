@@ -10,6 +10,7 @@ import { RbBillingConfigPanel } from "@/components/agents/RbBillingConfigPanel";
 import { AudioToolConfigPanel } from "@/components/agents/AudioToolConfigPanel";
 import { ForwardingConfigPanel } from "@/components/agents/ForwardingConfigPanel";
 import { CalendarToolConfigPanel } from "@/components/agents/CalendarToolConfigPanel";
+import { StoreLocatorConfigPanel } from "@/components/agents/StoreLocatorConfigPanel";
 import {
   listAgentTools,
   updateAgentTool,
@@ -24,7 +25,7 @@ type AgentToolsPanelProps = {
   onConfigure?: (toolKey: ConfigurableToolKey) => void;
 };
 
-type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "prescription_analyst" | "visagism" | "rb_billing";
+type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "prescription_analyst" | "visagism" | "rb_billing" | "store_locator";
 
 function readinessCopy(tool: AgentTool) {
   if (tool.enabled) return "Ativa";
@@ -34,7 +35,7 @@ function readinessCopy(tool: AgentTool) {
 }
 
 function isConfigurableToolKey(value: string): value is ConfigurableToolKey {
-  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "prescription_analyst" || value === "visagism" || value === "rb_billing";
+  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "prescription_analyst" || value === "visagism" || value === "rb_billing" || value === "store_locator";
 }
 
 export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose, onCreateSubagent, onConfigure }: AgentToolsPanelProps) {
@@ -219,6 +220,13 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
             <OpticsToolConfigPanel
               agentId={agentId}
               toolKey={tool.key}
+              onClose={closeConfiguration}
+              onChanged={() => setReloadKey((value) => value + 1)}
+            />
+          ) : null}
+          {tool.key === "store_locator" && toolFilterKey === tool.key ? (
+            <StoreLocatorConfigPanel
+              agentId={agentId}
               onClose={closeConfiguration}
               onChanged={() => setReloadKey((value) => value + 1)}
             />

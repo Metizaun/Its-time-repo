@@ -118,6 +118,60 @@ export type LensPriceRule = {
   isActive: boolean;
 };
 
+export type StoreGeocodeStatus = "pending" | "ready" | "failed" | "needs_review";
+
+export type StoreHours = Record<string, Array<{ opensAt: string; closesAt: string }>>;
+
+export type StoreLocatorStore = {
+  id: string;
+  displayName: string;
+  addressLine: string;
+  addressNumber: string | null;
+  addressComplement: string | null;
+  neighborhood: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  phone: string | null;
+  weeklyHours: StoreHours;
+  hoursExceptions: Array<Record<string, unknown>>;
+  hoursNotes: string | null;
+  formattedAddress: string | null;
+  geocodeStatus: StoreGeocodeStatus;
+  geocodeAccuracy: string | null;
+  geocodeError: string | null;
+  geocodedAt: string | null;
+  isActive: boolean;
+  aiVisible: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StoreLocatorStoreInput = {
+  id?: string;
+  displayName: string;
+  addressLine: string;
+  addressNumber?: string | null;
+  addressComplement?: string | null;
+  neighborhood: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  phone?: string | null;
+  weeklyHours?: StoreHours;
+  hoursExceptions?: Array<Record<string, unknown>>;
+  hoursNotes?: string | null;
+  isActive?: boolean;
+};
+
+export type LeadStorePreference = {
+  id: string;
+  preferenceType: "favorite" | "secondary";
+  confirmedBy: "lead" | "operator";
+  confirmedAt: string;
+  store: StoreLocatorStore | null;
+};
+
 export type ForwardingDestination = {
   id: string;
   destination_key: string;
@@ -232,6 +286,42 @@ export async function saveVisagismCatalogItem(
     input
   );
   return response.item;
+}
+
+export async function listStoreLocatorStores(
+  agentId: string,
+  input: { search?: string; status?: "all" | "active" | "inactive" | "pending" } = {},
+) {
+  const params = new URLSearchParams();
+  if (input.search?.trim()) params.set("search", input.search.trim());
+  if (input.status && input.status !== "all") params.set("status", input.status);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await getCrmBackend<{ stores?: StoreLocatorStore[] }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores${suffix}`,
+  );
+  return response.stores ?? [];
+}
+
+export async function saveStoreLocatorStore(agentId: string, input: StoreLocatorStoreInput) {
+  const response = await postCrmBackend<{ store: StoreLocatorStore }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores`,
+    input,
+  );
+  return response.store;
+}
+
+export async function deactivateStoreLocatorStore(agentId: string, storeId: string) {
+  const response = await deleteCrmBackend<{ store: StoreLocatorStore }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores/${encodeURIComponent(storeId)}`,
+  );
+  return response.store;
+}
+
+export async function getLeadStorePreferences(leadId: string) {
+  const response = await getCrmBackend<{ preferences?: LeadStorePreference[] }>(
+    `/api/leads/${encodeURIComponent(leadId)}/store-preferences`,
+  );
+  return response.preferences ?? [];
 }
 
 export async function analyzeVisagismCatalogItem(

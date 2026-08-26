@@ -18,6 +18,7 @@ const TOOL_LABELS: Record<AgentTool["key"], string> = {
   rb_billing: "Cobrança RB",
   prescription_analyst: "Analista de receituário",
   visagism: "Visagismo",
+  store_locator: "Busca de filiais",
 };
 
 export function AgentToolConfigurationDialog({
@@ -26,7 +27,7 @@ export function AgentToolConfigurationDialog({
   toolKey,
   onOpenChange,
 }: AgentToolConfigurationDialogProps) {
-  const isWideFlow = toolKey === "visagism" || toolKey === "prescription_analyst" || toolKey === "forwarding";
+  const isWideFlow = toolKey === "visagism" || toolKey === "prescription_analyst" || toolKey === "forwarding" || toolKey === "store_locator";
   const hasDedicatedEditor = toolKey !== null && toolKey !== "send_media";
 
   return (

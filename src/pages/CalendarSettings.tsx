@@ -18,6 +18,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -63,6 +73,8 @@ const WEEKDAYS = [
 
 const WEEKDAY_SHORT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
+type CalendarSettingsTab = "professionals" | "services" | "availability" | "exceptions" | "general";
+
 function formatCurrency(priceCents: number | null) {
   if (priceCents === null) return "Preço não informado";
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
@@ -86,6 +98,11 @@ export default function CalendarSettings() {
   const [editingProfessionalId, setEditingProfessionalId] = useState<string | null>(null);
   const [serviceDialogOpen, setServiceDialogOpen] = useState(false);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    type: "professional" | "service";
+    id: string;
+    name: string;
+  } | null>(null);
   const [serviceOverrideDialogOpen, setServiceOverrideDialogOpen] = useState(false);
   const [professionalForm, setProfessionalForm] = useState({
     name: "",
@@ -119,6 +136,7 @@ export default function CalendarSettings() {
     aiBookingEnabled: false,
   });
   const [selectedLocationId, setSelectedLocationId] = useState("");
+  const [activeTab, setActiveTab] = useState<CalendarSettingsTab>("professionals");
   const [availabilityForm, setAvailabilityForm] = useState({
     weekdays: [1] as number[],
     startTime: "08:00",
@@ -317,6 +335,14 @@ export default function CalendarSettings() {
     if (success) setServiceOverrideDialogOpen(false);
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const success = deleteTarget.type === "professional"
+      ? await configuration.deleteProfessional(deleteTarget.id)
+      : await configuration.deleteService(deleteTarget.id);
+    if (success) setDeleteTarget(null);
+  };
+
   const submitAvailability = async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedLocationId) return;
@@ -367,7 +393,11 @@ export default function CalendarSettings() {
         </div>
       </header>
 
-      <Tabs defaultValue="professionals" className="space-y-6">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as CalendarSettingsTab)}
+        className="space-y-6"
+      >
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto bg-[var(--color-bg-subtle)] p-1">
           <TabsTrigger value="professionals" className="gap-2"><UserRound />Profissionais</TabsTrigger>
           <TabsTrigger value="services" className="gap-2"><BriefcaseMedical />Serviços</TabsTrigger>
@@ -409,9 +439,27 @@ export default function CalendarSettings() {
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Button type="button" variant="outline" size="sm" onClick={() => openEditProfessional(professional)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                        Editar
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={configuration.saving}
+                        onClick={() => openEditProfessional(professional)}
+                        aria-label={`Editar profissional ${professional.name}`}
+                        title="Editar profissional"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={configuration.saving}
+                        onClick={() => setDeleteTarget({ type: "professional", id: professional.id, name: professional.name })}
+                        aria-label={`Apagar profissional ${professional.name}`}
+                        className="text-[var(--color-error-600)] hover:bg-[var(--color-error-50)] hover:text-[var(--color-error-700)]"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                       <Label htmlFor={`professional-${professional.id}`} className="font-normal">
                         {professional.is_active ? "Ativo" : "Pausado"}
@@ -457,9 +505,27 @@ export default function CalendarSettings() {
                       <p className="text-sm text-[var(--color-gray-500)]">
                         Intervalo: {service.buffer_before_minutes + service.buffer_after_minutes} min
                       </p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => openEditService(service)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                        Editar
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={configuration.saving}
+                        onClick={() => openEditService(service)}
+                        aria-label={`Editar serviço ${service.name}`}
+                        title="Editar serviço"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        disabled={configuration.saving}
+                        onClick={() => setDeleteTarget({ type: "service", id: service.id, name: service.name })}
+                        aria-label={`Apagar serviço ${service.name}`}
+                        className="text-[var(--color-error-600)] hover:bg-[var(--color-error-50)] hover:text-[var(--color-error-700)]"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   </div>
@@ -766,6 +832,36 @@ export default function CalendarSettings() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open && !configuration.saving) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Apagar {deleteTarget?.type === "professional" ? "profissional" : "serviço"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{deleteTarget?.name}</strong> será removido permanentemente da configuração da agenda.
+              Os agendamentos históricos serão preservados, mas deixarão de ter este vínculo estruturado.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={configuration.saving}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmDelete()}
+              disabled={configuration.saving}
+              className="gap-2 bg-[var(--color-error-500)] text-white hover:bg-[var(--color-error-600)]"
+            >
+              {configuration.saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+              Apagar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

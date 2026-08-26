@@ -28,7 +28,9 @@ supabase/.temp/start-secrets/
 *.sw?
 node_modules
 .env
+.env.cloudflare
 .env.*
+!.env.cloudflare.example
 .next
 dist
 build
@@ -67,7 +69,10 @@ exemples/
 
 # Local/client-specific material intentionally excluded from deployment commits.
 /Project/IA/client-configs/
-/Project/IA/tests/
+!/Project/IA/tests/
+/Project/IA/tests/*
+!/Project/IA/tests/messaging-channel-resolver.test.ts
+!/Project/IA/tests/instagram-channel-foundation.integration.test.ts
 /Project/IA/fixtures/
 /Project/IA/scripts/recover-*
 /Project/IA/evolution-template-backfill.ts
@@ -76,7 +81,10 @@ exemples/
 /dist-production-check/
 
 # Local product research and draft implementation files.
-/Instagram-API/
+!/Instagram-API/
+/Instagram-API/*
+!/Instagram-API/PLANO_IMPLEMENTACAO_SET_0_1_LOCAL.md
+!/Instagram-API/CONTROLE_ENTREGA_SET_0_1.md
 /referencias/IA Instituto/
 /Project/IA/agent-tool-activation.ts
 /supabase/migrations/20260821135107_fix_admin_template_agent_instance_ownership.sql

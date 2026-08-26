@@ -66,6 +66,25 @@ test("extrai selecao e contexto do callback interativo Gupshup v3", () => {
   assert.deepEqual(selection?.contextMessageIds, ["gs-original", "wamid-original"]);
 });
 
+test("extrai selecao de quick reply nativa da Evolution", () => {
+  const selection = extractProviderQuickReplySelection({
+    data: {
+      message: {
+        templateButtonReplyMessage: {
+          selectedId: "confirmar_agendamento",
+          selectedDisplayText: "Confirmar agendamento",
+          contextInfo: { stanzaId: "TEMPLATE-OUTBOUND-1" },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(selection, {
+    selectedOption: { id: "confirmar_agendamento", title: "Confirmar agendamento" },
+    contextMessageIds: ["TEMPLATE-OUTBOUND-1"],
+  });
+});
+
 test("liga a escolha do cliente a mensagem enviada e atualiza o historico", () => {
   const normalized = normalizeQuickReplyMessages([
     {

@@ -187,7 +187,7 @@ async function provisionLavie(options: CliOptions) {
       p_instance_name: instance.instancia,
       p_name: DEFAULT_AGENT_NAME,
       p_system_prompt: LAVIE_SYSTEM_PROMPT,
-      p_model: "gemini-2.5-flash",
+      p_model: "gemini-3.1-flash-lite",
       p_temperature: 0.4,
       p_template_key: DEFAULT_TEMPLATE_KEY,
       p_is_active: false,

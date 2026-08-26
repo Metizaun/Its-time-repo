@@ -4,6 +4,9 @@ Cenario atual:
 - Frontend ja publicado em `https://app.itstime.pro`
 - Backend sera publicado em `https://api.itstime.pro`
 - A VPS ja usa `Docker Swarm + Traefik`
+- VPS principal: `187.127.49.20` (`srv1903602`, Docker Swarm manager)
+- Portainer atual: stack `portainer-new`, imagem Portainer CE `2.29.2`
+- Host configurado no Traefik para o Portainer: `https://port-new.itstime.pro`
 - Supabase continua gerenciado externamente
 - Evolution continua externa em `http://72.60.251.89:64970`
 
@@ -46,9 +49,13 @@ Importante:
 - arquivo `/opt/chat-query/.env.local`
 
 No seu caso, o padrao esperado e:
+- VPS principal: `187.127.49.20`
 - rede Traefik: `lukas_net`
 - cert resolver do Traefik: `letsencryptresolver`
 - Redis Docker: `evolution_redis`
+
+Observacao: o router do Portainer esta configurado no Traefik, mas `port-new.itstime.pro`
+precisa ter um registro DNS apontando para `187.127.49.20` para funcionar fora da VPS.
 
 ## 4. `.env.local` na raiz do projeto
 

@@ -137,7 +137,7 @@ export class RbVisagismService {
       db: { schema: "crm" },
     });
     this.gemini = config.geminiApiKey ? new GoogleGenerativeAI(config.geminiApiKey) : null;
-    this.model = config.model?.trim() || "gemini-2.5-flash";
+    this.model = config.model?.trim() || "gemini-3.1-flash-lite";
     this.maxSourceBytes = config.maxSourceBytes ?? 10 * 1024 * 1024;
     this.maxStoredBytes = config.maxStoredBytes ?? 1_500_000;
     this.ffmpegPath = config.ffmpegPath?.trim() || "ffmpeg";
