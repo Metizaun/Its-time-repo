@@ -62,6 +62,7 @@ services:
       CALENDAR_FOLLOWUP_1H_TEMPLATE: '${CALENDAR_FOLLOWUP_1H_TEMPLATE:-Ola, {nome}! Passando para lembrar do compromisso "{titulo}" hoje as {horario}.}'
     networks:
       - traefik-public
+      - evolution-internal
     deploy:
       replicas: ${BACKEND_REPLICAS}
       placement:
@@ -93,3 +94,6 @@ networks:
   traefik-public:
     external: true
     name: ${TRAEFIK_NETWORK}
+  evolution-internal:
+    external: true
+    name: ${EVOLUTION_NETWORK}

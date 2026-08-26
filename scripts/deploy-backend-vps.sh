@@ -15,6 +15,7 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
 API_DOMAIN="${API_DOMAIN:-api.itstime.pro}"
 TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-lukas_net}"
+EVOLUTION_NETWORK="${EVOLUTION_NETWORK:-evolution-active_evolution_internal}"
 TRAEFIK_ENTRYPOINTS="${TRAEFIK_ENTRYPOINTS:-websecure}"
 TRAEFIK_CERT_RESOLVER="${TRAEFIK_CERT_RESOLVER:-letsencryptresolver}"
 TRAEFIK_ROUTER_NAME="${TRAEFIK_ROUTER_NAME:-itstime-api}"
@@ -51,13 +52,17 @@ load_env_file() {
 }
 
 autodetect_redis_url() {
-  if docker service ls --format '{{.Name}}' 2>/dev/null | grep -Fxq 'evolution_redis'; then
-    printf '%s' 'redis://evolution_redis:6379'
+  local service_name
+  service_name="$(docker service ls --format '{{.Name}}' 2>/dev/null | grep -E '(^|-)evolution(-|_).*_redis$|(^|_)evolution_redis$' | head -n 1 || true)"
+  if [[ -n "$service_name" ]]; then
+    printf 'redis://%s:6379' "$service_name"
     return 0
   fi
 
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq 'evolution_redis'; then
-    printf '%s' 'redis://evolution_redis:6379'
+  local container_name
+  container_name="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '(^|-)evolution(-|_).*_redis($|\.)|(^|_)evolution_redis($|\.)' | head -n 1 || true)"
+  if [[ -n "$container_name" ]]; then
+    printf 'redis://%s:6379' "$container_name"
     return 0
   fi
 
@@ -227,6 +232,7 @@ export BACKEND_REPLICAS
 export BACKEND_UPDATE_ORDER
 export API_DOMAIN
 export TRAEFIK_NETWORK
+export EVOLUTION_NETWORK
 export TRAEFIK_ENTRYPOINTS
 export TRAEFIK_CERT_RESOLVER
 export TRAEFIK_ROUTER_NAME
