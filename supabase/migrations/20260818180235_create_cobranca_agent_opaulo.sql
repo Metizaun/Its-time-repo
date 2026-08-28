@@ -1,3 +1,11 @@
+-- Configuracao especifica da conta de producao; nao cria tenant em replay vazio.
+DO $seed$
+BEGIN
+IF EXISTS (SELECT 1 FROM crm.accounts WHERE id = 10)
+   AND EXISTS (
+     SELECT 1 FROM crm.instance
+     WHERE aces_id = 10 AND instancia = 'cobranca_opaulo'
+   ) THEN
 INSERT INTO agents.ai_agents (
   aces_id, instance_name, name, agent_type, system_prompt,
   provider, model, temperature, buffer_wait_ms, human_pause_minutes,
@@ -11,4 +19,7 @@ VALUES (
   true,
   E'1. Toda vez que o cliente enviar o comprovante, acione o humano;\n2. Toda vez que o cliente afirmar que fez o pagamento, acione o ser humano;\n3. Toda vez que o cliente disser que não reconhece a compra ou os valores, chamar o ser humano;\n4. Toda vez que o cliente solicitar renegociação, ver valores em aberto, saber sobre demais débitos ou juros, multas e encargos, chamar o ser humano.\n5. Quando o lead solicitar o valor atualizado.\n6. Em qualquer situação em que o lead apertar o botão, encaminhe para o ser humano.',
   'balanced', true, true, 'cobranca_rb', 1, true
-);;
+);
+END IF;
+END;
+$seed$;

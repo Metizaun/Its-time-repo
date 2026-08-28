@@ -545,3 +545,5 @@ ALTER ROLE authenticator SET pgrst.db_schemas =
 
 NOTIFY pgrst, 'reload config';
 NOTIFY pgrst, 'reload schema';
+
+;

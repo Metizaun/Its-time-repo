@@ -27,6 +27,12 @@ import {
   parseGupshupWebhookPayload,
 } from "./gupshup-webhook.js";
 import { GupshupAdminService } from "./gupshup-admin-service.js";
+import { InstagramService, InstagramServiceError } from "./instagram-service.js";
+import { InstagramWebhookProcessor } from "./instagram-webhook.js";
+import {
+  startInstagramTokenRefreshWorker,
+  startInstagramWebhookWorker,
+} from "./instagram-workers.js";
 import {
   GupshupTemplateApiError,
   validateCreateGupshupTemplateInput,
@@ -373,6 +379,24 @@ function resolveMetaWebhookAppSecret() {
   );
 }
 
+const instagramService = new InstagramService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  appId: process.env.INSTAGRAM_APP_ID,
+  appSecret: process.env.INSTAGRAM_APP_SECRET,
+  graphApiVersion: process.env.INSTAGRAM_GRAPH_API_VERSION ?? "v26.0",
+  encryptionKey: process.env.INSTAGRAM_TOKEN_ENCRYPTION_KEY,
+  encryptionKeyVersion: process.env.INSTAGRAM_TOKEN_ENCRYPTION_KEY_VERSION,
+  backendPublicUrl:
+    process.env.CRM_BACKEND_PUBLIC_URL ??
+    process.env.BACKEND_PUBLIC_URL ??
+    process.env.WEBHOOK_PUBLIC_BASE_URL,
+  frontendPublicUrl:
+    process.env.CRM_FRONTEND_PUBLIC_URL ?? process.env.FRONTEND_PUBLIC_URL,
+  enabled: process.env.INSTAGRAM_CHANNEL_ENABLED === "true",
+  outboundEnabled: process.env.INSTAGRAM_OUTBOUND_ENABLED === "true",
+});
+
 const rbVisagismService = new RbVisagismService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -448,6 +472,7 @@ const manager = new AgentManager({
     mamis: ["554199031152"],
   },
   rbVisagismService,
+  instagramService,
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -480,6 +505,12 @@ const rbConnectionService = new RbConnectionService({
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   jwtSecret: requireEnv("RB_WEBHOOK_JWT_SECRET"),
   rbApiBaseUrl: process.env.RB_API_BASE_URL,
+});
+
+const instagramWebhookProcessor = new InstagramWebhookProcessor({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  appSecret: process.env.INSTAGRAM_APP_SECRET,
 });
 
 const rbBillingWorker = new RbBillingWorker({
@@ -519,7 +550,10 @@ app.use(
     limit:
       process.env.JSON_BODY_LIMIT ?? process.env.WEBHOOK_JSON_LIMIT ?? "150mb",
     verify: (req, _res, buf) => {
-      if (req.url?.startsWith("/api/webhook/meta")) {
+      if (
+        req.url?.startsWith("/api/webhook/meta") ||
+        req.url?.startsWith("/api/webhook/instagram")
+      ) {
         (req as RawBodyRequest).rawBody = Buffer.from(buf);
       }
     },
@@ -712,7 +746,66 @@ app.get("/api/webhook/meta", (req, res) => {
   res.status(200).send(challenge);
 });
 
+const instagramWebhookHandler = asyncHandler(async (req, res) => {
+  const signature = req.header("x-hub-signature-256");
+  if (
+    !instagramWebhookProcessor.verifySignature(
+      (req as RawBodyRequest).rawBody,
+      signature,
+    )
+  ) {
+    throw new HttpError(401, "Webhook Instagram sem assinatura valida");
+  }
+
+  await instagramWebhookProcessor.persist(req.body);
+  res.status(200).send("EVENT_RECEIVED");
+});
+
+app.get("/api/webhook/instagram", (req, res) => {
+  const mode = getSingleParam(req.query["hub.mode"] as string | string[] | undefined);
+  const verifyToken = getSingleParam(
+    req.query["hub.verify_token"] as string | string[] | undefined,
+  );
+  const challenge = getSingleParam(
+    req.query["hub.challenge"] as string | string[] | undefined,
+  );
+  const configuredToken = process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN?.trim();
+
+  if (!configuredToken) {
+    res.status(503).send("Instagram webhook verify token nao configurado");
+    return;
+  }
+
+  if (mode !== "subscribe" || verifyToken !== configuredToken || !challenge) {
+    res.status(403).send("Forbidden");
+    return;
+  }
+
+  res.status(200).send(challenge);
+});
+
+app.get(
+  "/api/instagram/media/:token",
+  asyncHandler(async (req, res) => {
+    try {
+      const media = await instagramService.downloadMediaDelivery(
+        getSingleParam(req.params.token),
+      );
+      const fileName = media.fileName.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 120) || "instagram-media";
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Type", media.mimeType);
+      res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+      res.send(Buffer.from(await media.data.arrayBuffer()));
+    } catch (error) {
+      throw asInstagramHttpError(error);
+    }
+  }),
+);
+
 app.post("/api/webhook/meta", metaWebhookHandler);
+app.post("/api/webhook/instagram", instagramWebhookHandler);
 app.get("/api/webhook/gupshup", gupshupWebhookProbeHandler);
 app.head("/api/webhook/gupshup", gupshupWebhookProbeHandler);
 app.post("/api/webhook/gupshup", gupshupWebhookHandler);
@@ -740,6 +833,13 @@ app.post(
     res.json({ token, aces_id: rbAcesId, exp: String(exp) });
   }),
 );
+
+function asInstagramHttpError(error: unknown) {
+  if (error instanceof InstagramServiceError) {
+    return new HttpError(error.statusCode, error.message, { code: error.code });
+  }
+  return error;
+}
 
 const requireStaff = asyncHandler(
   async (req: AuthenticatedRequest, _res, next) => {
@@ -3083,6 +3183,118 @@ app.get(
   }),
 );
 
+app.post(
+  "/api/instagram/oauth/start",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    try {
+      const result = await instagramService.beginOAuth(req.authContext!, {
+        instanceName: String(req.body.instanceName ?? ""),
+        returnPath:
+          typeof req.body.returnPath === "string" ? req.body.returnPath : null,
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      throw asInstagramHttpError(error);
+    }
+  }),
+);
+
+app.get(
+  "/api/instagram/oauth/callback",
+  asyncHandler(async (req, res) => {
+    const state = asString(req.query.state);
+    const code = asString(req.query.code);
+    if (!state || !code || asString(req.query.error)) {
+      res.redirect(
+        303,
+        instagramService.buildFrontendRedirect(
+          "/admin?section=instances",
+          "error",
+        ),
+      );
+      return;
+    }
+
+    try {
+      const result = await instagramService.completeOAuth({ state, code });
+      res.redirect(
+        303,
+        instagramService.buildFrontendRedirect(
+          String(result.returnPath ?? "/admin?section=instances"),
+          "connected",
+        ),
+      );
+    } catch (error) {
+      if (!(error instanceof InstagramServiceError)) throw error;
+      res.redirect(
+        303,
+        instagramService.buildFrontendRedirect(
+          "/admin?section=instances",
+          "error",
+        ),
+      );
+    }
+  }),
+);
+
+app.get(
+  "/api/instagram/channels",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (req.authContext!.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem consultar canais Instagram");
+    }
+    try {
+      res.json({
+        success: true,
+        channels: await instagramService.listChannels(req.authContext!.acesId),
+      });
+    } catch (error) {
+      throw asInstagramHttpError(error);
+    }
+  }),
+);
+
+app.post(
+  "/api/instagram/channels/:channelId/refresh",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (req.authContext!.role !== "ADMIN") throw new HttpError(403, "Apenas administradores podem renovar canais Instagram");
+    try {
+      res.json({ success: true, channel: await instagramService.refreshChannel(req.authContext!, getSingleParam(req.params.channelId)) });
+    } catch (error) {
+      throw asInstagramHttpError(error);
+    }
+  }),
+);
+
+app.post(
+  "/api/instagram/channels/:channelId/disable",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (req.authContext!.role !== "ADMIN") throw new HttpError(403, "Apenas administradores podem desativar canais Instagram");
+    try {
+      res.json({ success: true, channel: await instagramService.disableChannel(req.authContext!, getSingleParam(req.params.channelId)) });
+    } catch (error) {
+      throw asInstagramHttpError(error);
+    }
+  }),
+);
+
+app.get(
+  "/api/instagram/metrics",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (req.authContext!.role !== "ADMIN") throw new HttpError(403, "Apenas administradores podem consultar metricas Instagram");
+    try {
+      res.json({ success: true, metrics: await instagramService.getOperationalMetrics(req.authContext!.acesId, Number(asString(req.query.hours) ?? 24)) });
+    } catch (error) {
+      throw asInstagramHttpError(error);
+    }
+  }),
+);
+
 app.get(
   "/api/agents/:id/tools/store_locator/stores",
   authMiddleware,
@@ -3514,11 +3726,40 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 
 const port = Number(process.env.PORT ?? 3000);
 let stopPipelineWorker: (() => void) | null = null;
+let stopInstagramWebhookWorker: (() => void) | null = null;
+let stopInstagramTokenRefreshWorker: (() => void) | null = null;
+
+function validateInstagramOperationalConfig() {
+  const channelEnabled = process.env.INSTAGRAM_CHANNEL_ENABLED === "true";
+  const webhookWorkerEnabled = process.env.INSTAGRAM_WEBHOOK_WORKER_ENABLED === "true";
+  const refreshWorkerEnabled = process.env.INSTAGRAM_TOKEN_REFRESH_WORKER_ENABLED === "true";
+  const outboundEnabled = process.env.INSTAGRAM_OUTBOUND_ENABLED === "true";
+  const anyEnabled = channelEnabled || webhookWorkerEnabled || refreshWorkerEnabled || outboundEnabled;
+
+  if (process.env.NODE_ENV === "production" && anyEnabled && process.env.INSTAGRAM_PRODUCTION_ROLLOUT_AUTHORIZED !== "true") {
+    throw new Error("Rollout Instagram em producao bloqueado: autorizacao explicita ausente");
+  }
+  if (!anyEnabled) return;
+
+  const required = [
+    "INSTAGRAM_APP_ID",
+    "INSTAGRAM_APP_SECRET",
+    "INSTAGRAM_GRAPH_API_VERSION",
+    "INSTAGRAM_TOKEN_ENCRYPTION_KEY",
+    "CRM_BACKEND_PUBLIC_URL",
+    "CRM_FRONTEND_PUBLIC_URL",
+  ];
+  if (webhookWorkerEnabled) required.push("INSTAGRAM_WEBHOOK_VERIFY_TOKEN");
+  const missing = required.filter((name) => !process.env[name]?.trim());
+  if (missing.length > 0) throw new Error(`Configuracao operacional Instagram ausente: ${missing.join(", ")}`);
+}
+
 async function bootstrap() {
   await assertRuntimeSchemaCompatibility({
     supabaseUrl: requireEnv("SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   });
+  validateInstagramOperationalConfig();
 
   app.listen(port, () => {
     console.log(`[crm-ai-backend] Servidor rodando na porta ${port}`);
@@ -3535,6 +3776,33 @@ async function bootstrap() {
   if (process.env.PIPELINE_WORKER_ENABLED === "true") {
     stopPipelineWorker = startPipelineWorker();
   }
+
+  stopInstagramWebhookWorker = startInstagramWebhookWorker({
+    enabled:
+      process.env.INSTAGRAM_CHANNEL_ENABLED === "true" &&
+      process.env.INSTAGRAM_WEBHOOK_WORKER_ENABLED === "true",
+    supabaseUrl: requireEnv("SUPABASE_URL"),
+    supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    service: instagramService,
+    pollMs: Number(process.env.INSTAGRAM_WEBHOOK_WORKER_POLL_MS ?? 1_000),
+    batchSize: Number(process.env.INSTAGRAM_WEBHOOK_WORKER_BATCH_SIZE ?? 10),
+    onMessagePersisted: async (acesId, leadId) => {
+      await manager.invalidateChatCacheForLead(acesId, leadId);
+    },
+  });
+
+  stopInstagramTokenRefreshWorker = startInstagramTokenRefreshWorker({
+    enabled:
+      process.env.INSTAGRAM_CHANNEL_ENABLED === "true" &&
+      process.env.INSTAGRAM_TOKEN_REFRESH_WORKER_ENABLED === "true",
+    service: instagramService,
+    pollMs: Number(
+      process.env.INSTAGRAM_TOKEN_REFRESH_WORKER_POLL_MS ?? 60_000,
+    ),
+    batchSize: Number(
+      process.env.INSTAGRAM_TOKEN_REFRESH_WORKER_BATCH_SIZE ?? 5,
+    ),
+  });
 }
 
 bootstrap().catch(async (error) => {
@@ -3556,6 +3824,8 @@ bootstrap().catch(async (error) => {
 
 process.on("SIGINT", async () => {
   stopPipelineWorker?.();
+  stopInstagramWebhookWorker?.();
+  stopInstagramTokenRefreshWorker?.();
   rbBillingWorker.stop();
   await manager.dispose();
   process.exit(0);
@@ -3563,6 +3833,8 @@ process.on("SIGINT", async () => {
 
 process.on("SIGTERM", async () => {
   stopPipelineWorker?.();
+  stopInstagramWebhookWorker?.();
+  stopInstagramTokenRefreshWorker?.();
   rbBillingWorker.stop();
   await manager.dispose();
   process.exit(0);

@@ -6,6 +6,10 @@
       "headers": {
         "Authorization": "Bearer ${env:SUPABASE_ACCESS_TOKEN}"
       }
+    },
+    "Meta Developer Tools": {
+      "type": "http",
+      "url": "https://mcp.facebook.com/devtools"
     }
   }
 }

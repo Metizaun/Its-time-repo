@@ -214,16 +214,34 @@ function normalizeMessage(message: BackendChatMessage): ChatMessage {
 
 function normalizeSendPolicy(policy: ChatSendPolicy | null | undefined): ChatSendPolicy | null {
   if (!policy) return null;
-  if (policy.provider !== "evolution" && policy.provider !== "meta" && policy.provider !== "gupshup") {
+  if (
+    policy.provider !== "evolution" &&
+    policy.provider !== "meta" &&
+    policy.provider !== "gupshup" &&
+    policy.provider !== "instagram"
+  ) {
     return null;
   }
-  if (policy.mode !== "freeform" && policy.mode !== "template_required") {
+  if (
+    policy.mode !== "freeform" &&
+    policy.mode !== "human_agent" &&
+    policy.mode !== "template_required" &&
+    policy.mode !== "closed"
+  ) {
     return null;
   }
 
   return {
     provider: policy.provider,
     mode: policy.mode,
+    supportsAttachments: policy.supportsAttachments !== false,
+    supportedAttachmentKinds: Array.isArray(policy.supportedAttachmentKinds)
+      ? policy.supportedAttachmentKinds.filter(
+          (kind): kind is ChatAttachmentKind => kind === "image" || kind === "audio" || kind === "document"
+        )
+      : policy.supportsAttachments === false
+        ? []
+        : ["image", "audio", "document"],
     lastInboundAt: policy.lastInboundAt ?? null,
     windowExpiresAt: policy.windowExpiresAt ?? null,
     evaluatedAt: policy.evaluatedAt,
@@ -283,6 +301,23 @@ export async function finalizeHumanHandoff(leadId: string, stageId: string, inst
     stageId,
     instanceName: instanceName ?? null,
   });
+}
+
+export function getInstagramBlockedPolicyFromError(error: unknown) {
+  if (!(error instanceof CrmBackendError)) return null;
+
+  const details =
+    error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? (error.details as Record<string, unknown>)
+      : null;
+  if (
+    details?.code !== "INSTAGRAM_WINDOW_CLOSED" &&
+    details?.code !== "INSTAGRAM_TEXT_ONLY"
+  ) {
+    return null;
+  }
+
+  return normalizeSendPolicy(details.sendPolicy as ChatSendPolicy | null | undefined);
 }
 
 export async function forwardHumanHandoff(

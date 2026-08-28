@@ -47,6 +47,10 @@ import {
   type ResolvedInboundMedia,
 } from "./gupshup-media-downloader.js";
 import { createWhatsAppProviderRegistry, type WhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
+import { MessagingChannelResolver } from "./messaging-channel-resolver.js";
+import type { MessagingProviderName } from "./messaging-channel.js";
+import { MessagingDispatcher, type MessagingDispatchResult } from "./messaging-dispatcher.js";
+import { InstagramService, InstagramServiceError } from "./instagram-service.js";
 import {
   matchOutboundEcho,
   registerOutboundEcho,
@@ -527,7 +531,7 @@ type VisagismRunSnapshot = {
 };
 
 type InstanceSetupStatus = "pending_qr" | "connected" | "expired" | "cancelled";
-type InstanceConnectionMode = "local" | "external_webhook";
+type InstanceConnectionMode = "local" | "external_webhook" | "instagram";
 type InstanceAction = "continue_setup" | "reconnect" | "sync_status" | "disconnect" | "delete";
 
 type InstanceRow = {
@@ -613,7 +617,7 @@ type MessageRow = {
   created_by: string | null;
   sent_at: string;
   conversation_id: string | null;
-  provider?: WhatsAppProviderName | null;
+  provider?: MessagingProviderName | null;
   provider_message_id?: string | null;
   provider_status?: string | null;
   provider_error_code?: string | null;
@@ -1113,6 +1117,7 @@ type ServiceConfig = {
   chatAttachmentUploadIntentTtlMinutes?: number;
   instancePhoneAllowlists?: Record<string, string[]>;
   rbVisagismService?: RbVisagismService;
+  instagramService?: InstagramService;
 };
 
 export class HttpError extends Error {
@@ -2530,6 +2535,9 @@ export class AgentManager {
   private readonly toolMediaAllowedHosts: Set<string>;
   private readonly instancePhoneAllowlists: Record<string, string[]>;
   private readonly whatsAppProviders: WhatsAppProviderRegistry;
+  private readonly messagingChannels: MessagingChannelResolver;
+  private readonly messagingDispatcher: MessagingDispatcher;
+  private readonly instagramService: InstagramService | null;
   private readonly rbVisagismService: RbVisagismService | null;
 
   constructor(private readonly config: ServiceConfig) {
@@ -2628,6 +2636,13 @@ export class AgentManager {
       metaProviderMode: config.metaProviderMode,
       metaGraphApiVersion: config.metaGraphApiVersion,
     });
+    this.messagingChannels = new MessagingChannelResolver(this.serviceClient);
+    this.instagramService = config.instagramService ?? null;
+    this.messagingDispatcher = new MessagingDispatcher(
+      this.messagingChannels,
+      this.whatsAppProviders,
+      this.instagramService,
+    );
   }
 
   async authenticate(authHeader?: string): Promise<AuthContext> {
@@ -2688,11 +2703,17 @@ export class AgentManager {
   }
 
   private normalizeInstanceConnectionMode(raw: string | null | undefined): InstanceConnectionMode {
-    return raw === "external_webhook" ? "external_webhook" : "local";
+    if (raw === "external_webhook") return "external_webhook";
+    if (raw === "instagram") return "instagram";
+    return "local";
   }
 
   private isExternalWebhookInstance(instance: Pick<InstanceRow, "connection_mode">) {
     return this.normalizeInstanceConnectionMode(instance.connection_mode) === "external_webhook";
+  }
+
+  private isInstagramInstance(instance: Pick<InstanceRow, "connection_mode">) {
+    return this.normalizeInstanceConnectionMode(instance.connection_mode) === "instagram";
   }
 
   private evolutionHeaders(apiKey = this.config.evolutionApiKey) {
@@ -2784,7 +2805,7 @@ export class AgentManager {
   }
 
   private buildInstanceActions(instance: InstanceRow, setupStatus: InstanceSetupStatus): InstanceAction[] {
-    if (this.isExternalWebhookInstance(instance)) {
+    if (this.isExternalWebhookInstance(instance) || this.isInstagramInstance(instance)) {
       return ["delete"];
     }
 
@@ -7389,7 +7410,7 @@ export class AgentManager {
 
   private async findMessageByProviderMessageId(
     acesId: number,
-    provider: WhatsAppProviderName,
+    provider: MessagingProviderName,
     providerMessageId: string | null
   ) {
     const messageId = providerMessageId?.trim();
@@ -7542,7 +7563,7 @@ export class AgentManager {
     createdBy?: string | null;
     conversationId?: string | null;
     sentAt?: string;
-    provider?: WhatsAppProviderName | null;
+    provider?: MessagingProviderName | null;
     providerMessageId?: string | null;
     providerStatus?: "accepted" | "sent" | "failed" | null;
     providerErrorCode?: string | null;
@@ -8984,41 +9005,30 @@ export class AgentManager {
   private async resolveInstanceTextProvider(
     instanceName: string,
     acesId?: number
-  ): Promise<WhatsAppProviderName> {
-    const metaClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
-      db: { schema: "meta" },
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-
-    let query = metaClient
-      .from("instance")
-      .select("provider")
-      .eq("instance_name", instanceName);
-
-    if (acesId !== undefined) {
-      query = query.eq("aces_id", acesId);
+  ): Promise<MessagingProviderName> {
+    if (!acesId) {
+      throw new HttpError(400, "Tenant obrigatorio para resolver o canal de mensageria");
     }
-
-    const { data, error } = await query.maybeSingle();
-
-    if (error) {
-      throw new HttpError(500, "Nao foi possivel resolver o provider da instancia", error);
-    }
-
-    if (data?.provider === "gupshup") return "gupshup";
-    if (data?.provider === "meta") return "meta";
-    return "evolution";
+    return (await this.messagingChannels.resolve(acesId, instanceName)).provider;
   }
 
-  private async resolveLatestLeadInboundAt(lead: LeadRow, instanceName?: string | null) {
-    const { data, error } = await this.serviceClient
+  private async resolveLatestLeadInboundAt(
+    lead: LeadRow,
+    instanceName?: string | null,
+    provider?: MessagingProviderName,
+  ) {
+    let query = this.serviceClient
       .from("message_history")
       .select("sent_at")
       .eq("aces_id", lead.aces_id)
       .eq("lead_id", lead.id)
       .eq("instance", instanceName?.trim() || lead.instancia?.trim() || "")
       .eq("direction", "inbound")
-      .eq("source_type", "lead")
+      .eq("source_type", "lead");
+
+    if (provider === "instagram") query = query.eq("provider", "instagram");
+
+    const { data, error } = await query
       .order("sent_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -9038,12 +9048,7 @@ export class AgentManager {
 
   private async resolveChatSendPolicy(lead: LeadRow, instanceName: string) {
     const provider = await this.resolveInstanceTextProvider(instanceName, lead.aces_id);
-
-    if (provider !== "gupshup") {
-      return buildChatSendPolicy(provider, await this.resolveLatestLeadInboundAt(lead, instanceName));
-    }
-
-    const lastInboundAt = await this.resolveLatestLeadInboundAt(lead, instanceName);
+    const lastInboundAt = await this.resolveLatestLeadInboundAt(lead, instanceName, provider);
     return buildChatSendPolicy(provider, lastInboundAt);
   }
 
@@ -9091,6 +9096,12 @@ export class AgentManager {
   ) {
     const recipient = resolveWhatsappRecipient(phone);
     const providerName = await this.resolveInstanceTextProvider(instanceName, context?.acesId);
+
+    if (providerName === "instagram") {
+      throw new HttpError(409, "Instagram esta disponivel somente para resposta manual no CRM", {
+        code: "INSTAGRAM_MANUAL_ONLY",
+      });
+    }
 
     if (providerName === "gupshup") {
       const provider = await this.resolveGupshupTextProvider(instanceName);
@@ -11781,6 +11792,10 @@ export class AgentManager {
     }
   }
 
+  async invalidateChatCacheForLead(acesId: number, leadId: string) {
+    await this.invalidateChatMessagesCache(acesId, leadId);
+  }
+
   private async classifyConversation(
     agent: AgentRow,
     lead: LeadRow,
@@ -14117,6 +14132,14 @@ export class AgentManager {
 
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
 
+    const sendPolicy = await this.resolveChatSendPolicy(lead, instanceName);
+    if (!sendPolicy.supportedAttachmentKinds.includes(resolvedKind)) {
+      throw new HttpError(409, "Este tipo de anexo nao e permitido neste canal", {
+        code: "CHANNEL_ATTACHMENT_UNSUPPORTED",
+        sendPolicy,
+      });
+    }
+
     const now = new Date();
     const messageId = randomUUID();
     const attachmentId = randomUUID();
@@ -14779,6 +14802,7 @@ export class AgentManager {
     aiState: { reason: LeadAiReason } | null;
     content: string;
     attachment: ChatAttachmentSendInput;
+    providerName: MessagingProviderName;
   }) {
     const attachment = params.attachment;
     if (!isUuid(attachment.messageId) || !isUuid(attachment.attachmentId)) {
@@ -14809,39 +14833,55 @@ export class AgentManager {
     }
 
     await this.assertStorageObjectExists(intent.storage_path);
-    const mediaUrl = await this.createSignedDownloadUrl(intent.storage_path);
-    const phone = requireValue(params.lead.contact_phone, "Lead sem telefone para envio");
+    const phone = params.lead.contact_phone?.trim() || null;
     const caption = params.content.trim();
     const messageContent = buildAttachmentContent(intent.kind, caption);
     const sentAt = new Date().toISOString();
     const conversationId = `manual-media:${Date.now()}`;
-    const providerInput: SendMediaInput = {
-      instanceName: params.instanceName,
-      to: phone,
-      mediaUrl,
-      mimeType: intent.mime_type,
-      fileName: intent.file_name,
-      kind: intent.kind,
-      caption: caption || null,
-      sourceType: "manual",
-    };
+    const providerName = params.providerName;
+    if (providerName === "instagram" && intent.kind === "document") {
+      throw new HttpError(409, "O Instagram aceita somente foto e audio", {
+        code: "INSTAGRAM_MEDIA_KIND_UNSUPPORTED",
+      });
+    }
+    const mediaUrl = providerName === "instagram"
+      ? this.instagramService?.createMediaDeliveryUrl({
+          acesId: params.context.acesId,
+          attachmentId: intent.attachment_id,
+        })
+      : await this.createSignedDownloadUrl(intent.storage_path);
+    if (!mediaUrl) {
+      throw new HttpError(503, "Runtime Instagram indisponivel", {
+        code: "INSTAGRAM_CONFIGURATION",
+      });
+    }
 
-    let providerResult: SendResult;
-    const providerName = await this.whatsAppProviders.resolveInstanceProvider(
-      params.context.acesId,
-      params.instanceName
-    );
+    let providerResult: MessagingDispatchResult;
     try {
-      const provider = this.whatsAppProviders.getProvider(providerName);
-      if (!provider.sendMedia) {
-        throw new WhatsAppProviderError(`Provider ${providerName} sem suporte a midia`, {
-          provider: providerName,
-          kind: "permanent",
-        });
-      }
-      providerResult = await provider.sendMedia(providerInput);
+      providerResult = await this.messagingDispatcher.dispatchMedia({
+        acesId: params.context.acesId,
+        instanceName: params.instanceName,
+        leadId: params.lead.id,
+        phone,
+        kind: intent.kind,
+        mediaUrl,
+        mimeType: intent.mime_type,
+        fileName: intent.file_name,
+        caption: caption || null,
+        source: "human",
+      });
     } catch (error) {
-      const providerFailure = summarizeWhatsAppProviderFailure(error);
+      const providerFailure = providerName === "instagram"
+        ? {
+            statusCode: error instanceof InstagramServiceError ? error.statusCode : 502,
+            errorCode: error instanceof InstagramServiceError ? error.code : "INSTAGRAM_MEDIA_SEND_FAILED",
+            errorMessage: error instanceof InstagramServiceError ? error.message : "Falha ao enviar midia no Instagram",
+            payloadSummary: {
+              errorCode: error instanceof InstagramServiceError ? error.code : "INSTAGRAM_MEDIA_SEND_FAILED",
+              mediaKind: intent.kind,
+            },
+          }
+        : summarizeWhatsAppProviderFailure(error);
       await this.saveMessage({
         id: intent.message_id,
         leadId: params.lead.id,
@@ -14868,10 +14908,12 @@ export class AgentManager {
         intent,
       });
       await this.markUploadIntentStatus(intent.id, "failed");
-      await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id);
+      await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id, params.instanceName);
       throw new HttpError(
         providerFailure.statusCode,
-        `Falha ao enviar midia no WhatsApp (${providerName}): ${providerFailure.errorMessage}`,
+        providerName === "instagram"
+          ? `Falha ao enviar midia no Instagram: ${providerFailure.errorMessage}`
+          : `Falha ao enviar midia no WhatsApp (${providerName}): ${providerFailure.errorMessage}`,
         providerFailure.payloadSummary
       );
     }
@@ -14900,7 +14942,7 @@ export class AgentManager {
       intent,
     });
     await this.markUploadIntentStatus(intent.id, "consumed");
-    await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id);
+    await this.invalidateChatMessagesCache(params.context.acesId, params.lead.id, params.instanceName);
     await this.pauseAgentAfterManualSend({
       context: params.context,
       configuredAgent: params.configuredAgent,
@@ -14939,6 +14981,19 @@ export class AgentManager {
         }
       );
     }
+    if (sendPolicy.mode === "closed") {
+      throw new HttpError(
+        409,
+        "A janela de atendimento Instagram foi encerrada. Aguarde uma nova mensagem do cliente.",
+        { code: "INSTAGRAM_WINDOW_CLOSED", sendPolicy },
+      );
+    }
+    if (input.attachment && !sendPolicy.supportedAttachmentKinds.includes(input.attachment.kind)) {
+      throw new HttpError(409, "Este tipo de anexo nao e permitido neste canal", {
+        code: "CHANNEL_ATTACHMENT_UNSUPPORTED",
+        sendPolicy,
+      });
+    }
 
     const configuredAgent = await this.getAnyAgentByInstance(
       instanceName,
@@ -14964,7 +15019,74 @@ export class AgentManager {
         aiState,
         content,
         attachment: input.attachment,
+        providerName: sendPolicy.provider,
       });
+    }
+
+    if (sendPolicy.provider === "instagram") {
+      const sentAt = new Date().toISOString();
+      const conversationId = `manual-instagram:${Date.now()}`;
+      try {
+        const providerResult = await this.messagingDispatcher.dispatchText({
+          acesId: context.acesId,
+          instanceName,
+          leadId: lead.id,
+          phone: null,
+          text: content,
+          source: "human",
+        });
+        const saved = await this.saveMessage({
+          leadId: lead.id,
+          acesId: context.acesId,
+          content,
+          direction: "outbound",
+          sourceType: "human",
+          instanceName,
+          createdBy: context.crmUserId,
+          conversationId,
+          sentAt,
+          provider: providerResult.provider,
+          providerMessageId: providerResult.providerMessageId,
+          providerStatus: providerResult.providerStatus,
+          providerPayloadSummary: providerResult.raw ?? null,
+        });
+        await this.invalidateChatMessagesCache(context.acesId, lead.id, instanceName);
+        await this.pauseAgentAfterManualSend({
+          context,
+          configuredAgent,
+          lead,
+          instanceName,
+          aiState,
+          summary: content,
+        });
+        return { success: true, messageId: saved.id };
+      } catch (error) {
+        const errorCode = error instanceof InstagramServiceError
+          ? error.code
+          : "INSTAGRAM_SEND_FAILED";
+        await this.saveMessage({
+          leadId: lead.id,
+          acesId: context.acesId,
+          content,
+          direction: "outbound",
+          sourceType: "human",
+          instanceName,
+          createdBy: context.crmUserId,
+          conversationId,
+          sentAt,
+          provider: "instagram",
+          providerMessageId: null,
+          providerStatus: "failed",
+          providerErrorCode: errorCode,
+          providerErrorMessage: "Falha ao enviar mensagem no Instagram",
+          providerPayloadSummary: { errorCode },
+        });
+        throw new HttpError(
+          error instanceof InstagramServiceError ? error.statusCode : 502,
+          error instanceof InstagramServiceError ? error.message : "Falha ao enviar mensagem no Instagram",
+          { code: errorCode },
+        );
+      }
     }
 
     await this.sendReplyBlocks({

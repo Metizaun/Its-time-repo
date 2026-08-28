@@ -229,6 +229,8 @@ export default function Chat() {
 
   const gupshupWindowClosed =
     sendPolicy?.provider === "gupshup" && sendPolicy.mode === "template_required";
+  const instagramWindowClosed =
+    sendPolicy?.provider === "instagram" && sendPolicy.mode === "closed";
   const leadAiControl = useLeadAiControl(
     selectedLead?.id ?? null,
     activeInstanceName,
@@ -418,6 +420,8 @@ export default function Chat() {
                 key={selectedLead.id}
                 leadName={selectedLead.lead_name}
                 instanceName={activeInstanceName || selectedLead.instance_name}
+                channelLabel={selectedLead.instagram_username || selectedLead.instance_name}
+                avatarUrl={selectedLead.instagram_profile_picture_url}
                 showBackButton={isMobile}
                 onBack={() => handleSelectLead(null)}
                 onOpenDetails={() => setEditingLead(selectedLead)}
@@ -453,13 +457,19 @@ export default function Chat() {
                 <div className="border-t border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-3 sm:px-4">
                   <Skeleton className="h-[68px] w-full rounded-[var(--radius-xl)]" />
                 </div>
-              ) : gupshupWindowClosed ? (
+              ) : gupshupWindowClosed || instagramWindowClosed ? (
                 <ChatWindowNotice
                   canManageAutomations={isAdmin}
                   onOpenAutomations={() => navigate("/automacao")}
+                  variant={instagramWindowClosed ? "instagram" : "template"}
                 />
               ) : (
-                <ChatInput onSend={handleSendMessage} disabled={!sendPolicy} />
+                <ChatInput
+                  onSend={handleSendMessage}
+                  disabled={!sendPolicy}
+                  allowAttachments={sendPolicy?.supportsAttachments !== false}
+                  allowedAttachmentKinds={sendPolicy?.supportedAttachmentKinds}
+                />
               )}
             </>
           ) : (

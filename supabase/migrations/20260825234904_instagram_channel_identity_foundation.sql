@@ -453,3 +453,5 @@ COMMENT ON TABLE crm.lead_channel_identities IS
   'Provider-scoped lead identities. Instagram stores IGSID in provider_user_id.';
 COMMENT ON COLUMN crm.leads.contact_phone IS
   'Nullable for non-phone channels. Manual lead creation continues to require a phone.';
+
+;

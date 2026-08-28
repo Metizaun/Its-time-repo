@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { createRealtimeChannelName } from "@/lib/realtime";
 import {
   createAttachmentUploadUrl,
+  getInstagramBlockedPolicyFromError,
   getTemplateRequiredPolicyFromError,
   listChatMessages,
   sendManualMessage,
@@ -55,9 +56,10 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
     const attachment = payload.attachment ?? null;
     if (!content && !attachment) return;
 
-    const shouldUseOptimisticText = !attachment;
-    const tempMessage: ChatMessage | null = shouldUseOptimisticText
-        ? {
+    const optimisticAttachmentUrl = attachment && (attachment.kind === "image" || attachment.kind === "audio")
+      ? URL.createObjectURL(attachment.file)
+      : null;
+    const tempMessage: ChatMessage = {
             id: `temp-${Date.now()}`,
             lead_id: leadId,
             content,
@@ -69,16 +71,24 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
             sender_name: "Voce",
             source_type: "human",
             system_kind: null,
-            provider_status: null,
+            provider_status: "sending",
             quick_reply: null,
             template_card: null,
-            attachments: [],
-          }
-      : null;
+            attachments: attachment
+              ? [{
+                  id: `temp-attachment-${Date.now()}`,
+                  kind: attachment.kind,
+                  mimeType: attachment.mimeType,
+                  fileName: attachment.file.name,
+                  fileSize: attachment.file.size,
+                  url: optimisticAttachmentUrl,
+                  expiresAt: null,
+                  storageDeletedAt: null,
+                }]
+              : [],
+          };
 
-    if (tempMessage) {
-      setMessages((prev) => [...prev, tempMessage]);
-    }
+    setMessages((prev) => [...prev, tempMessage]);
 
     try {
       if (attachment) {
@@ -123,13 +133,15 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
         });
       }
 
-      await fetchMessages();
+      await fetchMessages({ silent: true });
+      if (optimisticAttachmentUrl) URL.revokeObjectURL(optimisticAttachmentUrl);
     } catch (error: unknown) {
-      if (tempMessage) {
-        setMessages((prev) => prev.filter((message) => message.id !== tempMessage.id));
-      }
+      setMessages((prev) => prev.filter((message) => message.id !== tempMessage.id));
+      if (optimisticAttachmentUrl) URL.revokeObjectURL(optimisticAttachmentUrl);
 
-      const blockedPolicy = getTemplateRequiredPolicyFromError(error);
+      const blockedPolicy =
+        getTemplateRequiredPolicyFromError(error) ??
+        getInstagramBlockedPolicyFromError(error);
       if (blockedPolicy) {
         setSendPolicy(blockedPolicy);
       }
@@ -217,8 +229,8 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
 
   useEffect(() => {
     if (
-      sendPolicy?.provider !== "gupshup" ||
-      sendPolicy.mode !== "freeform" ||
+      (sendPolicy?.provider !== "gupshup" && sendPolicy?.provider !== "instagram") ||
+      (sendPolicy.mode !== "freeform" && sendPolicy.mode !== "human_agent") ||
       sendPolicy.remainingMs === null
     ) {
       return;
@@ -227,8 +239,20 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
     const delayMs = Math.max(0, sendPolicy.remainingMs) + 25;
     const timeoutId = window.setTimeout(() => {
       setSendPolicy((current) =>
-        current?.provider === "gupshup"
-          ? { ...current, mode: "template_required", remainingMs: 0 }
+        current?.provider === "gupshup" || current?.provider === "instagram"
+          ? {
+              ...current,
+              mode:
+                current.provider === "gupshup"
+                  ? "template_required"
+                  : current.mode === "freeform"
+                    ? "human_agent"
+                    : "closed",
+              remainingMs:
+                current.provider === "instagram" && current.mode === "freeform"
+                  ? Math.max(0, Date.parse(current.windowExpiresAt ?? "") - Date.now())
+                  : 0,
+            }
           : current
       );
       void fetchMessages({ silent: true });

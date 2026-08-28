@@ -20,11 +20,19 @@ const META_WHATSAPP_FOUNDATION_MIGRATION =
 const GUPSHUP_FOUNDATION_MIGRATION =
   "supabase/migrations/20260707201001_add_gupshup_channel_foundation.sql";
 const INSTAGRAM_CHANNEL_FOUNDATION_MIGRATION =
-  "supabase/migrations/20260821192746_instagram_channel_identity_foundation.sql";
+  "supabase/migrations/20260825234904_instagram_channel_identity_foundation.sql";
 const INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION =
-  "supabase/migrations/20260821192752_instagram_operational_schema.sql";
+  "supabase/migrations/20260825234913_instagram_operational_schema.sql";
+const INSTAGRAM_MVP_RUNTIME_MIGRATION =
+  "supabase/migrations/20260826192311_instagram_mvp_runtime.sql";
+const INSTAGRAM_SET_5_OPERATIONS_MIGRATION =
+  "supabase/migrations/20260827160000_instagram_set_5_operations.sql";
+const INSTAGRAM_SET_5_EXPIRED_TOKEN_MIGRATION =
+  "supabase/migrations/20260827161000_instagram_expired_token_reconnect.sql";
+const INSTAGRAM_SET_5_PREFLIGHT_MIGRATION =
+  "supabase/migrations/20260827162000_instagram_operations_preflight.sql";
 const STORE_LOCATOR_MIGRATION =
-  "supabase/migrations/20260824205648_create_store_locator_foundation.sql";
+  "supabase/migrations/20260825234924_create_store_locator_foundation.sql";
 const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
@@ -260,6 +268,115 @@ async function validateMessagingChannelRpcs(
         missing.error
       )
     : null;
+}
+
+async function validateInstagramRuntimeRpcs(
+  instagramClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    instagramClient.rpc("rpc_fail_oauth", {
+      p_state_id: NIL_UUID,
+      p_error_code: "schema_preflight",
+    }),
+    instagramClient.rpc("rpc_complete_webhook_event", {
+      p_event_id: NIL_UUID,
+      p_worker_id: "schema-preflight",
+      p_status: "processed",
+    }),
+    instagramClient.rpc("rpc_fail_token_refresh", {
+      p_channel_id: NIL_UUID,
+      p_worker_id: "schema-preflight",
+      p_error_code: "schema_preflight",
+      p_reconnect_required: false,
+    }),
+    instagramClient.rpc("rpc_claim_manual_token_refresh", {
+      p_channel_id: NIL_UUID,
+      p_aces_id: 0,
+      p_worker_id: "schema-preflight",
+      p_min_token_age_hours: 24,
+      p_lease_seconds: 30,
+    }),
+    instagramClient.rpc("rpc_disable_channel", {
+      p_channel_id: NIL_UUID,
+      p_aces_id: 0,
+      p_actor_id: NIL_UUID,
+    }),
+    instagramClient.rpc("rpc_record_refresh_alert", {
+      p_channel_id: NIL_UUID,
+      p_aces_id: 0,
+      p_error_code: "schema_preflight",
+      p_reconnect_required: false,
+    }),
+    instagramClient.rpc("rpc_operational_metrics", {
+      p_aces_id: 0,
+      p_since: new Date(0).toISOString(),
+    }),
+  ];
+
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => {
+    if (!error) return false;
+    const normalized = normalizePostgrestError(error);
+    return normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message);
+  });
+
+  return missing?.error
+    ? buildSchemaFailure(
+        "RPCs do runtime Instagram",
+        INSTAGRAM_MVP_RUNTIME_MIGRATION,
+        missing.error
+      )
+    : null;
+}
+
+async function validateInstagramExpiredTokenRpc(
+  instagramClient: SupabaseClient<any, any, any>
+) {
+  const { error } = await instagramClient.rpc("rpc_mark_reconnect_required", {
+    p_channel_id: NIL_UUID,
+    p_aces_id: 0,
+    p_error_code: "schema_preflight",
+  });
+  return error
+    ? buildSchemaFailure(
+        "RPC de transicao de token expirado Instagram",
+        INSTAGRAM_SET_5_EXPIRED_TOKEN_MIGRATION,
+        error
+      )
+    : null;
+}
+
+async function validateInstagramOperationalObjects(
+  instagramClient: SupabaseClient<any, any, any>
+) {
+  const { data, error } = await instagramClient.rpc("rpc_operations_preflight");
+  if (error) {
+    return buildSchemaFailure(
+      "Objetos, grants e RLS das operacoes Instagram",
+      INSTAGRAM_SET_5_PREFLIGHT_MIGRATION,
+      error
+    );
+  }
+
+  const checks = [
+    "auditTable",
+    "auditRls",
+    "auditServiceRoleInsert",
+    "notificationsTable",
+    "notificationsIdempotencyKey",
+    "notificationsServiceRoleInsert",
+  ];
+  const valid =
+    data &&
+    typeof data === "object" &&
+    checks.every((key) => (data as Record<string, unknown>)[key] === true);
+  return valid
+    ? null
+    : buildManualSchemaFailure(
+        "Objetos, grants e RLS das operacoes Instagram",
+        INSTAGRAM_SET_5_PREFLIGHT_MIGRATION,
+        "Uma ou mais verificacoes operacionais retornaram false"
+      );
 }
 
 async function validatePipelineAttendanceRpcs(
@@ -868,6 +985,9 @@ export async function assertRuntimeSchemaCompatibility(
     validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
     validateIntelligentCompanyDirectoryRpc(serviceClient),
     validateMessagingChannelRpcs(serviceClient),
+    validateInstagramRuntimeRpcs(instagramClient),
+    validateInstagramExpiredTokenRpc(instagramClient),
+    validateInstagramOperationalObjects(instagramClient),
     validateSelectedColumns(
       serviceClient,
       "instance_channels",
@@ -885,9 +1005,33 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       instagramClient,
       "channels",
-      ["id", "channel_id", "aces_id", "ig_user_id", "health_status", "token_expires_at"],
+      [
+        "id",
+        "channel_id",
+        "aces_id",
+        "ig_user_id",
+        "health_status",
+        "token_expires_at",
+        "next_refresh_at",
+        "refresh_attempt_count",
+        "refresh_lease_expires_at",
+      ],
       "instagram.channels",
-      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+      INSTAGRAM_MVP_RUNTIME_MIGRATION
+    ),
+    validateSelectedColumns(
+      instagramClient,
+      "admin_audit_events",
+      ["id", "aces_id", "channel_id", "actor_id", "action", "outcome", "error_code", "metadata", "created_at"],
+      "instagram.admin_audit_events",
+      INSTAGRAM_SET_5_OPERATIONS_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "notifications",
+      ["id", "aces_id", "category", "event_type", "title", "description", "action_path", "idempotency_key"],
+      "crm.notifications para alertas Instagram",
+      CHAT_NOTIFICATIONS_AUDIO_MIGRATION
     ),
     validateSelectedColumns(
       instagramClient,
@@ -899,16 +1043,34 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       instagramClient,
       "oauth_states",
-      ["id", "state_hash", "nonce_hash", "aces_id", "instance_name", "expires_at", "status"],
+      [
+        "id",
+        "state_hash",
+        "nonce_hash",
+        "authorization_code_hash",
+        "aces_id",
+        "instance_name",
+        "expires_at",
+        "status",
+        "completed_channel_id",
+      ],
       "instagram.oauth_states",
       INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
     ),
     validateSelectedColumns(
       instagramClient,
       "webhook_events",
-      ["id", "event_key", "channel_id", "status", "attempt_count", "lease_expires_at"],
+      [
+        "id",
+        "event_key",
+        "channel_id",
+        "status",
+        "attempt_count",
+        "lease_expires_at",
+        "normalized_payload",
+      ],
       "instagram.webhook_events",
-      INSTAGRAM_OPERATIONAL_SCHEMA_MIGRATION
+      INSTAGRAM_MVP_RUNTIME_MIGRATION
     ),
     validateSelectedColumns(
       instagramClient,

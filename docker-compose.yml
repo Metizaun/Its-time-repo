@@ -19,6 +19,8 @@ services:
       - .env.local
     environment:
       - SUPABASE_URL=http://host.docker.internal:55321
+      - CRM_BACKEND_PUBLIC_URL=https://instagram-dev-api.itstime.pro
+      - CRM_FRONTEND_PUBLIC_URL=http://localhost:8080
       - REDIS_URL=redis://redis:6379
       - RB_WEBHOOK_JWT_SECRET=${RB_WEBHOOK_JWT_SECRET:-local-only-rb-webhook-secret}
       - RB_API_BASE_URL=${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}

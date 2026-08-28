@@ -18,6 +18,8 @@ type ChatAiControl = {
 interface ChatHeaderProps {
   leadName: string;
   instanceName?: string | null;
+  channelLabel?: string | null;
+  avatarUrl?: string | null;
   showBackButton?: boolean;
   onBack?: () => void;
   onOpenDetails?: () => void;
@@ -60,6 +62,8 @@ function getAiTooltipText(aiControl: ChatAiControl) {
 export function ChatHeader({
   leadName,
   instanceName,
+  channelLabel,
+  avatarUrl,
   showBackButton = false,
   onBack,
   onOpenDetails,
@@ -69,8 +73,14 @@ export function ChatHeader({
   aiControl,
 }: ChatHeaderProps) {
   const initial = leadName.charAt(0).toUpperCase();
+  const effectiveChannelLabel = channelLabel ?? instanceName ?? null;
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [transitionState, setTransitionState] = useState<"idle" | "turning-on" | "turning-off">("idle");
   const previousEnabledRef = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [avatarUrl]);
 
   useEffect(() => {
     if (!aiControl) {
@@ -118,14 +128,23 @@ export function ChatHeader({
           </button>
         )}
 
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10">
-          <span className="text-sm font-bold text-[var(--color-accent)]">{initial}</span>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10">
+          {avatarUrl && !avatarLoadFailed ? (
+            <img
+              src={avatarUrl}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={() => setAvatarLoadFailed(true)}
+            />
+          ) : (
+            <span className="text-sm font-bold text-[var(--color-accent)]">{initial}</span>
+          )}
         </div>
         <div className="min-w-0">
           <h2 className="truncate text-base font-bold leading-tight text-foreground">{leadName}</h2>
-          {instanceName && (
+          {effectiveChannelLabel && (
             <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-              {instanceName}
+              {effectiveChannelLabel}
             </span>
           )}
         </div>

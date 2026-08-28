@@ -5,12 +5,16 @@ import { Button } from "@/components/ui/button";
 interface ChatWindowNoticeProps {
   canManageAutomations: boolean;
   onOpenAutomations: () => void;
+  variant?: "template" | "instagram";
 }
 
 export function ChatWindowNotice({
   canManageAutomations,
   onOpenAutomations,
+  variant = "template",
 }: ChatWindowNoticeProps) {
+  const isInstagram = variant === "instagram";
+
   return (
     <div className="border-t border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-3 sm:px-4">
       <div
@@ -27,14 +31,16 @@ export function ChatWindowNotice({
               Janela de atendimento encerrada
             </p>
             <p className="mt-1 text-sm text-[var(--color-gray-600)]">
-              {canManageAutomations
-                ? "Para iniciar uma nova conversa, envie um template aprovado pela área de Automações."
-                : "Para iniciar uma nova conversa, solicite a um administrador o envio de um template aprovado."}
+              {isInstagram
+                ? "Aguarde uma nova mensagem do cliente para responder."
+                : canManageAutomations
+                  ? "Para iniciar uma nova conversa, envie um template aprovado pela área de Automações."
+                  : "Para iniciar uma nova conversa, solicite a um administrador o envio de um template aprovado."}
             </p>
           </div>
         </div>
 
-        {canManageAutomations ? (
+        {canManageAutomations && !isInstagram ? (
           <Button
             className="w-full shrink-0 sm:w-auto"
             onClick={onOpenAutomations}

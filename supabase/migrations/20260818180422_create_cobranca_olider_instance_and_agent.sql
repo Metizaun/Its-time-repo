@@ -1,4 +1,8 @@
 -- 1) Nova instância dedicada de cobrança para a Ótica Líder
+-- Seed especifico de producao; nao cria tenant numa base vazia.
+DO $seed$
+BEGIN
+IF EXISTS (SELECT 1 FROM crm.accounts WHERE id = 9) THEN
 INSERT INTO crm.instance (instancia, aces_id, color, status, setup_status)
 VALUES ('cobranca_olider', 9, '#dc2626', 'disconnected', 'pending_qr');
 
@@ -34,4 +38,7 @@ SET instance_name = 'cobranca_olider',
         FROM jsonb_array_elements(entry_rule->'children') elem
       )
     )
-WHERE aces_id = 9 AND name = 'RB Ótica Líder - Cobrança (5 dias)';;
+WHERE aces_id = 9 AND name = 'RB Ótica Líder - Cobrança (5 dias)';
+END IF;
+END;
+$seed$;

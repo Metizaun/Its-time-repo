@@ -6,6 +6,7 @@ import {
   Check,
   Copy,
   Eraser,
+  Instagram,
   Link2,
   Loader2,
   MessageCircle,
@@ -29,6 +30,9 @@ import {
   fetchInstanceStatus,
   listAdminInstances,
   listGupshupChannels,
+  listInstagramChannels,
+  refreshInstagramChannel,
+  disableInstagramChannel,
   listMetaChannels,
   listMetaTemplates,
   listRbConnections,
@@ -37,10 +41,12 @@ import {
   syncInstanceStatus,
   syncMetaTemplates,
   saveRbConnection,
+  startInstagramOAuth,
   upsertGupshupChannel,
   upsertMetaChannel,
   type AdminGupshupChannel,
   type AdminInstance,
+  type AdminInstagramChannel,
   type AdminGupshupChannelSummary,
   type AdminInstanceSetupStatus,
   type AdminMetaChannelSummary,
@@ -50,6 +56,16 @@ import {
   type MetaChannelStatus,
 } from "@/services/instanceService";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -82,7 +98,7 @@ import { Switch } from "@/components/ui/switch";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
-type ExternalConnectionType = "selection" | "webhook" | "gupshup" | "rb";
+type ExternalConnectionType = "selection" | "webhook" | "gupshup" | "instagram" | "rb";
 
 function setupStatusLabel(setupStatus: AdminInstanceSetupStatus) {
   switch (setupStatus) {
@@ -118,12 +134,14 @@ export function InstanceManager() {
   const [rbConnections, setRbConnections] = useState<AdminRbConnection[]>([]);
   const [metaChannels, setMetaChannels] = useState<Record<string, AdminMetaChannelSummary>>({});
   const [gupshupChannels, setGupshupChannels] = useState<Record<string, AdminGupshupChannelSummary>>({});
+  const [instagramChannels, setInstagramChannels] = useState<Record<string, AdminInstagramChannel>>({});
   const [metaTemplates, setMetaTemplates] = useState<Record<string, AdminMetaTemplate[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [instagramPendingDisable, setInstagramPendingDisable] = useState<AdminInstagramChannel | null>(null);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [instanceNameInput, setInstanceNameInput] = useState("");
@@ -262,9 +280,10 @@ export function InstanceManager() {
       const result = await listAdminInstances({ accessToken });
       setInstances(result.instances ?? []);
       try {
-        const [metaResult, gupshupResult, rbResult] = await Promise.all([
+        const [metaResult, gupshupResult, instagramResult, rbResult] = await Promise.all([
           listMetaChannels({ accessToken }),
           listGupshupChannels({ accessToken }),
+          listInstagramChannels({ accessToken }),
           listRbConnections({ accessToken }),
         ]);
         setMetaChannels(
@@ -272,6 +291,9 @@ export function InstanceManager() {
         );
         setGupshupChannels(
           Object.fromEntries((gupshupResult.channels ?? []).map((item) => [item.instanceName, item]))
+        );
+        setInstagramChannels(
+          Object.fromEntries((instagramResult.channels ?? []).map((item) => [item.instanceName, item]))
         );
         setRbConnections(rbResult.connections ?? []);
       } catch (metaErr: any) {
@@ -282,6 +304,7 @@ export function InstanceManager() {
         } else {
           setMetaChannels({});
           setGupshupChannels({});
+          setInstagramChannels({});
           setRbConnections([]);
           setMetaError(metaErr?.message ?? "Nao foi possivel carregar canais Meta");
         }
@@ -505,6 +528,60 @@ export function InstanceManager() {
       toast.error("Falha ao criar instancia", { description: err?.message });
     } finally {
       setCreatingInstance(false);
+    }
+  };
+
+  const handleConnectInstagram = async (existingInstanceName?: string) => {
+    const instanceName = (existingInstanceName ?? instanceNameInput).trim();
+    if (!instanceName) {
+      toast.error("Informe um nome para a instancia.");
+      return;
+    }
+
+    try {
+      const actionKey = `instagram:${instanceName}`;
+      if (existingInstanceName) setBusyAction(actionKey);
+      else setCreatingInstance(true);
+      const accessToken = await getAccessToken();
+      const result = await startInstagramOAuth({ accessToken, instanceName });
+      window.location.assign(result.authorizationUrl);
+    } catch (err: unknown) {
+      toast.error("Falha ao conectar Instagram", {
+        description: err instanceof Error ? err.message : "Tente novamente.",
+      });
+      setBusyAction(null);
+      setCreatingInstance(false);
+    }
+  };
+
+  const handleRefreshInstagram = async (channel: AdminInstagramChannel) => {
+    try {
+      setBusyAction(`instagram-refresh:${channel.channelId}`);
+      const accessToken = await getAccessToken();
+      await refreshInstagramChannel({ accessToken, channelId: channel.channelId });
+      toast.success("Conexao Instagram renovada");
+      await loadInstances({ silent: true });
+    } catch (err: any) {
+      toast.error("Nao foi possivel renovar a conexao Instagram", { description: err?.message });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleDisableInstagram = async () => {
+    const channel = instagramPendingDisable;
+    if (!channel) return;
+    try {
+      setBusyAction(`instagram-disable:${channel.channelId}`);
+      const accessToken = await getAccessToken();
+      await disableInstagramChannel({ accessToken, channelId: channel.channelId });
+      setInstagramPendingDisable(null);
+      toast.success("Canal Instagram desativado");
+      await loadInstances({ silent: true });
+    } catch (err: any) {
+      toast.error("Nao foi possivel desativar o canal Instagram", { description: err?.message });
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -850,6 +927,8 @@ export function InstanceManager() {
     activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "webhook";
   const isGupshupConnectionForm =
     activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "gupshup";
+  const isInstagramConnectionForm =
+    activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "instagram";
   const isRbConnectionForm =
     activeCreateMode === "external_webhook" && !createdInstanceName && externalConnectionType === "rb";
 
@@ -926,10 +1005,16 @@ export function InstanceManager() {
               const isBusy = Boolean(busyAction);
               const metaSummary = metaChannels[instance.instanceName];
               const gupshupSummary = gupshupChannels[instance.instanceName];
+              const instagramChannel = instagramChannels[instance.instanceName] ?? null;
+              const isInstagram = instance.connectionMode === "instagram";
               const metaChannel = metaSummary?.channel ?? null;
               const gupshupChannel = gupshupSummary?.gupshupChannel ?? null;
               const providerName =
-                gupshupSummary?.provider ?? metaSummary?.provider ?? "evolution";
+                isInstagram ? "instagram" : gupshupSummary?.provider ?? metaSummary?.provider ?? "evolution";
+              const instagramStatus = instagramChannel?.status ?? "disconnected";
+              const instagramHealth = instagramChannel?.healthStatus ?? "pending";
+              const instagramNeedsReconnect = instagramStatus === "reconnect_required" || instagramHealth === "reconnect_required";
+              const instagramDisabled = instagramStatus === "disabled" || instagramHealth === "disabled";
               const templates = metaTemplates[instance.instanceName] ?? [];
 
               return (
@@ -942,7 +1027,12 @@ export function InstanceManager() {
                       <span className="font-medium text-sm">{instance.instanceName}</span>
                       <div className="flex flex-wrap items-center gap-2">
                         {statusBadge(instance.status)}
-                        {providerName === "gupshup" ? (
+                        {providerName === "instagram" ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-gray-600)]">
+                            <Instagram className="h-3.5 w-3.5" aria-hidden="true" />
+                            Instagram{instagramChannel?.igUsername ? ` @${instagramChannel.igUsername}` : ""}
+                          </span>
+                        ) : providerName === "gupshup" ? (
                           <>
                             <Badge variant={gupshupChannel?.status === "active" ? "secondary" : "outline"}>
                               Gupshup {gupshupChannel?.status ?? "nao configurada"}
@@ -969,6 +1059,14 @@ export function InstanceManager() {
                       )}
                       {instance.lastError && (
                         <span className="text-xs text-destructive">{instance.lastError}</span>
+                      )}
+                      {providerName === "instagram" && instagramChannel && (
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div>Saude: <span className="font-medium">{instagramHealth === "healthy" ? "Ativa" : instagramHealth === "warning" ? "Atencao" : instagramHealth === "reconnect_required" ? "Reconexao necessaria" : instagramHealth === "disabled" ? "Desativada" : "Aguardando"}</span></div>
+                          {instagramChannel.tokenExpiresAt && <div>Token expira em {new Date(instagramChannel.tokenExpiresAt).toLocaleString("pt-BR")}</div>}
+                          {instagramChannel.lastRefreshedAt && <div>Ultima renovacao em {new Date(instagramChannel.lastRefreshedAt).toLocaleString("pt-BR")}</div>}
+                          {instagramChannel.lastErrorCode && <div className="text-destructive">A conexao precisa de atencao.</div>}
+                        </div>
                       )}
                     </div>
 
@@ -1082,7 +1180,22 @@ export function InstanceManager() {
                       </Button>
                     )}
 
-                    {providerName !== "gupshup" ? (
+                    {providerName === "instagram" ? (
+                      <>
+                        <Button size="sm" variant={instagramNeedsReconnect || instagramDisabled ? "default" : "outline"} disabled={isBusy} onClick={() => void handleConnectInstagram(instance.instanceName)}>
+                          {busyAction === `instagram:${instance.instanceName}` ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Instagram className="h-3.5 w-3.5 mr-1.5" />}
+                          {instagramNeedsReconnect || instagramDisabled ? "Reconectar Instagram" : "Atualizar conexao"}
+                        </Button>
+                        {instagramChannel && !instagramDisabled && <Button size="sm" variant="outline" disabled={isBusy} onClick={() => void handleRefreshInstagram(instagramChannel)}>
+                          {busyAction === `instagram-refresh:${instagramChannel.channelId}` ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                          Renovar
+                        </Button>}
+                        {instagramChannel && !instagramDisabled && <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" disabled={isBusy} onClick={() => setInstagramPendingDisable(instagramChannel)}>
+                          <Unplug className="h-3.5 w-3.5 mr-1.5" />
+                          Desativar
+                        </Button>}
+                      </>
+                    ) : providerName !== "gupshup" ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1186,6 +1299,31 @@ export function InstanceManager() {
             </div>
           </div>
         ) : null}
+
+        <AlertDialog open={Boolean(instagramPendingDisable)} onOpenChange={(open) => !open && setInstagramPendingDisable(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Desativar canal Instagram?</AlertDialogTitle>
+              <AlertDialogDescription>
+                A desativacao afeta somente a conexao Instagram selecionada. Historico, leads e canais WhatsApp serao preservados.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={Boolean(busyAction)}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  void handleDisableInstagram();
+                }}
+                disabled={Boolean(busyAction)}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {busyAction?.startsWith("instagram-disable:") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Desativar canal
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </Card>
 
       <Dialog open={metaDialogOpen} onOpenChange={setMetaDialogOpen}>
@@ -1449,6 +1587,8 @@ export function InstanceManager() {
               {activeCreateMode === "external_webhook" ? (
                 isGupshupConnectionForm ? (
                   <MessageCircle className="h-5 w-5" />
+                ) : isInstagramConnectionForm ? (
+                  <Instagram className="h-5 w-5" />
                 ) : isRbConnectionForm ? (
                   <Cable className="h-5 w-5" />
                 ) : (
@@ -1462,6 +1602,8 @@ export function InstanceManager() {
                   ? "Conexões externas"
                   : isGupshupConnectionForm
                     ? "Via Gupshup"
+                    : isInstagramConnectionForm
+                      ? "Instagram"
                     : isRbConnectionForm
                       ? "Via RB"
                       : "Via webhook"
@@ -1479,6 +1621,14 @@ export function InstanceManager() {
                 >
                   <span className="text-sm font-semibold text-[var(--color-gray-900)]">Via Gupshup</span>
                   <MessageCircle className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExternalConnectionType("instagram")}
+                  className="group flex items-center justify-between rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--color-primary-200)] hover:bg-[var(--color-surface-1)] hover:shadow-md"
+                >
+                  <span className="text-sm font-semibold text-[var(--color-gray-900)]">Instagram</span>
+                  <Instagram className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
                 </button>
                 <button
                   type="button"
@@ -1778,7 +1928,7 @@ export function InstanceManager() {
                 <Button variant="ghost" onClick={resetCreateDialog} disabled={creatingInstance || rbSaving}>
                   Cancelar
                 </Button>
-                {(isWebhookConnectionForm || isGupshupConnectionForm || isRbConnectionForm) && (
+                {(isWebhookConnectionForm || isGupshupConnectionForm || isInstagramConnectionForm || isRbConnectionForm) && (
                   <Button
                     variant="outline"
                     onClick={() => setExternalConnectionType("selection")}
@@ -1789,7 +1939,7 @@ export function InstanceManager() {
                 )}
                 {!isExternalConnectionPicker && (
                   <Button
-                    onClick={isRbConnectionForm ? handleSaveRbConnection : isGupshupConnectionForm ? handleSaveGupshupChannel : handleCreateInstance}
+                    onClick={isRbConnectionForm ? handleSaveRbConnection : isGupshupConnectionForm ? handleSaveGupshupChannel : isInstagramConnectionForm ? () => void handleConnectInstagram() : handleCreateInstance}
                     disabled={creatingInstance || gupshupSaving || rbSaving}
                   >
                     {creatingInstance || gupshupSaving || rbSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}

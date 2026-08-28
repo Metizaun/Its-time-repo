@@ -17,6 +17,7 @@ interface MessageBubbleProps {
   quickReply?: ChatQuickReply | null;
   templateCard?: ChatTemplateCard | null;
   replyToMessage?: ChatMessage | null;
+  providerStatus?: string | null;
 }
 
 const ATTACHMENT_PLACEHOLDERS = new Set([
@@ -43,7 +44,9 @@ export function MessageBubble({
   quickReply = null,
   templateCard = null,
   replyToMessage = null,
+  providerStatus = null,
 }: MessageBubbleProps) {
+  const isSending = isOutbound && providerStatus === "sending";
   const time = format(new Date(sentAt), "HH:mm", { locale: ptBR });
   const normalizedContent = content.trim();
   const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
@@ -91,9 +94,10 @@ export function MessageBubble({
   return (
     <div className={cn(
       "flex w-full",
+      isSending && "pr-2",
       isOutbound ? "justify-end" : "justify-start"
     )}>
-      <div className="min-w-0 max-w-[min(82%,36rem)]">
+      <div className={cn("min-w-0 max-w-[min(82%,36rem)]", isSending && "opacity-70")}>
         <div className={cn(
           "px-4 py-2.5 text-sm shadow-sm",
           isOutbound
@@ -139,7 +143,7 @@ export function MessageBubble({
                 : "text-[var(--color-primary-100)]"
               : "text-[var(--color-gray-500)]"
           )}>
-            {time}
+            {isSending ? "Enviando..." : time}
           </p>
         </div>
         {quickReply?.kind === "options" && <QuickReplyOptions options={quickReply.options} />}

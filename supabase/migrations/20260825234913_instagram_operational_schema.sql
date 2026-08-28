@@ -176,3 +176,5 @@ COMMENT ON SCHEMA instagram IS
   'Backend-only operational data for Instagram Messaging.';
 COMMENT ON TABLE instagram.channel_credentials IS
   'AES-256-GCM encrypted access tokens. Plaintext tokens are forbidden.';
+
+;
