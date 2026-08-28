@@ -1,10 +1,12 @@
 export type ChatAttachmentKind = "image" | "audio" | "document";
 export type ChatSystemKind = "handoff_transition" | "handoff_note" | "handoff_complete";
-export type ChatProvider = "evolution" | "meta" | "gupshup";
+export type ChatProvider = "evolution" | "meta" | "gupshup" | "instagram";
 
 export interface ChatSendPolicy {
   provider: ChatProvider;
-  mode: "freeform" | "template_required";
+  mode: "freeform" | "human_agent" | "template_required" | "closed";
+  supportsAttachments: boolean;
+  supportedAttachmentKinds: ChatAttachmentKind[];
   lastInboundAt: string | null;
   windowExpiresAt: string | null;
   evaluatedAt: string;

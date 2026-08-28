@@ -118,6 +118,7 @@ export function MessageList({ messages, loading }: MessageListProps) {
                     ? messagesById.get(message.quick_reply.replyToMessageId) ?? null
                     : null
                 }
+                providerStatus={message.provider_status}
               />
             </Fragment>
           );

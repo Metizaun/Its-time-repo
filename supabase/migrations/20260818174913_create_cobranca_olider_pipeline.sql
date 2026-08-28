@@ -1,6 +1,8 @@
 WITH new_pipeline AS (
   INSERT INTO crm.pipelines (aces_id, name, description, is_active)
-  VALUES (9, 'Cobrança_OLider', 'Pipeline dedicado à etapa de cobrança e automação RB da Ótica Líder.', true)
+  SELECT 9, 'Cobrança_OLider', 'Pipeline dedicado à etapa de cobrança e automação RB da Ótica Líder.', true
+  FROM crm.accounts
+  WHERE id = 9
   RETURNING id
 ),
 stage_atendimento AS (

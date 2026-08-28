@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(22);
+SELECT plan(23);
 
 SELECT has_table('crm', 'instance_channels', 'crm.instance_channels existe');
 SELECT has_table('crm', 'lead_channel_identities', 'crm.lead_channel_identities existe');
@@ -101,8 +101,18 @@ SELECT ok(
   'service_role acessa instagram.channels'
 );
 SELECT ok(
-  NOT has_table_privilege('authenticated', 'crm.lead_channel_identities', 'SELECT'),
-  'authenticated nao acessa identidades externas'
+  has_table_privilege('authenticated', 'crm.lead_channel_identities', 'SELECT'),
+  'authenticated pode consultar identidades para o CRM'
+);
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'crm'
+      AND tablename = 'lead_channel_identities'
+      AND policyname = 'lead_channel_identities_select'
+  ),
+  'identidades externas sao protegidas por RLS de lead'
 );
 SELECT ok(
   NOT has_function_privilege(

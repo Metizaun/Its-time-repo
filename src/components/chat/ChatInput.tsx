@@ -29,10 +29,13 @@ const VOICE_WAVEFORM_BARS = [
   6, 18, 12, 15, 9, 20, 10, 14,
 ];
 const VOICE_WAVEFORM_BAR_COUNT = VOICE_WAVEFORM_BARS.length;
+const DEFAULT_ATTACHMENT_KINDS: ChatAttachmentKind[] = ["image", "audio", "document"];
 
 interface ChatInputProps {
   onSend: (payload: ChatComposerPayload) => Promise<void>;
   disabled?: boolean;
+  allowAttachments?: boolean;
+  allowedAttachmentKinds?: ChatAttachmentKind[];
 }
 
 type SelectedAttachment = {
@@ -222,7 +225,12 @@ function VoiceWaveform({
   );
 }
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  disabled,
+  allowAttachments = true,
+  allowedAttachmentKinds = DEFAULT_ATTACHMENT_KINDS,
+}: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<SelectedAttachment | null>(null);
@@ -352,6 +360,11 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       return;
     }
 
+    if (!allowedAttachmentKinds.includes(kind)) {
+      setAttachmentError(kind === "document" ? "Este canal aceita somente foto e audio." : "Este tipo de arquivo nao e permitido neste canal.");
+      return;
+    }
+
     if (file.size > CHAT_ATTACHMENT_MAX_FILE_SIZE) {
       setAttachmentError("Arquivo acima do limite de 100 MB.");
       return;
@@ -369,6 +382,10 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   };
 
   const handleStartRecording = async () => {
+    if (!allowedAttachmentKinds.includes("audio")) {
+      setAttachmentError("Audio nao e permitido neste canal.");
+      return;
+    }
     clearSelectedAttachment();
     await audioRecorder.startRecording();
   };
@@ -397,6 +414,21 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
     }
   }, [message]);
+
+  useEffect(() => {
+    if (!allowAttachments) {
+      audioRecorder.cancelRecording();
+      clearSelectedAttachment();
+    }
+    // A mudanca de canal deve limpar qualquer midia preparada no canal anterior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowAttachments]);
+
+  useEffect(() => {
+    if (selectedAttachment && !allowedAttachmentKinds.includes(selectedAttachment.kind)) {
+      clearSelectedAttachment();
+    }
+  }, [allowedAttachmentKinds, clearSelectedAttachment, selectedAttachment]);
 
   useEffect(() => {
     return () => {
@@ -482,13 +514,19 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   return (
     <div className="w-full border-t border-[var(--border-default)] bg-[var(--color-surface-1)] px-4 py-3 md:px-5 md:py-4">
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="sr-only"
-        accept={CHAT_ATTACHMENT_ACCEPT.join(",")}
-        onChange={handleFileChange}
-      />
+      {allowAttachments ? (
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="sr-only"
+          accept={CHAT_ATTACHMENT_ACCEPT.filter((accept) => {
+            if (accept.startsWith("image/")) return allowedAttachmentKinds.includes("image");
+            if (accept.startsWith("audio/")) return allowedAttachmentKinds.includes("audio");
+            return allowedAttachmentKinds.includes("document");
+          }).join(",")}
+          onChange={handleFileChange}
+        />
+      ) : null}
 
       <div className="mx-auto flex w-full flex-col gap-3">
         {displayedError && (
@@ -537,13 +575,15 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         )}
 
         <div className="relative flex items-end gap-2 rounded-[var(--radius-2xl)] border border-[var(--border-input)] bg-[var(--color-surface-2)] px-2 py-2 shadow-inset transition-all duration-200 focus-within:border-[var(--border-focus)] focus-within:shadow-focus md:px-3">
-          <ToolButton
-            label="Anexar arquivo"
-            disabled={disabled || isSending || isRecordingAudio}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Paperclip className="h-4 w-4" />
-          </ToolButton>
+          {allowAttachments ? (
+            <ToolButton
+              label="Anexar arquivo"
+              disabled={disabled || isSending || isRecordingAudio}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip className="h-4 w-4" />
+            </ToolButton>
+          ) : null}
 
           {isRecordingAudio ? (
             <div className="chat-voice-inline" role="status" aria-live="polite">
@@ -625,7 +665,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             <RoundActionButton label="Enviar mensagem" disabled={!canSend} muted={!canSend} onClick={() => void handleSend()}>
               {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="ml-0.5 h-4 w-4" />}
             </RoundActionButton>
-          ) : (
+          ) : allowAttachments && allowedAttachmentKinds.includes("audio") ? (
             <RoundActionButton
               label={audioRecorder.isSupported ? "Gravar audio" : "Gravacao indisponivel"}
               disabled={disabled || isSending || !audioRecorder.isSupported}
@@ -633,7 +673,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             >
               <Mic className="h-4 w-4" />
             </RoundActionButton>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

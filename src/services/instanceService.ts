@@ -4,7 +4,7 @@ type AuthHeadersInput = {
   accessToken: string;
 };
 
-export type InstanceConnectionMode = "local" | "external_webhook";
+export type InstanceConnectionMode = "local" | "external_webhook" | "instagram";
 
 type CreateInstanceInput = AuthHeadersInput & {
   instanceName: string;
@@ -87,6 +87,20 @@ export type AdminGupshupChannelSummary = {
   instanceName: string;
   provider: "evolution" | "meta" | "gupshup";
   gupshupChannel: AdminGupshupChannel | null;
+};
+
+export type AdminInstagramChannel = {
+  channelId: string;
+  instanceName: string;
+  status: string;
+  healthStatus: string;
+  igUserId: string | null;
+  igUsername: string | null;
+  tokenObtainedAt: string | null;
+  tokenExpiresAt: string | null;
+  lastRefreshedAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorAt: string | null;
 };
 
 export type AdminRbConnection = {
@@ -358,6 +372,67 @@ export async function upsertGupshupChannel({
     success: boolean;
     channel: AdminGupshupChannel;
   }>(response);
+}
+
+export async function listInstagramChannels({ accessToken }: AuthHeadersInput) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/instagram/channels`, {
+    method: "GET",
+    headers: buildHeaders(accessToken),
+  });
+
+  return parseResponse<{
+    success: boolean;
+    channels: AdminInstagramChannel[];
+  }>(response);
+}
+
+export async function startInstagramOAuth({
+  accessToken,
+  instanceName,
+}: AuthHeadersInput & { instanceName: string }) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/instagram/oauth/start`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({
+      instanceName,
+      returnPath: "/admin?section=instances",
+    }),
+  });
+
+  return parseResponse<{
+    authorizationUrl: string;
+    expiresAt: string;
+  }>(response);
+}
+
+export async function refreshInstagramChannel({ accessToken, channelId }: AuthHeadersInput & { channelId: string }) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/instagram/channels/${encodeURIComponent(channelId)}/refresh`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+  });
+  return parseResponse<{
+    success: boolean;
+    channel: { channelId: string; tokenExpiresAt: string; lastRefreshedAt: string };
+  }>(response);
+}
+
+export async function disableInstagramChannel({ accessToken, channelId }: AuthHeadersInput & { channelId: string }) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/instagram/channels/${encodeURIComponent(channelId)}/disable`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+  });
+  return parseResponse<{
+    success: boolean;
+    channel: { channelId: string; instanceName: string; status: "disabled" };
+  }>(response);
+}
+
+export async function getInstagramMetrics({ accessToken, hours = 24 }: AuthHeadersInput & { hours?: number }) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/instagram/metrics?hours=${encodeURIComponent(String(hours))}`, {
+    method: "GET",
+    headers: buildHeaders(accessToken),
+  });
+  return parseResponse<{ success: boolean; metrics: Record<string, unknown> }>(response);
 }
 
 export async function listRbConnections({ accessToken }: AuthHeadersInput) {

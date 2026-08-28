@@ -1,6 +1,8 @@
 WITH new_pipeline AS (
   INSERT INTO crm.pipelines (aces_id, name, description, is_active)
-  VALUES (10, 'Cobrança_Opaulo', 'Pipeline dedicado às etapas de cobrança e automações RB da Óticas Paula.', true)
+  SELECT 10, 'Cobrança_Opaulo', 'Pipeline dedicado às etapas de cobrança e automações RB da Óticas Paula.', true
+  FROM crm.accounts
+  WHERE id = 10
   RETURNING id
 ),
 stage_atendimento AS (
@@ -47,12 +49,16 @@ stage_finalizado AS (
 ),
 new_instance AS (
   INSERT INTO crm.instance (instancia, aces_id, color, status, setup_status)
-  VALUES ('cobranca_opaulo', 10, '#dc2626', 'disconnected', 'pending_qr')
+  SELECT 'cobranca_opaulo', 10, '#dc2626', 'disconnected', 'pending_qr'
+  FROM crm.accounts
+  WHERE id = 10
   RETURNING instancia
 ),
 new_tag AS (
   INSERT INTO crm.tags (aces_id, name, usage_description)
-  VALUES (10, 'Negativação', 'Aplicar manualmente em leads encaminhados ao processo de negativação (30+ dias de atraso) na régua de cobrança da Óticas Paula.')
+  SELECT 10, 'Negativação', 'Aplicar manualmente em leads encaminhados ao processo de negativação (30+ dias de atraso) na régua de cobrança da Óticas Paula.'
+  FROM crm.accounts
+  WHERE id = 10
   RETURNING id
 ),
 funnel_vencimento AS (

@@ -34,6 +34,8 @@ export interface Lead {
   notes: string | null;
   instance_name?: string | null;
   instance_color?: string | null;
+  instagram_username: string | null;
+  instagram_profile_picture_url: string | null;
   last_tag_name: string | null;
   last_tag_urgencia: number | null;
   interaction_mode: "ai" | "human";
