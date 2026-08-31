@@ -1112,6 +1112,7 @@ app.post(
     const appId = asString(req.body.appId);
     const channel = await gupshupAdminService.upsertChannel({
       acesId: context.acesId,
+      createdBy: context.crmUserId,
       instanceName,
       appId,
       appName,

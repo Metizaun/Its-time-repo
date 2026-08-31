@@ -8,6 +8,7 @@ export type GupshupAdminServiceConfig = {
 
 export type UpsertGupshupChannelInput = {
   acesId: number;
+  createdBy: string;
   instanceName: string;
   appId?: string | null;
   appName: string;
@@ -29,7 +30,7 @@ type GupshupChannelRow = {
   updated_at: string;
 };
 
-type CrmInstanceRow = { instancia: string };
+type CrmInstanceRow = { instancia: string; aces_id: number };
 type InstanceChannelRow = { instance_name: string; provider: string };
 
 export class GupshupAdminService {
@@ -66,7 +67,11 @@ export class GupshupAdminService {
   }
 
   async upsertChannel(input: UpsertGupshupChannelInput) {
-    const instance = await this.requireInstance(input.acesId, input.instanceName);
+    const instance = await this.ensureInstance(
+      input.acesId,
+      input.createdBy,
+      input.instanceName,
+    );
     const existing = await this.findChannel(input.acesId, instance.instancia);
     const apiKey = input.apiKey?.trim() || existing?.api_key || null;
     if (!apiKey) throw new Error("API key Gupshup e obrigatoria para criar o canal");
@@ -154,12 +159,45 @@ export class GupshupAdminService {
     return (data as GupshupChannelRow | null) ?? null;
   }
 
-  private async requireInstance(acesId: number, instanceName: string) {
+  private async ensureInstance(
+    acesId: number,
+    createdBy: string,
+    instanceName: string,
+  ) {
     const { data, error } = await this.crmClient
-      .from("instance").select("instancia").eq("aces_id", acesId).eq("instancia", instanceName).maybeSingle();
+      .from("instance")
+      .select("instancia, aces_id")
+      .eq("instancia", instanceName)
+      .maybeSingle();
     if (error) throw error;
-    if (!data) throw new Error("Instancia nao encontrada para esta conta");
-    return data as CrmInstanceRow;
+    if (data) {
+      const existing = data as CrmInstanceRow;
+      if (existing.aces_id !== acesId) {
+        throw new Error("Nome de instancia indisponivel");
+      }
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    const { data: created, error: createError } = await this.crmClient
+      .from("instance")
+      .insert({
+        instancia: instanceName,
+        aces_id: acesId,
+        created_by: createdBy,
+        token: null,
+        status: "connected",
+        setup_status: "connected",
+        setup_started_at: now,
+        setup_expires_at: null,
+        last_error: null,
+        connection_mode: "external_webhook",
+        remote_webhook_connected_at: now,
+      })
+      .select("instancia, aces_id")
+      .single();
+    if (createError) throw createError;
+    return created as CrmInstanceRow;
   }
 }
 
