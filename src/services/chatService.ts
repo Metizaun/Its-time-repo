@@ -98,6 +98,7 @@ type BackendChatMessage = {
   direction: string;
   directionCode: number;
   sentAt: string;
+  instanceName?: string | null;
   leadName: string;
   senderName: string | null;
   sourceType?: string | null;
@@ -199,6 +200,7 @@ function normalizeMessage(message: BackendChatMessage): ChatMessage {
     direction: message.direction,
     direction_code: message.directionCode,
     sent_at: message.sentAt,
+    instance_name: message.instanceName ?? null,
     lead_name: message.leadName,
     sender_name: message.senderName,
     source_type: message.sourceType ?? "human",

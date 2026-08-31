@@ -64,6 +64,7 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
             direction: "outbound",
             direction_code: 2,
             sent_at: new Date().toISOString(),
+            instance_name: instanceName ?? activeInstanceNameRef.current ?? null,
             lead_name: "",
             sender_name: "Voce",
             source_type: "human",
@@ -166,10 +167,7 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
           console.log("Realtime detectou nova mensagem:", payload);
 
           const newMessage = payload.new as { direction?: string; instance?: string | null };
-          if (
-            newMessage.instance === (instanceName?.trim() || null) &&
-            (newMessage.direction === "inbound" || newMessage.direction === "outbound")
-          ) {
+          if (newMessage.direction === "inbound" || newMessage.direction === "outbound") {
             await fetchMessages({ silent: true });
           }
         }

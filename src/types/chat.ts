@@ -61,6 +61,7 @@ export interface ChatMessage {
   direction: string;
   direction_code: number;
   sent_at: string;
+  instance_name: string | null;
   lead_name: string;
   sender_name: string | null;
   source_type: string;

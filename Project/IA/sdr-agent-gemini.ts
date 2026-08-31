@@ -664,6 +664,7 @@ type ChatMessageResponse = {
   direction: string;
   directionCode: number;
   sentAt: string;
+  instanceName: string | null;
   leadName: string;
   senderName: string | null;
   sourceType: string;
@@ -7413,7 +7414,7 @@ export class AgentManager {
 
   private chatMessagesCacheKey(acesId: number, leadId: string, instanceName?: string | null) {
     const instanceKey = encodeURIComponent(instanceName?.trim() || "primary");
-    return `crm-chat:messages:v6:${acesId}:${leadId}:${instanceKey}`;
+    return `crm-chat:messages:v7:${acesId}:${leadId}:${instanceKey}`;
   }
 
   private async invalidateChatMessagesCache(acesId: number, leadId: string, instanceName?: string | null) {
@@ -14324,6 +14325,7 @@ export class AgentManager {
         direction: message.direction,
         directionCode: message.direction.toLowerCase() === "outbound" ? 2 : 1,
         sentAt: message.sent_at,
+        instanceName: message.instance,
         leadName: lead.name ?? "",
         senderName: message.created_by ? userNames.get(message.created_by) ?? null : null,
         sourceType: message.source_type,

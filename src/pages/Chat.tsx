@@ -72,6 +72,15 @@ export default function Chat() {
     selectedLeadId,
     selectedLead?.instance_name ?? null,
   );
+  const activeInstanceName = useMemo(() => {
+    const latestInbound = [...messages]
+      .reverse()
+      .find((message) => message.direction === "inbound" && message.instance_name);
+    if (latestInbound?.instance_name) return latestInbound.instance_name;
+
+    const latestMessage = [...messages].reverse().find((message) => message.instance_name);
+    return latestMessage?.instance_name ?? selectedLead?.instance_name ?? null;
+  }, [messages, selectedLead?.instance_name]);
   const { byLead: unreadByLead, markRead } = useChatUnread();
   const { stages, loading: stagesLoading } = usePipelineStages(
     finalizePipelineId || null,
@@ -222,7 +231,7 @@ export default function Chat() {
     sendPolicy?.provider === "gupshup" && sendPolicy.mode === "template_required";
   const leadAiControl = useLeadAiControl(
     selectedLead?.id ?? null,
-    selectedLead?.instance_name ?? null,
+    activeInstanceName,
     { enabled: isAdmin }
   );
   const showSidebar = !isMobile || !selectedLead;
@@ -233,7 +242,7 @@ export default function Chat() {
       return Promise.resolve();
     }
 
-    return sendMessage(payload, selectedLead.contact_phone || undefined, selectedLead.instance_name);
+    return sendMessage(payload, selectedLead.contact_phone || undefined, activeInstanceName);
   };
 
   const handleSchedule = () => {
@@ -325,7 +334,7 @@ export default function Chat() {
     setFinalizingHandoff(true);
 
     try {
-      await finalizeHumanHandoff(selectedLead.id, finalizeStageId, selectedLead.instance_name);
+      await finalizeHumanHandoff(selectedLead.id, finalizeStageId, activeInstanceName);
       if (selectedRouting?.status === "claimed") {
         await routingQueue.close(selectedRouting.routingEventId).catch((error) => {
           console.error("Atendimento finalizado, mas a fila nao foi fechada:", error);
@@ -408,7 +417,7 @@ export default function Chat() {
               <ChatHeader
                 key={selectedLead.id}
                 leadName={selectedLead.lead_name}
-                instanceName={selectedLead.instance_name}
+                instanceName={activeInstanceName || selectedLead.instance_name}
                 showBackButton={isMobile}
                 onBack={() => handleSelectLead(null)}
                 onOpenDetails={() => setEditingLead(selectedLead)}
