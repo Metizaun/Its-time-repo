@@ -3288,6 +3288,32 @@ export class AgentManager {
     return Boolean(data);
   }
 
+  private async hasActiveInstanceViewerMembership(
+    acesId: number,
+    instanceName: string,
+    crmUserId?: string | null
+  ) {
+    if (!crmUserId) {
+      return false;
+    }
+
+    const { data, error } = await this.serviceClient
+      .from("instance_access_memberships")
+      .select("instance_name")
+      .eq("aces_id", acesId)
+      .eq("instance_name", instanceName)
+      .eq("crm_user_id", crmUserId)
+      .eq("is_active", true)
+      .in("access_level", ["viewer", "editor", "admin"])
+      .maybeSingle<InstanceAccessMembershipRow>();
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar o acesso de leitura da instancia", error);
+    }
+
+    return Boolean(data);
+  }
+
   private async ensureInstanceOwnership(
     acesId: number,
     instanceName: string,
@@ -7408,7 +7434,7 @@ export class AgentManager {
 
   private chatMessagesCacheKey(acesId: number, leadId: string, instanceName?: string | null) {
     const instanceKey = encodeURIComponent(instanceName?.trim() || "primary");
-    return `crm-chat:messages:v5:${acesId}:${leadId}:${instanceKey}`;
+    return `crm-chat:messages:v6:${acesId}:${leadId}:${instanceKey}`;
   }
 
   private async invalidateChatMessagesCache(acesId: number, leadId: string, instanceName?: string | null) {
@@ -7572,6 +7598,9 @@ export class AgentManager {
     }
 
     await this.invalidateChatMessagesCache(params.acesId, params.leadId);
+    if (params.instanceName) {
+      await this.invalidateChatMessagesCache(params.acesId, params.leadId, params.instanceName);
+    }
 
     const { data, error } = await this.serviceClient
       .from("message_history")
@@ -7750,12 +7779,69 @@ export class AgentManager {
       return true;
     }
 
-    const instanceName = lead.instancia?.trim();
-    if (!instanceName) {
-      return false;
+    const primaryInstanceName = lead.instancia?.trim();
+    if (primaryInstanceName && await this.hasActiveInstanceViewerMembership(acesId, primaryInstanceName, crmUserId)) {
+      return true;
     }
 
-    return this.hasActiveInstanceAccessMembership(acesId, instanceName, crmUserId);
+    const { data: memberships, error } = await this.serviceClient
+      .from("lead_instance_memberships")
+      .select("instance_name")
+      .eq("aces_id", acesId)
+      .eq("lead_id", lead.id)
+      .eq("is_active", true);
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel carregar as instancias autorizadas do lead", error);
+    }
+
+    for (const membership of (memberships ?? []) as Array<{ instance_name: string }>) {
+      if (await this.hasActiveInstanceViewerMembership(acesId, membership.instance_name, crmUserId)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async resolveChatInstanceScope(
+    context: AuthContext,
+    lead: LeadRow,
+    requestedInstanceName?: string | null,
+  ) {
+    const requested = requestedInstanceName?.trim() || null;
+    const fallback = lead.instancia?.trim() || null;
+
+    if (isAdminRole(context.role)) {
+      return {
+        filter: null as string[] | null,
+        policyInstanceName: requested || fallback,
+        cacheInstanceName: requested || fallback,
+      };
+    }
+
+    const accessibleInstances = await this.getAccessibleInstanceNames(
+      context.acesId,
+      context.crmUserId,
+      context.role,
+    );
+    if (lead.owner_id === context.crmUserId && fallback) {
+      accessibleInstances.add(fallback);
+    }
+
+    const names = Array.from(accessibleInstances).sort();
+    const selected = requested && accessibleInstances.has(requested)
+      ? requested
+      : names.length === 1
+        ? names[0]
+        : null;
+    const filter = selected ? [selected] : names;
+
+    return {
+      filter,
+      policyInstanceName: selected || names[0] || requested || fallback,
+      cacheInstanceName: filter.length === 1 ? filter[0] : `visible:${names.join(",")}`,
+    };
   }
 
   private async loadLeadById(
@@ -14123,13 +14209,15 @@ export class AgentManager {
     }
 
     const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
-    const instanceName = requestedInstanceName?.trim() || lead.instancia?.trim();
+    const chatScope = await this.resolveChatInstanceScope(context, lead, requestedInstanceName);
+    const instanceName = chatScope.policyInstanceName;
     const sendPolicy = instanceName
       ? await this.resolveChatSendPolicy(lead, instanceName)
       : buildChatSendPolicy("evolution", lead.last_lead_inbound_at);
-    const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id, instanceName);
+    const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id, chatScope.cacheInstanceName);
+    const useChatCache = Boolean(this.redis) && (!chatScope.filter || chatScope.filter.length <= 1);
 
-    if (this.redis) {
+    if (useChatCache && this.redis) {
       try {
         const cached = await this.redis.get(cacheKey);
         if (cached) {
@@ -14152,14 +14240,22 @@ export class AgentManager {
       }
     }
 
-    const { data: messagesData, error: messagesError } = await this.serviceClient
+    let messagesQuery = this.serviceClient
       .from("message_history")
       .select(
         "id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, provider, provider_message_id, provider_status, provider_payload_summary"
       )
       .eq("lead_id", lead.id)
-      .eq("aces_id", context.acesId)
-      .eq("instance", instanceName ?? "")
+      .eq("aces_id", context.acesId);
+
+    if (chatScope.filter) {
+      if (chatScope.filter.length === 0) {
+        return { success: true, messages: [], sendPolicy };
+      }
+      messagesQuery = messagesQuery.in("instance", chatScope.filter);
+    }
+
+    const { data: messagesData, error: messagesError } = await messagesQuery
       .order("sent_at", { ascending: true })
       .order("id", { ascending: true });
 
@@ -14270,7 +14366,7 @@ export class AgentManager {
       latestMessageSentAtMs > 0 &&
       Math.abs(Date.now() - latestMessageSentAtMs) < AgentManager.CHAT_RECENT_MESSAGE_CACHE_BYPASS_MS;
 
-    if (this.redis && !shouldSkipCache) {
+    if (useChatCache && this.redis && !shouldSkipCache) {
       try {
         await this.redis.set(cacheKey, JSON.stringify(responseMessages), "EX", this.chatCacheTtlSeconds);
       } catch (error) {
