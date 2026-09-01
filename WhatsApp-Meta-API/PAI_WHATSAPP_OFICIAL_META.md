@@ -6,6 +6,8 @@ Consolidar e preparar para operação a integração oficial do WhatsApp Busines
 
 O MVP deve permitir configurar uma conta WABA e um número oficial, receber mensagens e status, enviar mensagens livres dentro da janela permitida e enviar templates aprovados quando a política exigir. O sistema deve operar por tenant e instância, com credenciais protegidas, auditoria e rollback controlado.
 
+Enquanto o App não estiver aprovado como Tech Provider/ISV pela Meta, o MVP usará `internal_bootstrap`: a configuração inicial será feita somente no backend por operação administrativa segura. O Embedded Signup ficará preparado atrás de uma flag e será ativado quando a aprovação estiver disponível.
+
 ## Baseline existente
 
 Antes de iniciar, registrar o estado atual destes componentes:
@@ -41,6 +43,7 @@ O plano deve fechar lacunas e endurecer a operação existente; não deve substi
 - Mensagens livres seguem a janela vigente da Meta; fora dela, somente template aprovado e permitido pelo contrato atual.
 - Templates precisam ser sincronizados, versionados por idioma/estado e validados antes do envio.
 - Nenhum envio automático, IA, campanha ou follow-up será habilitado apenas porque o provider manual funciona.
+- O onboarding terá dois modos explícitos: `internal_bootstrap` antes da aprovação Meta e `embedded_signup` depois. O frontend nunca receberá campos técnicos de configuração em nenhum dos dois modos.
 - Graph API version, permissões, limites, categorias de template, pricing e regras de qualidade devem ser reconfirmados na documentação oficial antes do piloto.
 
 ## Set 1 — validação externa e configuração Meta
@@ -66,6 +69,7 @@ O plano deve fechar lacunas e endurecer a operação existente; não deve substi
 - Fluxo de onboarding escolhido e aprovado.
 - Secrets configurados somente no backend.
 - URLs de callback/webhook e permissões registradas sem valores sensíveis.
+- Até a aprovação Tech Provider/ISV, o modo oficial do projeto será `internal_bootstrap`; não haverá onboarding self-service de clientes.
 
 ## Set 2 — fundação de canal, instância e tenant
 
@@ -94,10 +98,24 @@ O plano deve fechar lacunas e endurecer a operação existente; não deve substi
 
 ## Set 3 — credenciais e onboarding
 
-- Definir contrato de credencial: token de sistema ou token emitido pelo onboarding escolhido, validade, rotação e revogação.
-- Implementar armazenamento protegido e separação entre metadados e material secreto.
-- Criar fluxo de conexão/reconexão com state, nonce, tenant, instância e replay protection quando OAuth/Embedded Signup for usado.
+### 3.1 — modo pré-aprovação: `internal_bootstrap`
+
+- Criar um comando/script ou endpoint administrativo backend-only para cadastrar WABA, número, referências de secrets e metadados necessários.
 - Validar WABA, número, display name e permissões no backend antes de ativar o canal.
+- Implementar armazenamento protegido e separação entre metadados e material secreto.
+- Permitir uso apenas por operador autorizado, com auditoria e sem formulário técnico no frontend.
+- Usar esse modo somente para staging/piloto interno, sem prometer onboarding self-service.
+
+### 3.2 — modo futuro: `embedded_signup`
+
+- Preparar fluxo de conexão/reconexão com state, nonce, tenant, instância e replay protection.
+- Integrar o Embedded Signup da Meta somente após aprovação Tech Provider/ISV e permissões necessárias.
+- Receber o resultado da autorização no backend, validar WABA/número/permissões e concluir o mesmo serviço de provisionamento usado pelo `internal_bootstrap`.
+- Trocar apenas o adaptador de onboarding; provider, schema, webhook, templates, chat e operação permanecem os mesmos.
+
+### 3.3 — regras comuns
+
+- Definir contrato de credencial: token de sistema ou token emitido pelo onboarding escolhido, validade, rotação e revogação.
 - Persistir apenas IDs e metadados necessários ao painel.
 - Não exibir token, App Secret ou authorization code nas respostas administrativas.
 - Auditar conexão, reconexão, rotação, desativação e falhas de validação.
@@ -166,7 +184,7 @@ Rotas a consolidar ou criar:
 
 - Consolidar o card Meta WhatsApp no `InstanceManager.tsx`.
 - Exibir WABA, número mascarado/display phone, estado, saúde, último erro sanitizado e última sincronização de templates.
-- Ações primárias: conectar, reconectar ou resolver configuração, conforme o estado.
+- Ações primárias: conectar ou reconectar; em `internal_bootstrap`, o botão pode indicar que a ativação depende do operador, sem abrir configuração técnica.
 - Ações secundárias: atualizar, sincronizar templates e desativar com confirmação acessível.
 - Nunca exibir token, App Secret, chave de criptografia ou authorization code.
 - Seguir o design system: `bg-base`, superfícies contidas, CTA laranja único, foco visível, estados completos, responsividade 1280/1024/768/mobile e reduced motion.
@@ -208,13 +226,15 @@ Rotas a consolidar ou criar:
 
 1. Validar e publicar baseline do Instagram.
 2. Criar branch do WhatsApp oficial e aplicar fundação em staging.
-3. Conectar um WABA/número piloto sem habilitar automações.
+3. Operar um WABA/número piloto via `internal_bootstrap`, sem habilitar automações.
 4. Validar webhook real e inbound.
 5. Validar mensagem livre dentro da janela.
 6. Validar template aprovado fora da janela, somente conforme política vigente.
 7. Observar status, qualidade, erros, métricas e dead letters.
-8. Expandir por tenant/número com autorização explícita.
-9. Só depois avaliar automação, IA, mídia ampliada e campanhas em escopos separados.
+8. Solicitar/acompanhar aprovação Tech Provider/ISV e permissões necessárias na Meta.
+9. Implementar e habilitar `embedded_signup` somente após a aprovação.
+10. Expandir por tenant/número com autorização explícita.
+11. Só depois avaliar automação, IA, mídia ampliada e campanhas em escopos separados.
 
 ## Flags sugeridas
 
@@ -222,6 +242,8 @@ Rotas a consolidar ou criar:
 - `META_WHATSAPP_OUTBOUND_ENABLED`
 - `META_WHATSAPP_WEBHOOK_WORKER_ENABLED`
 - `META_WHATSAPP_TEMPLATE_SYNC_ENABLED`
+- `META_WHATSAPP_ONBOARDING_MODE=internal_bootstrap` — valor inicial; mudar para `embedded_signup` somente após aprovação Meta.
+- `META_WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false` — permanece desligada até a liberação externa.
 - `META_WHATSAPP_AUTOMATION_ENABLED` — permanece `false` no MVP.
 
 Flags de Meta WhatsApp não devem controlar Instagram, Messenger, Evolution ou Gupshup.
@@ -238,7 +260,9 @@ Flags de Meta WhatsApp não devem controlar Instagram, Messenger, Evolution ou G
 
 ## Critério final de aceite
 
-Um número oficial conectado a uma WABA de teste é roteado pelo tenant correto, recebe mensagens e status com assinatura e deduplicação, localiza o lead pelo telefone normalizado, envia mensagem livre dentro da janela, usa template aprovado quando exigido, bloqueia cenários inválidos antes da Graph API, mantém tokens protegidos, oferece operação administrativa auditável e não altera o comportamento dos demais providers.
+No estágio pré-aprovação, um operador autorizado consegue cadastrar um número oficial por `internal_bootstrap`, sem formulário técnico no frontend, e o canal passa a ser roteado pelo tenant correto, receber mensagens e status com assinatura e deduplicação, localizar o lead pelo telefone normalizado, enviar mensagem livre dentro da janela, usar template aprovado quando exigido, bloquear cenários inválidos antes da Graph API e manter tokens protegidos.
+
+Após a aprovação Tech Provider/ISV, o mesmo aceite deverá ser repetido pelo `embedded_signup`, sem alterar o comportamento dos demais providers.
 
 ## Referências oficiais a reconfirmar
 
