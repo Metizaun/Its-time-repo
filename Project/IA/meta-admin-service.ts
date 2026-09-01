@@ -1,21 +1,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { toOperationalMetaChannel, type MetaChannelRow as OperationalMetaChannelRow } from "./meta-bootstrap-service.js";
 
 export type MetaAdminServiceConfig = {
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
-};
-
-export type UpsertMetaChannelInput = {
-  acesId: number;
-  instanceName: string;
-  wabaId?: string | null;
-  phoneNumberId?: string | null;
-  businessId?: string | null;
-  displayPhoneNumber?: string | null;
-  accessTokenSecretRef?: string | null;
-  appSecretRef?: string | null;
-  webhookVerifyToken?: string | null;
-  status?: "draft" | "active" | "disabled" | "error";
 };
 
 type InstanceRow = {
@@ -27,7 +15,7 @@ type InstanceChannelRow = {
   provider: "evolution" | "meta" | "gupshup" | "instagram";
 };
 
-type MetaChannelRow = {
+type MetaChannelRow = OperationalMetaChannelRow & {
   id: string;
   aces_id: number;
   instance_name: string;
@@ -130,28 +118,6 @@ export class MetaAdminService {
     });
   }
 
-  async upsertChannel(input: UpsertMetaChannelInput) {
-    const instance = await this.requireInstance(input.acesId, input.instanceName);
-    const { data, error } = await this.crmClient.rpc("rpc_upsert_meta_whatsapp_channel", {
-      p_aces_id: input.acesId,
-      p_instance_name: instance.instancia,
-      p_waba_id: cleanOptional(input.wabaId),
-      p_phone_number_id: cleanOptional(input.phoneNumberId),
-      p_business_id: cleanOptional(input.businessId),
-      p_display_phone_number: cleanOptional(input.displayPhoneNumber),
-      p_access_token_secret_ref: cleanOptional(input.accessTokenSecretRef),
-      p_app_secret_ref: cleanOptional(input.appSecretRef),
-      p_webhook_verify_token: cleanOptional(input.webhookVerifyToken),
-      p_status: input.status ?? "draft",
-    });
-
-    if (error) {
-      throw error;
-    }
-
-    return normalizeChannel(data as MetaChannelRow);
-  }
-
   async listTemplates(acesId: number, instanceName: string) {
     const channel = await this.findChannel(acesId, instanceName);
     if (!channel) {
@@ -179,25 +145,6 @@ export class MetaAdminService {
     };
   }
 
-  private async requireInstance(acesId: number, instanceName: string) {
-    const { data, error } = await this.crmClient
-      .from("instance")
-      .select("instancia")
-      .eq("aces_id", acesId)
-      .eq("instancia", instanceName)
-      .maybeSingle();
-
-    if (error) {
-      throw error;
-    }
-
-    if (!data) {
-      throw new Error("Instancia nao encontrada para esta conta");
-    }
-
-    return data as InstanceRow;
-  }
-
   private async findChannel(acesId: number, instanceName: string) {
     const { data, error } = await this.metaClient
       .from("whatsapp_channels")
@@ -214,31 +161,12 @@ export class MetaAdminService {
   }
 }
 
-function cleanOptional(value: string | null | undefined) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
 function normalizeChannel(channel: MetaChannelRow | null) {
   if (!channel) {
     return null;
   }
 
-  return {
-    id: channel.id,
-    instanceName: channel.instance_name,
-    wabaId: channel.waba_id,
-    phoneNumberId: channel.phone_number_id,
-    businessId: channel.business_id,
-    displayPhoneNumber: channel.display_phone_number,
-    accessTokenSecretRef: channel.access_token_secret_ref,
-    appSecretRef: channel.app_secret_ref,
-    webhookVerifyToken: channel.webhook_verify_token,
-    status: channel.status,
-    lastTemplateSyncAt: channel.last_template_sync_at,
-    createdAt: channel.created_at,
-    updatedAt: channel.updated_at,
-  };
+  return toOperationalMetaChannel(channel);
 }
 
 function normalizeTemplate(template: MetaTemplateRow) {

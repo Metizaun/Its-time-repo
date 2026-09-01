@@ -13,7 +13,6 @@ import {
   type StoreInput,
 } from "./store-locator-service.js";
 
-import { GupshupWhatsAppProvider } from "./gupshup-whatsapp-provider.js";
 import {
   geminiUsageLineItems,
   openAiUsageLineItems,
@@ -48,7 +47,7 @@ import {
 } from "./gupshup-media-downloader.js";
 import { createWhatsAppProviderRegistry, type WhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 import { MessagingChannelResolver } from "./messaging-channel-resolver.js";
-import type { MessagingProviderName } from "./messaging-channel.js";
+import type { MessagingProviderName, MessagingSource } from "./messaging-channel.js";
 import { MessagingDispatcher, type MessagingDispatchResult } from "./messaging-dispatcher.js";
 import { InstagramService, InstagramServiceError } from "./instagram-service.js";
 import {
@@ -1096,6 +1095,7 @@ type ServiceConfig = {
   elevenLabsTtsEnabled?: boolean;
   metaProviderMode?: string;
   metaGraphApiVersion?: string;
+  metaOutboundEnabled?: string;
   visagismToolEnabled?: boolean;
   visagismInternalRuntimeEnabled?: boolean;
   visagismAnalysisWorkerModel?: string;
@@ -2335,30 +2335,6 @@ function buildSupabaseOperationError(
   return new HttpError(statusCode, message, error);
 }
 
-function buildExternalRequestError(error: unknown, fallbackMessage: string) {
-  if (!axios.isAxiosError(error)) {
-    return new HttpError(500, fallbackMessage, error);
-  }
-
-  const statusCode = error.response?.status;
-  const statusText = error.response?.statusText;
-  const responsePayload = error.response?.data ?? null;
-  const payloadMessage = extractExternalErrorMessage(responsePayload);
-  const statusMessage =
-    typeof statusCode === "number"
-      ? [statusCode, statusText].filter(Boolean).join(" ")
-      : null;
-  const message = payloadMessage
-    ? `${fallbackMessage}: ${payloadMessage}`
-    : statusMessage
-      ? `${fallbackMessage}: ${statusMessage}`
-      : fallbackMessage;
-  const resolvedStatus =
-    typeof statusCode === "number" && statusCode >= 400 && statusCode < 500 ? statusCode : 502;
-
-  return new HttpError(resolvedStatus, message, responsePayload ?? error.message);
-}
-
 function summarizeWhatsAppProviderFailure(error: unknown) {
   if (error instanceof WhatsAppProviderError) {
     return {
@@ -2375,6 +2351,20 @@ function summarizeWhatsAppProviderFailure(error: unknown) {
     errorMessage: error instanceof Error ? error.message : "Falha desconhecida no provider",
     payloadSummary: summarizeProviderPayload(error),
   };
+}
+
+function resolveMessagingSource(sourceType?: string): MessagingSource {
+  switch (sourceType?.trim().toLowerCase()) {
+    case "human":
+    case "manual":
+      return "human";
+    case "ai":
+      return "ai";
+    case "automation":
+      return "automation";
+    default:
+      return "system";
+  }
 }
 
 function isTransientGeminiError(error: unknown) {
@@ -2635,6 +2625,7 @@ export class AgentManager {
       evolutionApiKey: config.evolutionApiKey,
       metaProviderMode: config.metaProviderMode,
       metaGraphApiVersion: config.metaGraphApiVersion,
+      metaOutboundEnabled: config.metaOutboundEnabled,
     });
     this.messagingChannels = new MessagingChannelResolver(this.serviceClient);
     this.instagramService = config.instagramService ?? null;
@@ -9052,37 +9043,6 @@ export class AgentManager {
     return buildChatSendPolicy(provider, lastInboundAt);
   }
 
-  private async resolveGupshupTextProvider(instanceName: string) {
-    const gupshupClient = createClient(this.config.supabaseUrl, this.config.supabaseServiceRoleKey, {
-      db: { schema: "gupshup" },
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-
-    const { data, error } = await gupshupClient
-      .from("channel")
-      .select("api_key, app_name, phone_number")
-      .eq("instance_name", instanceName)
-      .eq("status", "active")
-      .maybeSingle();
-
-    if (error) {
-      throw new HttpError(500, "Nao foi possivel carregar o canal Gupshup da instancia", error);
-    }
-
-    if (!data?.api_key || !data?.app_name || !data?.phone_number) {
-      throw new WhatsAppProviderError("Canal Gupshup ativo sem credenciais completas", {
-        provider: "gupshup",
-        kind: "permanent",
-      });
-    }
-
-    return new GupshupWhatsAppProvider({
-      apiKey: String(data.api_key),
-      appName: String(data.app_name),
-      phoneNumber: String(data.phone_number),
-    });
-  }
-
   private async sendWhatsAppMessage(
     instanceName: string,
     phone: string,
@@ -9093,71 +9053,34 @@ export class AgentManager {
       agentId?: string | null;
       sourceType?: string;
     }
-  ) {
+  ): Promise<MessagingDispatchResult> {
     const recipient = resolveWhatsappRecipient(phone);
-    const providerName = await this.resolveInstanceTextProvider(instanceName, context?.acesId);
-
-    if (providerName === "instagram") {
-      throw new HttpError(409, "Instagram esta disponivel somente para resposta manual no CRM", {
-        code: "INSTAGRAM_MANUAL_ONLY",
-      });
-    }
-
-    if (providerName === "gupshup") {
-      const provider = await this.resolveGupshupTextProvider(instanceName);
-      try {
-        await provider.sendText({
-          instanceName,
-          to: phone,
-          text: content,
-          sourceType: "manual",
-        });
-        return;
-      } catch (error) {
-        console.error("[crm-ai] Falha ao enviar mensagem na Gupshup:", {
-          acesId: context?.acesId ?? null,
-          leadId: context?.leadId ?? null,
-          agentId: context?.agentId ?? null,
-          sourceType: context?.sourceType ?? null,
-          instanceName,
-          phoneRaw: phone,
-          phoneNormalized: recipient.normalized,
-          phoneFinal: recipient.finalNumber,
-          error: error instanceof Error ? error.message : error,
-        });
-        throw error;
-      }
-    }
-
-    const transport = await this.resolveEvolutionTransport(instanceName, context?.acesId);
-
     try {
-      await axios.post(
-        `${transport.apiUrl}/message/sendText/${encodeURIComponent(transport.instanceName)}`,
-        {
-          number: recipient.jid,
-          text: content,
-          delay: 1000,
-        },
-        {
-          headers: { apikey: transport.apiKey },
-        }
-      );
+      if (!context?.acesId) {
+        throw new HttpError(400, "Tenant obrigatorio para resolver o canal de mensageria");
+      }
+
+      return await this.messagingDispatcher.dispatchText({
+        acesId: context.acesId,
+        instanceName,
+        leadId: context.leadId ?? null,
+        phone,
+        text: content,
+        source: resolveMessagingSource(context.sourceType),
+      });
     } catch (error) {
-      console.error("[crm-ai] Falha ao enviar mensagem na Evolution:", {
+      console.error("[crm-ai] Falha ao enviar mensagem no canal WhatsApp:", {
         acesId: context?.acesId ?? null,
         leadId: context?.leadId ?? null,
         agentId: context?.agentId ?? null,
         sourceType: context?.sourceType ?? null,
         instanceName,
-        providerInstanceName: transport.instanceName,
         phoneRaw: phone,
         phoneNormalized: recipient.normalized,
         phoneFinal: recipient.finalNumber,
-        phone: recipient.jid,
-        error: axios.isAxiosError(error) ? error.response?.data ?? error.message : error,
+        error: error instanceof Error ? error.message : error,
       });
-      throw buildExternalRequestError(error, "Falha ao enviar mensagem na Evolution");
+      throw error;
     }
   }
 
@@ -9283,7 +9206,7 @@ export class AgentManager {
     if (!provider.sendVoiceNote) {
       throw new WhatsAppProviderError("Canal sem suporte a audio", { provider: providerName, kind: "permanent" });
     }
-    return provider.sendVoiceNote({ instanceName, to: phone, mediaUrl, sourceType: "ai" });
+    return provider.sendVoiceNote({ acesId, instanceName, to: phone, mediaUrl, sourceType: "ai" });
   }
 
   private async trySendAiAudio(params: {
@@ -9814,6 +9737,7 @@ export class AgentManager {
       }
       const caption = asString(asset.default_caption);
       const providerResult = await provider.sendMedia({
+        acesId: params.agent.aces_id,
         instanceName,
         to: phone,
         mediaUrl,
@@ -9953,7 +9877,7 @@ export class AgentManager {
         sentAt,
       });
 
-      await this.sendWhatsAppMessage(resolvedInstance, phone, block, {
+      const providerResult = await this.sendWhatsAppMessage(resolvedInstance, phone, block, {
         acesId: params.lead.aces_id,
         leadId: params.lead.id,
         agentId: params.agent.id,
@@ -9971,6 +9895,10 @@ export class AgentManager {
         conversationId,
         sentAt,
         senderAgentId: params.sourceType === "ai" ? params.agent.id : null,
+        provider: providerResult.provider,
+        providerMessageId: providerResult.providerMessageId,
+        providerStatus: providerResult.providerStatus,
+        providerPayloadSummary: providerResult.raw ?? null,
       });
 
       if (index < blocks.length - 1) {
@@ -15693,6 +15621,7 @@ export class AgentManager {
       }
       const caption = "Aqui esta a armacao que mais combina com voce!";
       const sendInput: SendMediaInput = {
+        acesId: params.agent.aces_id,
         instanceName,
         to: phone,
         mediaUrl,

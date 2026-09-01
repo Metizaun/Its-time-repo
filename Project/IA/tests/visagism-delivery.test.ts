@@ -29,6 +29,7 @@ test("envia a simulacao como imagem pelo provider Evolution", async () => {
       evolutionApiKey: "test-key",
     });
     const result = await provider.sendMedia({
+      acesId: 1,
       instanceName: "Lavie",
       to: "5511999999999",
       mediaUrl: "https://example.test/signed-output.png",

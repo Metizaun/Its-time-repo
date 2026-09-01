@@ -25,6 +25,7 @@ export type WhatsAppProviderRegistryConfig = {
   evolutionApiKey: string;
   metaProviderMode?: string;
   metaGraphApiVersion?: string;
+  metaOutboundEnabled?: string;
 };
 
 export class WhatsAppProviderRegistry {
@@ -70,8 +71,9 @@ export class WhatsAppProviderRegistry {
 
     this.metaProvider = new MetaWhatsAppProvider({
       mode: normalizeMetaProviderMode(config.metaProviderMode),
-      graphApiVersion: config.metaGraphApiVersion?.trim() || "v20.0",
-      resolveChannel: (instanceName) => this.resolveMetaChannel(instanceName),
+      graphApiVersion: config.metaGraphApiVersion?.trim() || "v26.0",
+      outboundEnabled: config.metaOutboundEnabled?.trim().toLowerCase() === "true",
+      resolveChannel: (instanceName, acesId) => this.resolveMetaChannel(instanceName, acesId),
       resolveSecret: (secretRef) => this.resolveSecret(secretRef),
     });
   }
@@ -86,10 +88,11 @@ export class WhatsAppProviderRegistry {
     return this.messagingChannels.resolveWhatsAppProvider(acesId, instanceName);
   }
 
-  private async resolveMetaChannel(instanceName: string): Promise<MetaChannelConfig | null> {
+  private async resolveMetaChannel(instanceName: string, acesId: number): Promise<MetaChannelConfig | null> {
     const { data, error } = await this.metaClient
       .from("whatsapp_channels")
       .select("instance_name, phone_number_id, access_token_secret_ref")
+      .eq("aces_id", acesId)
       .eq("instance_name", instanceName)
       .eq("status", "active")
       .maybeSingle();

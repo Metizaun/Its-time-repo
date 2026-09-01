@@ -47,6 +47,7 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
 
   async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
     return this.sendText({
+      acesId: input.acesId,
       instanceName: input.instanceName,
       to: input.to,
       text: input.parameters.length > 0 ? input.parameters.join(" ") : input.templateName,

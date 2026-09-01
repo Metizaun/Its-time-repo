@@ -433,6 +433,7 @@ const manager = new AgentManager({
   elevenLabsTtsEnabled: process.env.ELEVENLABS_TTS_ENABLED === "true",
   metaProviderMode: process.env.META_PROVIDER_MODE,
   metaGraphApiVersion: process.env.META_GRAPH_API_VERSION,
+  metaOutboundEnabled: process.env.META_WHATSAPP_OUTBOUND_ENABLED,
   visagismToolEnabled: process.env.VISAGISM_TOOL_ENABLED === "true",
   visagismInternalRuntimeEnabled:
     process.env.VISAGISM_INTERNAL_RUNTIME_ENABLED !== "false",
@@ -481,6 +482,8 @@ const metaWebhookProcessor = new MetaWebhookProcessor({
   verifyToken:
     process.env.META_WEBHOOK_VERIFY_TOKEN ?? "local-dev-verify-token",
   appSecret: resolveMetaWebhookAppSecret(),
+  processingEnabled:
+    process.env.META_WHATSAPP_WEBHOOK_WORKER_ENABLED?.trim().toLowerCase() === "true",
 });
 
 const metaTemplateService = new MetaTemplateService({
@@ -490,7 +493,7 @@ const metaTemplateService = new MetaTemplateService({
     process.env.META_PROVIDER_MODE?.trim().toLowerCase() === "live"
       ? "live"
       : "mock",
-  graphApiVersion: process.env.META_GRAPH_API_VERSION ?? "v20.0",
+  graphApiVersion: process.env.META_GRAPH_API_VERSION ?? "v26.0",
   fixturePath: process.env.META_TEMPLATES_FIXTURE_PATH,
   resolveSecret: (secretRef) => resolveEnvSecretRef(secretRef),
 });
@@ -647,6 +650,11 @@ const metaWebhookHandler = asyncHandler(async (req, res) => {
     )
   ) {
     throw new HttpError(401, "Webhook da Meta sem assinatura valida");
+  }
+
+  if (!metaWebhookProcessor.isProcessingEnabled()) {
+    res.status(202).json({ success: true, processed: 0, ignored: 0 });
+    return;
   }
 
   const result = await metaWebhookProcessor.processWebhook(req.body);
@@ -1048,6 +1056,16 @@ app.post(
   "/api/meta/templates/sync",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
+    if (
+      process.env.META_WHATSAPP_TEMPLATE_SYNC_ENABLED?.trim().toLowerCase() !==
+      "true"
+    ) {
+      throw new HttpError(
+        503,
+        "Sincronizacao de templates Meta desabilitada nesta sprint",
+      );
+    }
+
     const context = req.authContext!;
     if (context.role !== "ADMIN") {
       throw new HttpError(
@@ -1081,60 +1099,6 @@ app.get(
 
     const channels = await metaAdminService.listChannels(context.acesId);
     res.json({ success: true, channels });
-  }),
-);
-
-app.post(
-  "/api/meta/channels",
-  authMiddleware,
-  asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const context = req.authContext!;
-    if (context.role !== "ADMIN") {
-      throw new HttpError(
-        403,
-        "Apenas administradores podem configurar canais Meta",
-      );
-    }
-
-    const instanceName = String(req.body.instanceName ?? "").trim();
-    if (!instanceName) {
-      throw new HttpError(400, "instanceName e obrigatorio");
-    }
-
-    const channel = await metaAdminService.upsertChannel({
-      acesId: context.acesId,
-      instanceName,
-      wabaId: typeof req.body.wabaId === "string" ? req.body.wabaId : null,
-      phoneNumberId:
-        typeof req.body.phoneNumberId === "string"
-          ? req.body.phoneNumberId
-          : null,
-      businessId:
-        typeof req.body.businessId === "string" ? req.body.businessId : null,
-      displayPhoneNumber:
-        typeof req.body.displayPhoneNumber === "string"
-          ? req.body.displayPhoneNumber
-          : null,
-      accessTokenSecretRef:
-        typeof req.body.accessTokenSecretRef === "string"
-          ? req.body.accessTokenSecretRef
-          : null,
-      appSecretRef:
-        typeof req.body.appSecretRef === "string"
-          ? req.body.appSecretRef
-          : null,
-      webhookVerifyToken:
-        typeof req.body.webhookVerifyToken === "string"
-          ? req.body.webhookVerifyToken
-          : null,
-      status: ["draft", "active", "disabled", "error"].includes(
-        String(req.body.status),
-      )
-        ? req.body.status
-        : "draft",
-    });
-
-    res.json({ success: true, channel });
   }),
 );
 

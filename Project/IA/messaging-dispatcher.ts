@@ -20,7 +20,7 @@ export class MessagingDispatcher {
   async dispatchText(input: {
     acesId: number;
     instanceName: string;
-    leadId: string;
+    leadId: string | null;
     phone: string | null;
     text: string;
     source: MessagingSource;
@@ -30,6 +30,7 @@ export class MessagingDispatcher {
       if (input.source !== "human") {
         throw new Error("Instagram esta disponivel somente para atendimento humano");
       }
+      if (!input.leadId) throw new Error("Lead obrigatorio para envio pelo Instagram");
       if (!this.instagram) throw new Error("Runtime Instagram indisponivel");
       const result = await this.instagram.sendText({
         acesId: input.acesId,
@@ -49,6 +50,7 @@ export class MessagingDispatcher {
     if (!input.phone?.trim()) throw new Error("Lead sem telefone para envio WhatsApp");
     const provider = this.whatsAppProviders.getProvider(binding.provider);
     return provider.sendText({
+      acesId: input.acesId,
       instanceName: input.instanceName,
       to: input.phone,
       text: input.text,
@@ -95,6 +97,7 @@ export class MessagingDispatcher {
     const provider = this.whatsAppProviders.getProvider(binding.provider);
     if (!provider.sendMedia) throw new Error(`Provider ${binding.provider} sem suporte a midia`);
     return provider.sendMedia({
+      acesId: input.acesId,
       instanceName: input.instanceName,
       to: input.phone,
       mediaUrl: input.mediaUrl,

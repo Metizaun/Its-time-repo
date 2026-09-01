@@ -7,6 +7,7 @@ type MetaWebhookProcessorConfig = {
   supabaseServiceRoleKey: string;
   verifyToken: string;
   appSecret: string | null;
+  processingEnabled?: boolean;
 };
 
 type MetaChannelContext = {
@@ -140,7 +141,7 @@ export class MetaWebhookProcessor {
       return false;
     }
 
-    const duplicate = await this.findMessageByProviderId(providerMessageId);
+    const duplicate = await this.findMessageByProviderId(providerMessageId, channel.acesId);
     if (duplicate) {
       return false;
     }
@@ -194,11 +195,11 @@ export class MetaWebhookProcessor {
       return false;
     }
 
-    const message = await this.findMessageByProviderId(providerMessageId);
-    const acesId = message?.aces_id ? Number(message.aces_id) : channel?.acesId ?? null;
-    if (!acesId) {
+    if (!channel) {
       return false;
     }
+
+    const acesId = channel.acesId;
 
     const eventTimestamp = timestampToIso(asString(status.timestamp));
     const errorInfo = extractStatusError(status);
@@ -237,7 +238,8 @@ export class MetaWebhookProcessor {
         provider_payload_summary: payloadSummary,
       })
       .eq("provider", "meta")
-      .eq("provider_message_id", providerMessageId);
+      .eq("provider_message_id", providerMessageId)
+      .eq("aces_id", acesId);
 
     await this.crmClient
       .from("automation_executions")
@@ -247,18 +249,20 @@ export class MetaWebhookProcessor {
         provider_error_message: errorInfo.message,
         provider_payload_summary: payloadSummary,
       })
+      .eq("aces_id", acesId)
       .eq("provider", "meta")
       .eq("provider_message_id", providerMessageId);
 
     return true;
   }
 
-  private async findMessageByProviderId(providerMessageId: string) {
+  private async findMessageByProviderId(providerMessageId: string, acesId: number) {
     const { data, error } = await this.crmClient
       .from("message_history")
       .select("id, aces_id")
       .eq("provider", "meta")
       .eq("provider_message_id", providerMessageId)
+      .eq("aces_id", acesId)
       .maybeSingle();
 
     if (error) {
@@ -278,6 +282,10 @@ export class MetaWebhookProcessor {
     }
 
     return this.queryLeadByPhone(channel, identity, false);
+  }
+
+  isProcessingEnabled() {
+    return this.config.processingEnabled !== false;
   }
 
   private async queryLeadByPhone(

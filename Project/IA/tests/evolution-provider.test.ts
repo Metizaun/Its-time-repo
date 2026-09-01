@@ -14,7 +14,7 @@ test("envia audio pelo endpoint de voz da Evolution", async () => {
 
   try {
     const provider = new EvolutionWhatsAppProvider({ evolutionApiUrl: "https://evolution.example", evolutionApiKey: "secret" });
-    const result = await provider.sendVoiceNote({ instanceName: "Loja Centro", to: "11999999999", mediaUrl: "https://example.com/audio.mp3", sourceType: "ai" });
+    const result = await provider.sendVoiceNote({ acesId: 1, instanceName: "Loja Centro", to: "11999999999", mediaUrl: "https://example.com/audio.mp3", sourceType: "ai" });
 
     assert.equal(calls[0]?.url, "https://evolution.example/message/sendWhatsAppAudio/Loja%20Centro");
     assert.deepEqual(calls[0]?.body, {

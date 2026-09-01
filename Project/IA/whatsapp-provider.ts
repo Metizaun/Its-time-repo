@@ -3,6 +3,7 @@ export type WhatsAppProviderName = "evolution" | "meta" | "gupshup";
 export type WhatsAppSourceType = "manual" | "ai" | "automation" | "system";
 
 export type SendTextInput = {
+  acesId: number;
   instanceName: string;
   to: string;
   text: string;
@@ -10,6 +11,7 @@ export type SendTextInput = {
 };
 
 export type SendTemplateInput = {
+  acesId: number;
   instanceName: string;
   to: string;
   templateName: string;
@@ -19,6 +21,7 @@ export type SendTemplateInput = {
 };
 
 export type SendMediaInput = {
+  acesId: number;
   instanceName: string;
   to: string;
   mediaUrl: string;
@@ -33,6 +36,7 @@ export type SendMediaInput = {
 };
 
 export type SendVoiceNoteInput = {
+  acesId: number;
   instanceName: string;
   to: string;
   mediaUrl: string;

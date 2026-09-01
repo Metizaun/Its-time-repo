@@ -24,7 +24,8 @@ export type MetaChannelConfig = {
 export type MetaWhatsAppProviderConfig = {
   mode: MetaProviderMode;
   graphApiVersion: string;
-  resolveChannel: (instanceName: string) => Promise<MetaChannelConfig | null>;
+  outboundEnabled?: boolean;
+  resolveChannel: (instanceName: string, acesId: number) => Promise<MetaChannelConfig | null>;
   resolveSecret?: (secretRef: string) => Promise<string | null> | string | null;
 };
 
@@ -32,7 +33,8 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
   constructor(private readonly config: MetaWhatsAppProviderConfig) {}
 
   async sendText(input: SendTextInput): Promise<SendResult> {
-    const channel = await this.requireChannel(input.instanceName);
+    this.requireOutboundEnabled();
+    const channel = await this.requireChannel(input.instanceName, input.acesId);
     const to = toBrazilE164Phone(input.to);
 
     if (this.config.mode === "mock") {
@@ -67,7 +69,8 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
   }
 
   async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
-    const channel = await this.requireChannel(input.instanceName);
+    this.requireOutboundEnabled();
+    const channel = await this.requireChannel(input.instanceName, input.acesId);
     const to = toBrazilE164Phone(input.to);
 
     if (this.config.mode === "mock") {
@@ -105,7 +108,8 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
   }
 
   async sendVoiceNote(input: SendVoiceNoteInput): Promise<SendResult> {
-    const channel = await this.requireChannel(input.instanceName);
+    this.requireOutboundEnabled();
+    const channel = await this.requireChannel(input.instanceName, input.acesId);
     const to = toBrazilE164Phone(input.to);
 
     if (this.config.mode === "mock") {
@@ -130,8 +134,15 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     }
   }
 
-  private async requireChannel(instanceName: string) {
-    const channel = await this.config.resolveChannel(instanceName);
+  private async requireChannel(instanceName: string, acesId: number) {
+    if (!Number.isInteger(acesId) || acesId <= 0) {
+      throw new WhatsAppProviderError("Tenant obrigatorio para enviar pela Meta", {
+        provider: "meta",
+        kind: "permanent",
+      });
+    }
+
+    const channel = await this.config.resolveChannel(instanceName, acesId);
     if (!channel) {
       throw new WhatsAppProviderError("Canal Meta nao configurado para a instancia", {
         provider: "meta",
@@ -147,6 +158,15 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     }
 
     return channel;
+  }
+
+  private requireOutboundEnabled() {
+    if (this.config.outboundEnabled === false) {
+      throw new WhatsAppProviderError("Envio Meta WhatsApp desabilitado para este ambiente", {
+        provider: "meta",
+        kind: "permanent",
+      });
+    }
   }
 
   private async requireAccessToken(channel: MetaChannelConfig) {

@@ -17,6 +17,8 @@ const PRESCRIPTION_ANALYST_MIGRATION =
   "supabase/migrations/20260623210142_add_prescription_analyst_foundation.sql";
 const META_WHATSAPP_FOUNDATION_MIGRATION =
   "supabase/migrations/20260526023423_add_meta_whatsapp_foundation.sql";
+const META_WHATSAPP_SECURE_FOUNDATION_MIGRATION =
+  "supabase/migrations/20260828193656_secure_meta_whatsapp_foundation.sql";
 const GUPSHUP_FOUNDATION_MIGRATION =
   "supabase/migrations/20260707201001_add_gupshup_channel_foundation.sql";
 const INSTAGRAM_CHANNEL_FOUNDATION_MIGRATION =
@@ -268,6 +270,39 @@ async function validateMessagingChannelRpcs(
         missing.error
       )
     : null;
+}
+
+async function validateMetaWhatsAppSecureFoundation(
+  metaClient: SupabaseClient<any, any, any>
+) {
+  const { data, error } = await metaClient.rpc("rpc_whatsapp_foundation_preflight");
+  if (error) {
+    return buildSchemaFailure(
+      "Objetos, grants e RLS da fundacao segura Meta WhatsApp",
+      META_WHATSAPP_SECURE_FOUNDATION_MIGRATION,
+      error
+    );
+  }
+
+  const result = data as Record<string, unknown> | null;
+  const valid =
+    result?.ok === true &&
+    result.channelsRls === true &&
+    result.auditRls === true &&
+    result.anonCanReadChannels === false &&
+    result.authenticatedCanReadChannels === false &&
+    result.serviceRoleCanReadChannels === true &&
+    result.serviceRoleCanAudit === true &&
+    result.authenticatedCanBootstrap === false &&
+    result.authenticatedCanChangeStatus === false;
+
+  return valid
+    ? null
+    : buildManualSchemaFailure(
+        "Objetos, grants e RLS da fundacao segura Meta WhatsApp",
+        META_WHATSAPP_SECURE_FOUNDATION_MIGRATION,
+        "Uma ou mais verificacoes de seguranca Meta retornaram false"
+      );
 }
 
 async function validateInstagramRuntimeRpcs(
@@ -1842,6 +1877,14 @@ export async function assertRuntimeSchemaCompatibility(
       "meta.whatsapp_provider_status_events",
       META_WHATSAPP_FOUNDATION_MIGRATION
     ),
+    validateSelectedColumns(
+      metaClient,
+      "admin_audit_events",
+      ["id", "aces_id", "channel_id", "actor_id", "action", "outcome", "error_code", "metadata", "created_at"],
+      "meta.admin_audit_events",
+      META_WHATSAPP_SECURE_FOUNDATION_MIGRATION
+    ),
+    validateMetaWhatsAppSecureFoundation(metaClient),
     validateSelectedColumns(
       serviceClient,
       "automation_holidays",

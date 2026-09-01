@@ -20,12 +20,14 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
     });
 
     const textResult = await provider.sendText({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       text: "Ola",
       sourceType: "ai",
     });
     const templateResult = await provider.sendTemplate({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       templateName: "template-id",
@@ -34,6 +36,7 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       sourceType: "automation",
     });
     await provider.sendMedia({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       mediaUrl: "https://example.com/catalogo.pdf",
@@ -43,6 +46,7 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       sourceType: "manual",
     });
     await provider.sendMedia({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       mediaUrl: "https://example.com/produto.png",
@@ -53,12 +57,14 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       sourceType: "ai",
     });
     await provider.sendVoiceNote({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       mediaUrl: "https://example.com/audio.mp3",
       sourceType: "ai",
     });
     await provider.sendMedia({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       mediaUrl: "https://example.com/cabecalho.png",
@@ -70,6 +76,7 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       sourceType: "automation",
     });
     await provider.sendMedia({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       mediaUrl: "https://example.com/apresentacao.mp4",
@@ -81,6 +88,7 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       sourceType: "automation",
     });
     await provider.sendMedia({
+      acesId: 1,
       instanceName: "test-instance",
       to: "(11) 98888-7777",
       mediaUrl: "https://example.com/proposta.pdf",

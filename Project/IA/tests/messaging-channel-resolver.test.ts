@@ -6,6 +6,7 @@ import {
   parseMessagingChannelBinding,
 } from "../messaging-channel-resolver.js";
 import { MessagingChannelConfigurationError } from "../messaging-channel.js";
+import { MessagingDispatcher } from "../messaging-dispatcher.js";
 
 test("normaliza bindings dos quatro providers sem fallback", () => {
   for (const provider of ["evolution", "meta", "gupshup"] as const) {
@@ -86,4 +87,54 @@ test("resolver WhatsApp bloqueia um binding Instagram antes do provider", async 
       error instanceof MessagingChannelConfigurationError &&
       error.code === "CHANNEL_TYPE_MISMATCH"
   );
+});
+
+test("dispatcher roteia Meta sem fallback para Evolution e propaga o tenant", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const metaProvider = {
+    sendText: async (input: Record<string, unknown>) => {
+      calls.push(input);
+      return {
+        provider: "meta" as const,
+        providerMessageId: "wamid.dispatcher-test",
+        providerStatus: "accepted" as const,
+        raw: { provider: "meta" },
+      };
+    },
+  };
+  const dispatcher = new MessagingDispatcher(
+    {
+      resolve: async (acesId: number, instanceName: string) => ({
+        id: "meta-binding",
+        acesId,
+        instanceName,
+        channelType: "whatsapp" as const,
+        provider: "meta" as const,
+        capability: "full" as const,
+        status: "active" as const,
+      }),
+    } as any,
+    {
+      getProvider: (providerName: string) => {
+        assert.equal(providerName, "meta");
+        return metaProvider;
+      },
+    } as any,
+    null,
+  );
+
+  const result = await dispatcher.dispatchText({
+    acesId: 22,
+    instanceName: "meta-pilot",
+    leadId: "lead-1",
+    phone: "11999999999",
+    text: "Teste de roteamento",
+    source: "ai",
+  });
+
+  assert.equal(result.provider, "meta");
+  assert.equal(result.providerMessageId, "wamid.dispatcher-test");
+  assert.equal(calls[0]?.acesId, 22);
+  assert.equal(calls[0]?.instanceName, "meta-pilot");
+  assert.equal(calls[0]?.sourceType, "ai");
 });

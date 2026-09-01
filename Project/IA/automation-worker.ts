@@ -849,7 +849,8 @@ async function sendWhatsAppMessage(
     const response =
       providerName === "gupshup" &&
       (execution.gupshup_template_id || execution.gupshup_template_name)
-        ? await provider.sendTemplate({
+          ? await provider.sendTemplate({
+            acesId: execution.aces_id,
             instanceName: execution.instance_name,
             to: execution.phone,
             templateName: execution.gupshup_template_id || execution.gupshup_template_name || "",
@@ -858,6 +859,7 @@ async function sendWhatsAppMessage(
             sourceType: "automation",
           })
         : await provider.sendText({
+            acesId: execution.aces_id,
             instanceName: execution.instance_name,
             to: execution.phone,
             text: message,
@@ -890,12 +892,14 @@ async function sendWhatsAppMessage(
 
 async function sendRawWhatsAppText(
   provider: WhatsAppProvider,
+  acesId: number,
   instanceName: string,
   phone: string,
   message: string
 ): Promise<WhatsAppSendResult> {
   try {
     const response = await provider.sendText({
+      acesId,
       instanceName,
       to: phone,
       text: message,
@@ -952,6 +956,7 @@ async function sendWhatsAppMedia(
 
   try {
     const response = await provider.sendMedia({
+      acesId: execution.aces_id,
       instanceName: execution.instance_name,
       to: execution.phone,
       mediaUrl: execution.media_source_url,
@@ -1064,6 +1069,7 @@ export function startAutomationWorker() {
     evolutionApiKey,
     metaProviderMode: process.env.META_PROVIDER_MODE,
     metaGraphApiVersion: process.env.META_GRAPH_API_VERSION,
+    metaOutboundEnabled: process.env.META_WHATSAPP_OUTBOUND_ENABLED,
   });
 
   let running = false;
@@ -1543,6 +1549,7 @@ export function startAutomationWorker() {
       }
 
       return provider.sendTemplate({
+        acesId: followup.aces_id,
         instanceName: followup.instance_name,
         to: followup.lead_phone,
         templateName: agentFollowupMetaTemplateName,
@@ -1553,6 +1560,7 @@ export function startAutomationWorker() {
     }
 
     return provider.sendText({
+      acesId: followup.aces_id,
       instanceName: followup.instance_name,
       to: followup.lead_phone,
       text: renderedMessage,
@@ -2042,6 +2050,7 @@ export function startAutomationWorker() {
             );
             const sendResult = await sendRawWhatsAppText(
               whatsAppProviders.getProvider(providerName),
+              followup.aces_id,
               followup.instance_name,
               followup.contact_phone,
               renderedMessage
