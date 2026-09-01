@@ -420,7 +420,7 @@ export default function Chat() {
                 key={selectedLead.id}
                 leadName={selectedLead.lead_name}
                 instanceName={activeInstanceName || selectedLead.instance_name}
-                channelLabel={selectedLead.instagram_username || selectedLead.instance_name}
+                channelLabel={selectedLead.instagram_username || activeInstanceName || selectedLead.instance_name}
                 avatarUrl={selectedLead.instagram_profile_picture_url}
                 showBackButton={isMobile}
                 onBack={() => handleSelectLead(null)}
