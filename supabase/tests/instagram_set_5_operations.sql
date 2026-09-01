@@ -71,7 +71,13 @@ SELECT is(
 );
 SELECT is((SELECT status FROM crm.instance_channels WHERE id = '98930000-0000-0000-0000-000000000010'), 'disabled', 'desativacao atualiza binding Instagram');
 SELECT is((SELECT health_status FROM instagram.channels WHERE channel_id = '98930000-0000-0000-0000-000000000010'), 'disabled', 'desativacao atualiza saude Instagram');
-SELECT is((SELECT count(*)::integer FROM instagram.admin_audit_events WHERE action = 'disable' AND outcome = 'succeeded'), 1, 'desativacao gera auditoria');
+SELECT is((SELECT count(*)::integer
+  FROM instagram.admin_audit_events
+  WHERE aces_id = 9893
+    AND channel_id = '98930000-0000-0000-0000-000000000010'
+    AND actor_id = '98930000-0000-0000-0000-000000000002'
+    AND action = 'disable'
+    AND outcome = 'succeeded'), 1, 'desativacao gera auditoria');
 
 SELECT instagram.rpc_record_refresh_alert('98930000-0000-0000-0000-000000000010', 9893, 'meta_expired', true);
 SELECT instagram.rpc_record_refresh_alert('98930000-0000-0000-0000-000000000010', 9893, 'meta_expired', true);

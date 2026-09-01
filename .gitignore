@@ -75,6 +75,8 @@ exemples/
 !/Project/IA/tests/instagram-channel-foundation.integration.test.ts
 !/Project/IA/tests/instagram-crypto.test.ts
 !/Project/IA/tests/instagram-webhook.test.ts
+!/Project/IA/tests/meta-bootstrap-service.test.ts
+!/Project/IA/tests/instagram-operations.test.ts
 /Project/IA/fixtures/
 /Project/IA/scripts/recover-*
 /Project/IA/evolution-template-backfill.ts
