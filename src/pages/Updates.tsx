@@ -26,6 +26,53 @@ interface Release {
 
 const releasesData: Release[] = [
   {
+    version: "v2.6.0",
+    date: "02 de Setembro, 2026",
+    type: "minor",
+    status: "active",
+    headline: "Instagram conectado. Conversas mais organizadas.",
+    description:
+      "A operação do Instagram passa a fazer parte do Its Time CRM com mensagens multimídia, histórico protegido e roteamento por empresa e instância.",
+    items: [
+      {
+        type: "feature",
+        tag: "INSTAGRAM-CRM",
+        description:
+          "Conecte sua conta profissional do Instagram e acompanhe as conversas diretamente no histórico dos leads.",
+      },
+      {
+        type: "feature",
+        tag: "INSTAGRAM-MEDIA",
+        description:
+          "Envie e receba mensagens de texto, imagem e áudio pelo canal oficial, sem tirar a equipe do CRM.",
+      },
+      {
+        type: "feature",
+        tag: "MEDIA-HISTORY",
+        description:
+          "Mídias e mensagens ficam persistidas com conexão segura e renovação automática de token.",
+      },
+      {
+        type: "improvement",
+        tag: "TENANT-ROUTING",
+        description:
+          "Roteamento por empresa e instância evita misturar operações, históricos e credenciais entre clientes.",
+      },
+      {
+        type: "improvement",
+        tag: "HANDOFF-AGENDA",
+        description:
+          "Encaminhamento humano e agenda preservam o contexto correto do lead e da unidade de atendimento.",
+      },
+      {
+        type: "fix",
+        tag: "CHAT-MEDIA",
+        description:
+          "Ajustes de compatibilidade para mídias, botões interativos, localizador de lojas e atualizações em tempo real.",
+      },
+    ],
+  },
+  {
     version: "v2.5.0",
     date: "04 de Agosto, 2026",
     type: "minor",
