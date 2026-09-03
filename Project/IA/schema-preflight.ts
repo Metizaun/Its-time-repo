@@ -37,6 +37,8 @@ const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
   "supabase/migrations/20260714172130_chat_realtime_notifications_audio.sql";
+const INTERNAL_TEAM_CHAT_MIGRATION =
+  "supabase/migrations/20260902144107_add_internal_team_chat.sql";
 const PIPELINE_CLASSIFIER_MIGRATION =
   "supabase/migrations/20260716184250_standardize_pipeline_classifier_stages.sql";
 const PIPELINE_ATTENDANCE_MIGRATION =
@@ -230,6 +232,40 @@ async function validateSelectedColumns(
 ) {
   const { error } = await serviceClient.from(table).select(columns.join(",")).limit(1);
   return error ? buildSchemaFailure(label, migration, error) : null;
+}
+
+async function validateInternalTeamChatRpcs(
+  serviceClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    serviceClient.rpc("rpc_create_internal_conversation", {
+      p_kind: "direct",
+      p_name: null,
+      p_member_ids: [],
+    }),
+    serviceClient.rpc("rpc_send_internal_message", {
+      p_conversation_id: NIL_UUID,
+      p_content: "",
+      p_reply_to_message_id: null,
+      p_client_message_id: NIL_UUID,
+      p_mentions: [],
+      p_attachment_id: null,
+    }),
+    serviceClient.rpc("rpc_get_internal_unread_counts"),
+    serviceClient.rpc("rpc_mark_internal_conversation_read", {
+      p_conversation_id: NIL_UUID,
+    }),
+  ];
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => {
+    if (!error) return false;
+    const normalized = normalizePostgrestError(error);
+    return normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message);
+  });
+
+  return missing?.error
+    ? buildSchemaFailure("RPCs do Chat interno", INTERNAL_TEAM_CHAT_MIGRATION, missing.error)
+    : null;
 }
 
 async function validateMessagingChannelRpcs(
@@ -981,6 +1017,49 @@ export async function assertRuntimeSchemaCompatibility(
       STORE_LOCATOR_MIGRATION,
     ),
     validateChatAttachmentsStorage(serviceClient),
+    validateInternalTeamChatRpcs(serviceClient),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_conversations",
+      ["id", "aces_id", "kind", "name", "created_by", "direct_key", "archived_at", "last_message_at"],
+      "crm.internal_conversations",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_conversation_members",
+      ["conversation_id", "user_id", "aces_id", "is_admin", "last_read_at", "is_active", "joined_at", "removed_at"],
+      "crm.internal_conversation_members",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_messages",
+      ["id", "conversation_id", "aces_id", "author_id", "content", "reply_to_message_id", "client_message_id", "edited_at", "deleted_at"],
+      "crm.internal_messages",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_message_mentions",
+      ["id", "message_id", "conversation_id", "aces_id", "mention_type", "mentioned_user_id", "lead_id", "token_start", "token_length"],
+      "crm.internal_message_mentions",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_message_attachments",
+      ["id", "message_id", "conversation_id", "aces_id", "uploaded_by", "kind", "mime_type", "storage_bucket", "storage_path", "file_name", "file_size"],
+      "crm.internal_message_attachments",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_message_attachment_upload_intents",
+      ["id", "message_id", "attachment_id", "conversation_id", "aces_id", "created_by", "kind", "mime_type", "storage_bucket", "storage_path", "file_name", "file_size", "status", "intent_expires_at"],
+      "crm.internal_message_attachment_upload_intents",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
     validateAutomationMediaStorage(serviceClient),
     validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
     validateIntelligentCompanyDirectoryRpc(serviceClient),

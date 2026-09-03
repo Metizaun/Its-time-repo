@@ -48,6 +48,7 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const isSending = isOutbound && providerStatus === "sending";
   const time = format(new Date(sentAt), "HH:mm", { locale: ptBR });
+  const messageMeta = isSending ? "Enviando..." : time;
   const normalizedContent = content.trim();
   const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
   const visibleContent = templateCard
@@ -58,6 +59,9 @@ export function MessageBubble({
       : normalizedContent;
   const hasAttachments = attachments.length > 0;
   const hasRichCard = Boolean(templateCard);
+  const isMediaOnly = hasAttachments
+    && !visibleContent
+    && attachments.every((attachment) => attachment.kind === "audio" || attachment.kind === "image");
   const replyPreviewContent = replyToMessage?.attachments.some((attachment) => attachment.kind === "audio")
     ? "Áudio"
     : replyToMessage?.content;
@@ -99,7 +103,7 @@ export function MessageBubble({
     )}>
       <div className={cn("min-w-0 max-w-[min(82%,36rem)]", isSending && "opacity-70")}>
         <div className={cn(
-          "px-4 py-2.5 text-sm shadow-sm",
+          cn("text-sm shadow-sm", isMediaOnly ? "overflow-hidden p-0" : "px-4 py-2.5"),
           isOutbound
             ? hasAttachments || hasRichCard
               ? "rounded-[18px] rounded-br-[4px] border border-[var(--color-primary-100)] bg-[var(--color-primary-50)] text-[var(--color-gray-800)]"
@@ -121,9 +125,15 @@ export function MessageBubble({
               isOutbound={isOutbound}
             />
           ) : attachments.length > 0 && (
-            <div className={cn("flex flex-col gap-2", visibleContent && "mb-2")}>
-              {attachments.map((attachment) => (
-                <MessageAttachment key={attachment.id} attachment={attachment} isOutbound={isOutbound} />
+            <div className={cn("flex flex-col", !isMediaOnly && "gap-2", visibleContent && "mb-2")}>
+              {attachments.map((attachment, index) => (
+                <MessageAttachment
+                  key={attachment.id}
+                  attachment={attachment}
+                  isOutbound={isOutbound}
+                  compact={isMediaOnly}
+                  timestamp={isMediaOnly && index === attachments.length - 1 ? messageMeta : undefined}
+                />
               ))}
             </div>
           )}
@@ -135,16 +145,18 @@ export function MessageBubble({
               {visibleContent}
             </p>
           )}
-          <p className={cn(
-            "mt-1 text-right text-[10px]",
-            isOutbound
-              ? hasAttachments || hasRichCard
-                ? "text-[var(--color-gray-500)]"
-                : "text-[var(--color-primary-100)]"
-              : "text-[var(--color-gray-500)]"
-          )}>
-            {isSending ? "Enviando..." : time}
-          </p>
+          {!isMediaOnly && (
+            <p className={cn(
+              "mt-1 text-right text-[10px]",
+              isOutbound
+                ? hasAttachments || hasRichCard
+                  ? "text-[var(--color-gray-500)]"
+                  : "text-[var(--color-primary-100)]"
+                : "text-[var(--color-gray-500)]"
+            )}>
+              {messageMeta}
+            </p>
+          )}
         </div>
         {quickReply?.kind === "options" && <QuickReplyOptions options={quickReply.options} />}
       </div>

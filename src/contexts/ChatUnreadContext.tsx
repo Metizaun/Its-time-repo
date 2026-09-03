@@ -3,13 +3,23 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { createRealtimeChannelName } from "@/lib/realtime";
-import { listChatUnreadCounts, markChatRead } from "@/services/chatUnreadService";
+import {
+  listChatUnreadCounts,
+  listInternalChatUnreadCounts,
+  markChatRead,
+  markInternalChatRead,
+} from "@/services/chatUnreadService";
 
 type ChatUnreadContextValue = {
   total: number;
+  leadTotal: number;
+  internalTotal: number;
   byLead: Record<string, number>;
+  byInternalConversation: Record<string, number>;
   markRead: (leadId: string) => Promise<void>;
+  markInternalRead: (conversationId: string) => Promise<void>;
   refetch: () => Promise<void>;
+  refetchInternal: () => Promise<void>;
 };
 
 const ChatUnreadContext = createContext<ChatUnreadContextValue | null>(null);
@@ -18,8 +28,10 @@ const APP_TITLE = "Crm Its time";
 export function ChatUnreadProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
   const [byLead, setByLead] = useState<Record<string, number>>({});
+  const [byInternalConversation, setByInternalConversation] = useState<Record<string, number>>({});
   const refetchPromiseRef = useRef<Promise<void> | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
+  const internalRefetchPromiseRef = useRef<Promise<void> | null>(null);
 
   const refetch = useCallback((): Promise<void> => {
     if (!session) {
@@ -45,21 +57,39 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
     return request;
   }, [session]);
 
+  const refetchInternal = useCallback((): Promise<void> => {
+    if (!session) {
+      setByInternalConversation({});
+      return Promise.resolve();
+    }
+    if (internalRefetchPromiseRef.current) return internalRefetchPromiseRef.current;
+    const request = listInternalChatUnreadCounts()
+      .then((counts) => {
+        setByInternalConversation(Object.fromEntries(counts.map((item) => [item.conversationId, item.count])));
+      })
+      .finally(() => {
+        if (internalRefetchPromiseRef.current === request) internalRefetchPromiseRef.current = null;
+      });
+    internalRefetchPromiseRef.current = request;
+    return request;
+  }, [session]);
+
   const refreshNow = useCallback(() => {
     if (refreshTimerRef.current !== null) {
       window.clearTimeout(refreshTimerRef.current);
       refreshTimerRef.current = null;
     }
-    return refetch();
-  }, [refetch]);
+    return Promise.all([refetch(), refetchInternal()]).then(() => undefined);
+  }, [refetch, refetchInternal]);
 
   const scheduleRefetch = useCallback(() => {
     if (refreshTimerRef.current !== null) return;
     refreshTimerRef.current = window.setTimeout(() => {
       refreshTimerRef.current = null;
-      void refetch().catch((error) => console.error("Nao foi possivel atualizar os contadores", error));
+      void Promise.all([refetch(), refetchInternal()])
+        .catch((error) => console.error("Nao foi possivel atualizar os contadores", error));
     }, 100);
-  }, [refetch]);
+  }, [refetch, refetchInternal]);
 
   const markRead = useCallback(async (leadId: string) => {
     if (!session || document.visibilityState !== "visible") return;
@@ -73,6 +103,18 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshNow, session]);
 
+  const markInternalRead = useCallback(async (conversationId: string) => {
+    if (!session || document.visibilityState !== "visible") return;
+    setByInternalConversation((current) => ({ ...current, [conversationId]: 0 }));
+    try {
+      await markInternalChatRead(conversationId);
+      await refetchInternal();
+    } catch (error) {
+      await refetchInternal();
+      console.error("Nao foi possivel sincronizar a leitura interna", error);
+    }
+  }, [refetchInternal, session]);
+
   useEffect(() => {
     if (!session) return;
     scheduleRefetch();
@@ -81,6 +123,8 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
       .channel(createRealtimeChannelName(`chat-unread-${session.user.id}`))
       .on("postgres_changes", { event: "INSERT", schema: "crm", table: "message_history" }, scheduleRefetch)
       .on("postgres_changes", { event: "*", schema: "crm", table: "chat_read_states" }, scheduleRefetch)
+      .on("postgres_changes", { event: "INSERT", schema: "crm", table: "internal_messages" }, scheduleRefetch)
+      .on("postgres_changes", { event: "*", schema: "crm", table: "internal_conversation_members" }, scheduleRefetch)
       .subscribe((status) => {
         if (status === "SUBSCRIBED") scheduleRefetch();
       });
@@ -102,7 +146,12 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
     };
   }, [scheduleRefetch, session]);
 
-  const total = useMemo(() => Object.values(byLead).reduce((sum, count) => sum + count, 0), [byLead]);
+  const leadTotal = useMemo(() => Object.values(byLead).reduce((sum, count) => sum + count, 0), [byLead]);
+  const internalTotal = useMemo(
+    () => Object.values(byInternalConversation).reduce((sum, count) => sum + count, 0),
+    [byInternalConversation],
+  );
+  const total = leadTotal + internalTotal;
 
   useEffect(() => {
     document.title = total > 0 ? `(${total > 99 ? "99+" : total}) ${APP_TITLE}` : APP_TITLE;
@@ -111,7 +160,27 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
     };
   }, [total]);
 
-  const value = useMemo(() => ({ total, byLead, markRead, refetch }), [byLead, markRead, refetch, total]);
+  const value = useMemo(() => ({
+    total,
+    leadTotal,
+    internalTotal,
+    byLead,
+    byInternalConversation,
+    markRead,
+    markInternalRead,
+    refetch,
+    refetchInternal,
+  }), [
+    byInternalConversation,
+    byLead,
+    internalTotal,
+    leadTotal,
+    markInternalRead,
+    markRead,
+    refetch,
+    refetchInternal,
+    total,
+  ]);
   return <ChatUnreadContext.Provider value={value}>{children}</ChatUnreadContext.Provider>;
 }
 

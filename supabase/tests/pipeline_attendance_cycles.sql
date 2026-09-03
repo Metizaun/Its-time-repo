@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(10);
+SELECT plan(12);
 
 INSERT INTO crm.accounts (id, name, status)
 VALUES (9301, 'Pipeline Test Account', 'active');
@@ -51,6 +51,25 @@ SELECT is(
       AND stage.classifier_semantic_key = 'active_service'),
   1,
   'pipeline possui exatamente uma etapa Atendimento'
+);
+
+SELECT is(
+  (SELECT count(*)::integer FROM crm.pipeline_stages AS stage
+    JOIN crm.pipelines AS pipeline ON pipeline.id = stage.pipeline_id
+    WHERE pipeline.aces_id = 9301 AND pipeline.name = 'Pipeline A'
+      AND stage.classifier_semantic_key = 'contacted_unqualified'
+      AND stage.classifier_is_destination = true),
+  1,
+  'pipeline possui exatamente uma etapa Contato realizado classificavel'
+);
+
+SELECT is(
+  (SELECT classifier_is_destination FROM crm.pipeline_stages AS stage
+    JOIN crm.pipelines AS pipeline ON pipeline.id = stage.pipeline_id
+    WHERE pipeline.aces_id = 9301 AND pipeline.name = 'Pipeline A'
+      AND stage.classifier_semantic_key = 'new'),
+  false,
+  'Novo nunca e destino do classificador pos-conversa'
 );
 
 INSERT INTO crm.pipeline_stages (

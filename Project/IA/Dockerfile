@@ -6,7 +6,7 @@ COPY Project/IA/package*.json ./
 RUN npm ci
 
 COPY Project/IA/ ./
-RUN npm run build && npm prune --omit=dev
+RUN npx tsc -p tsconfig.build.json && npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
 

@@ -40,6 +40,8 @@ interface LeadSidebarProps {
   companies: CompanyFilterOption[];
   selectedCompany: string;
   onCompanyChange: (companyId: string) => void;
+  internalUnreadCount: number;
+  onOpenTeam: () => void;
 }
 
 function PendingDot({ state }: { state: Lead["manual_pending_state"] }) {
@@ -111,6 +113,8 @@ export function LeadSidebar({
   companies,
   selectedCompany,
   onCompanyChange,
+  internalUnreadCount,
+  onOpenTeam,
 }: LeadSidebarProps) {
   const [instanceFilterOpen, setInstanceFilterOpen] = useState(false);
   const [companyFilterOpen, setCompanyFilterOpen] = useState(false);
@@ -332,6 +336,12 @@ export function LeadSidebar({
             label="Manual"
             count={manualCount}
             onClick={() => onFilterChange("manual")}
+          />
+          <FilterTab
+            active={false}
+            label="Time"
+            count={internalUnreadCount}
+            onClick={onOpenTeam}
           />
         </div>
       </div>

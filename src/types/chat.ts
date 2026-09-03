@@ -112,4 +112,20 @@ export interface ChatComposerAttachment {
 export interface ChatComposerPayload {
   content: string;
   attachment?: ChatComposerAttachment | null;
+  mentions?: Array<{
+    type: "user" | "all" | "lead";
+    userId?: string | null;
+    leadId?: string | null;
+    start: number;
+    length: number;
+  }>;
+}
+
+export interface ChatMentionSuggestion {
+  id: string;
+  type: "user" | "all" | "lead";
+  label: string;
+  description?: string;
+  userId?: string;
+  leadId?: string;
 }

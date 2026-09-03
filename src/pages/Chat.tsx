@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ChatHeader } from "@/components/chat/ChatHeader";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatWindowNotice } from "@/components/chat/ChatWindowNotice";
+import { InternalChatWorkspace } from "@/components/chat/InternalChatWorkspace";
 import { MessageList } from "@/components/chat/MessageList";
 import { RoutingQueueBanner } from "@/components/chat/RoutingQueueBanner";
 import { LeadSidebar } from "@/components/leads/LeadSidebar";
@@ -72,7 +73,9 @@ export default function Chat() {
     selectedLeadId,
     selectedLead?.instance_name ?? null,
   );
-  const { byLead: unreadByLead, markRead } = useChatUnread();
+  const { byLead: unreadByLead, markRead, internalTotal } = useChatUnread();
+  const isTeamMode = searchParams.get("mode") === "team";
+  const selectedInternalConversationId = isTeamMode ? searchParams.get("conversationId") : null;
   const { stages, loading: stagesLoading } = usePipelineStages(
     finalizePipelineId || null,
     finalizeDialogOpen && handoffDialogView === "finalize" && Boolean(finalizePipelineId)
@@ -172,10 +175,11 @@ export default function Chat() {
   }, [instances, selectedInstance]);
 
   useEffect(() => {
+    if (isTeamMode) return;
     const leadIdFromQuery = searchParams.get("leadId");
     if (!leadIdFromQuery) return;
     setSelectedLeadId(leadIdFromQuery);
-  }, [searchParams]);
+  }, [isTeamMode, searchParams]);
 
   useEffect(() => {
     const conversationTarget = (location.state as { conversationTarget?: unknown } | null)?.conversationTarget;
@@ -191,6 +195,25 @@ export default function Chat() {
       return;
     }
     setSearchParams({});
+  };
+
+  const handleOpenTeam = () => {
+    setSearchParams({ mode: "team" });
+  };
+
+  const handleSelectInternalConversation = (conversationId: string | null) => {
+    setSearchParams(conversationId ? { mode: "team", conversationId } : { mode: "team" });
+  };
+
+  const handleOpenLeadMode = (filter: "all" | "unread" | "manual") => {
+    setActiveFilter(filter);
+    setSearchParams(selectedLeadId ? { leadId: selectedLeadId } : {});
+  };
+
+  const handleOpenMentionedLead = (leadId: string) => {
+    setSelectedLeadId(leadId);
+    setActiveFilter("all");
+    setSearchParams({ leadId });
   };
 
   const selectedRouting = selectedLeadId ? routingQueue.byLead.get(selectedLeadId) ?? null : null;
@@ -368,6 +391,19 @@ export default function Chat() {
     }
   };
 
+  if (isTeamMode) {
+    return (
+      <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
+        <InternalChatWorkspace
+          selectedConversationId={selectedInternalConversationId}
+          onSelectConversation={handleSelectInternalConversation}
+          onOpenLeadMode={handleOpenLeadMode}
+          onOpenLead={handleOpenMentionedLead}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
       {showSidebar && (
@@ -399,6 +435,8 @@ export default function Chat() {
             companies={companyOptions}
             selectedCompany={selectedCompany}
             onCompanyChange={setSelectedCompany}
+            internalUnreadCount={internalTotal}
+            onOpenTeam={handleOpenTeam}
           />
         </div>
       )}

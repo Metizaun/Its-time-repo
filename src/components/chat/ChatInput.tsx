@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { EmojiPickerPopover } from "@/components/chat/EmojiPickerPopover";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -21,7 +22,7 @@ import {
   resolveChatAttachmentKind,
   resolveChatAttachmentMimeType,
 } from "@/services/chatService";
-import type { ChatAttachmentKind, ChatComposerPayload } from "@/types/chat";
+import type { ChatAttachmentKind, ChatComposerPayload, ChatMentionSuggestion } from "@/types/chat";
 import { cn } from "@/lib/utils";
 
 const VOICE_WAVEFORM_BARS = [
@@ -36,7 +37,24 @@ interface ChatInputProps {
   disabled?: boolean;
   allowAttachments?: boolean;
   allowedAttachmentKinds?: ChatAttachmentKind[];
+  mentionSearch?: (trigger: "@" | "#", query: string) => Promise<ChatMentionSuggestion[]>;
+  replyPreview?: { authorName: string; preview: string } | null;
+  onCancelReply?: () => void;
 }
+
+type SelectedMention = {
+  suggestion: ChatMentionSuggestion;
+  label: string;
+  start: number;
+  end: number;
+};
+
+type MentionQuery = {
+  trigger: "@" | "#";
+  query: string;
+  start: number;
+  end: number;
+};
 
 type SelectedAttachment = {
   file: File;
@@ -230,6 +248,9 @@ export function ChatInput({
   disabled,
   allowAttachments = true,
   allowedAttachmentKinds = DEFAULT_ATTACHMENT_KINDS,
+  mentionSearch,
+  replyPreview,
+  onCancelReply,
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -239,6 +260,10 @@ export function ChatInput({
   const [audioPreviewCurrentTime, setAudioPreviewCurrentTime] = useState(0);
   const [audioPreviewDuration, setAudioPreviewDuration] = useState(0);
   const [isAudioPreviewPlaying, setIsAudioPreviewPlaying] = useState(false);
+  const [selectedMentions, setSelectedMentions] = useState<SelectedMention[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
+  const [mentionSuggestions, setMentionSuggestions] = useState<ChatMentionSuggestion[]>([]);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioPreviewRef = useRef<HTMLAudioElement>(null);
@@ -300,8 +325,93 @@ export function ChatInput({
     setAttachmentError(null);
   }, [audioRecorder, revokeFilePreview, stopAudioPreviewTicker]);
 
+  const refreshMentionQuery = useCallback((value: string, cursor: number | null) => {
+    if (!mentionSearch || cursor === null) {
+      setMentionQuery(null);
+      return;
+    }
+    const beforeCursor = value.slice(0, cursor);
+    const match = beforeCursor.match(/(^|\s)([@#])([^\s@#]{0,40})$/);
+    if (!match) {
+      setMentionQuery(null);
+      return;
+    }
+    const trigger = match[2] as "@" | "#";
+    setMentionQuery({
+      trigger,
+      query: match[3],
+      start: cursor - match[3].length - 1,
+      end: cursor,
+    });
+  }, [mentionSearch]);
+
+  const applyTextChange = useCallback((nextValue: string, selectionStart: number, selectionEnd: number) => {
+    const previousValue = message;
+    let prefix = 0;
+    while (prefix < previousValue.length && prefix < nextValue.length && previousValue[prefix] === nextValue[prefix]) prefix += 1;
+    let suffix = 0;
+    while (
+      suffix < previousValue.length - prefix &&
+      suffix < nextValue.length - prefix &&
+      previousValue[previousValue.length - 1 - suffix] === nextValue[nextValue.length - 1 - suffix]
+    ) suffix += 1;
+    const previousChangeEnd = previousValue.length - suffix;
+    const delta = nextValue.length - previousValue.length;
+    setSelectedMentions((current) => current.flatMap((mention) => {
+      if (mention.end <= prefix) return [mention];
+      if (mention.start >= previousChangeEnd) {
+        return [{ ...mention, start: mention.start + delta, end: mention.end + delta }];
+      }
+      return [];
+    }));
+    setMessage(nextValue);
+    queueMicrotask(() => refreshMentionQuery(nextValue, selectionEnd));
+    if (selectionStart !== selectionEnd) setMentionQuery(null);
+  }, [message, refreshMentionQuery]);
+
+  const buildStructuredMessage = useCallback(() => {
+    const leadingWhitespace = message.length - message.trimStart().length;
+    const trimmed = message.trim();
+    const trailingBoundary = leadingWhitespace + trimmed.length;
+    const validMentions = selectedMentions
+      .filter((mention) =>
+        mention.start >= leadingWhitespace &&
+        mention.end <= trailingBoundary &&
+        message.slice(mention.start, mention.end) === mention.label
+      )
+      .sort((left, right) => left.start - right.start);
+    let sourceCursor = 0;
+    let tokenized = "";
+    const mentions: NonNullable<ChatComposerPayload["mentions"]> = [];
+    for (const mention of validMentions) {
+      const start = mention.start - leadingWhitespace;
+      const end = mention.end - leadingWhitespace;
+      if (start < sourceCursor) continue;
+      tokenized += trimmed.slice(sourceCursor, start);
+      const suggestion = mention.suggestion;
+      const token = suggestion.type === "all"
+        ? "@[all]"
+        : suggestion.type === "user"
+          ? `@[user:${suggestion.userId}]`
+          : `#[lead:${suggestion.leadId}]`;
+      const tokenStart = Array.from(tokenized).length;
+      tokenized += token;
+      mentions.push({
+        type: suggestion.type,
+        userId: suggestion.userId ?? null,
+        leadId: suggestion.leadId ?? null,
+        start: tokenStart,
+        length: Array.from(token).length,
+      });
+      sourceCursor = end;
+    }
+    tokenized += trimmed.slice(sourceCursor);
+    return { content: tokenized, mentions };
+  }, [message, selectedMentions]);
+
   const handleSend = async () => {
-    const trimmedMessage = message.trim();
+    const structuredMessage = buildStructuredMessage();
+    const trimmedMessage = structuredMessage.content.trim();
     if ((!trimmedMessage && !selectedAttachment) || isSending || disabled || audioRecorder.status === "recording") {
       return;
     }
@@ -312,6 +422,7 @@ export function ChatInput({
     try {
       await onSend({
         content: trimmedMessage,
+        mentions: structuredMessage.mentions,
         attachment: selectedAttachment
           ? {
               file: selectedAttachment.file,
@@ -322,6 +433,8 @@ export function ChatInput({
       });
 
       setMessage("");
+      setSelectedMentions([]);
+      setMentionQuery(null);
       clearSelectedAttachment();
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -337,12 +450,71 @@ export function ChatInput({
     }
   };
 
+  const selectMentionSuggestion = useCallback((suggestion: ChatMentionSuggestion) => {
+    if (!mentionQuery) return;
+    const label = suggestion.label;
+    const nextValue = `${message.slice(0, mentionQuery.start)}${label} ${message.slice(mentionQuery.end)}`;
+    const insertedEnd = mentionQuery.start + label.length;
+    setMessage(nextValue);
+    setSelectedMentions((current) => [
+      ...current.filter((mention) => mention.end <= mentionQuery.start || mention.start >= mentionQuery.end),
+      { suggestion, label, start: mentionQuery.start, end: insertedEnd },
+    ]);
+    setMentionQuery(null);
+    setMentionSuggestions([]);
+    setTimeout(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const cursor = insertedEnd + 1;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    }, 0);
+  }, [mentionQuery, message]);
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionQuery && mentionSuggestions.length > 0) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setActiveSuggestionIndex((current) => (current + direction + mentionSuggestions.length) % mentionSuggestions.length);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        selectMentionSuggestion(mentionSuggestions[activeSuggestionIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void handleSend();
     }
   };
+
+  const handleEmojiSelect = useCallback((emoji: string) => {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? message.length;
+    const end = textarea?.selectionEnd ?? start;
+    const nextValue = `${message.slice(0, start)}${emoji}${message.slice(end)}`;
+    const delta = emoji.length - (end - start);
+    setSelectedMentions((current) => current.flatMap((mention) => {
+      if (mention.end <= start) return [mention];
+      if (mention.start >= end) return [{ ...mention, start: mention.start + delta, end: mention.end + delta }];
+      return [];
+    }));
+    setMessage(nextValue);
+    setMentionQuery(null);
+    setTimeout(() => {
+      const cursor = start + emoji.length;
+      textarea?.focus();
+      textarea?.setSelectionRange(cursor, cursor);
+    }, 0);
+  }, [message]);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -414,6 +586,29 @@ export function ChatInput({
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
     }
   }, [message]);
+
+  useEffect(() => {
+    if (!mentionSearch || !mentionQuery) {
+      setMentionSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void mentionSearch(mentionQuery.trigger, mentionQuery.query)
+        .then((suggestions) => {
+          if (cancelled) return;
+          setMentionSuggestions(suggestions.slice(0, 8));
+          setActiveSuggestionIndex(0);
+        })
+        .catch(() => {
+          if (!cancelled) setMentionSuggestions([]);
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [mentionQuery, mentionSearch]);
 
   useEffect(() => {
     if (!allowAttachments) {
@@ -529,6 +724,18 @@ export function ChatInput({
       ) : null}
 
       <div className="mx-auto flex w-full flex-col gap-3">
+        {replyPreview ? (
+          <div className="flex items-center gap-3 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-2)] px-3 py-2 shadow-sm">
+            <div className="min-w-0 flex-1 border-l-2 border-[var(--color-primary-500)] pl-3">
+              <p className="truncate text-xs font-semibold text-[var(--color-primary-700)]">{replyPreview.authorName}</p>
+              <p className="truncate text-xs text-[var(--color-gray-600)]">{replyPreview.preview}</p>
+            </div>
+            <ToolButton label="Cancelar resposta" onClick={() => onCancelReply?.()}>
+              <X className="h-4 w-4" />
+            </ToolButton>
+          </div>
+        ) : null}
+
         {displayedError && (
           <div className="flex items-center gap-2 rounded-xl border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs font-medium text-[var(--color-error-600)]">
             <AlertCircle className="h-4 w-4 shrink-0" />
@@ -585,6 +792,13 @@ export function ChatInput({
             </ToolButton>
           ) : null}
 
+          {!isRecordingAudio && !selectedAudioAttachment ? (
+            <EmojiPickerPopover
+              disabled={disabled || isSending}
+              onSelect={handleEmojiSelect}
+            />
+          ) : null}
+
           {isRecordingAudio ? (
             <div className="chat-voice-inline" role="status" aria-live="polite">
               <Mic className="h-4 w-4 shrink-0 text-[var(--color-error-500)]" />
@@ -636,16 +850,70 @@ export function ChatInput({
             </div>
           ) : (
             <textarea
+              id="chat-message-input"
               ref={textareaRef}
               value={message}
-              onChange={(event) => setMessage(event.target.value)}
+              onChange={(event) => applyTextChange(
+                event.target.value,
+                event.target.selectionStart,
+                event.target.selectionEnd,
+              )}
               onKeyDown={handleKeyDown}
+              onClick={(event) => refreshMentionQuery(message, event.currentTarget.selectionStart)}
+              onKeyUp={(event) => {
+                if (!event.key.startsWith("Arrow") || mentionSuggestions.length > 0) return;
+                refreshMentionQuery(message, event.currentTarget.selectionStart);
+              }}
+              aria-autocomplete={mentionSearch ? "list" : undefined}
+              aria-haspopup={mentionSearch ? "listbox" : undefined}
+              aria-expanded={mentionSearch ? Boolean(mentionQuery && mentionSuggestions.length > 0) : undefined}
+              aria-controls={mentionQuery && mentionSuggestions.length > 0 ? "chat-mention-suggestions" : undefined}
+              aria-activedescendant={mentionQuery && mentionSuggestions.length > 0
+                ? `chat-mention-suggestion-${activeSuggestionIndex}`
+                : undefined}
               placeholder="Digite sua mensagem..."
               disabled={disabled || isSending}
               rows={1}
               className="min-h-[24px] max-h-[150px] w-full resize-none border-0 bg-transparent px-1 py-3 text-sm text-[var(--color-gray-700)] shadow-none placeholder:text-[var(--color-gray-500)] focus:outline-none focus:ring-0"
             />
           )}
+
+          {mentionQuery && mentionSuggestions.length > 0 && !isRecordingAudio && !selectedAudioAttachment ? (
+            <div
+              id="chat-mention-suggestions"
+              role="listbox"
+              aria-label={mentionQuery.trigger === "@" ? "Mencionar pessoa" : "Mencionar lead"}
+              className="absolute bottom-[calc(100%+8px)] left-2 z-50 max-h-64 w-[min(320px,calc(100vw-32px))] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-1.5 shadow-md"
+            >
+              {mentionSuggestions.map((suggestion, index) => (
+                <button
+                  id={`chat-mention-suggestion-${index}`}
+                  key={suggestion.id}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeSuggestionIndex}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectMentionSuggestion(suggestion)}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-[var(--radius-lg)] px-3 py-2 text-left transition-colors focus-ring",
+                    index === activeSuggestionIndex
+                      ? "bg-[var(--color-primary-50)]"
+                      : "hover:bg-[var(--color-bg-subtle)]",
+                  )}
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-sm font-semibold text-[var(--color-gray-700)]">
+                    {suggestion.type === "all" ? "@" : suggestion.label.replace(/^[@#]/, "").charAt(0).toUpperCase()}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-[var(--color-gray-800)]">{suggestion.label}</span>
+                    {suggestion.description ? (
+                      <span className="block truncate text-xs text-[var(--color-gray-500)]">{suggestion.description}</span>
+                    ) : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {(isRecordingAudio || selectedAudioAttachment) && (
             <ToolButton

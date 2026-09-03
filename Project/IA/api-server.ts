@@ -38,6 +38,7 @@ import {
   validateCreateGupshupTemplateInput,
   type CreateGupshupTemplateInput,
 } from "./gupshup-template-service.js";
+import { InternalChatService } from "./internal-chat-service.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -473,6 +474,12 @@ const manager = new AgentManager({
   },
   rbVisagismService,
   instagramService,
+});
+
+const internalChatService = new InternalChatService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseAnonKey: process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -2370,6 +2377,185 @@ app.post(
     );
 
     res.json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/internal/users",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.listUsers(
+      req.authContext!,
+      typeof req.query.search === "string" ? req.query.search : "",
+    );
+    res.json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/internal/leads",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.searchMentionableLeads(
+      req.authContext!,
+      typeof req.query.search === "string" ? req.query.search : "",
+    );
+    res.json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/internal/conversations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.listConversations(
+      req.authContext!,
+      req.query.includeArchived === "true",
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.createConversation(req.authContext!, {
+      kind: String(req.body.kind ?? ""),
+      name: typeof req.body.name === "string" ? req.body.name : null,
+      memberIds: Array.isArray(req.body.memberIds)
+        ? req.body.memberIds.map((value: unknown) => String(value))
+        : [],
+    });
+    res.status(201).json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/internal/conversations/:id/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.listMessages(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      typeof req.query.before === "string" ? req.query.before : null,
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const mentions = Array.isArray(req.body.mentions)
+      ? req.body.mentions.map((value: unknown) => {
+          const mention = asRecord(value);
+          return {
+            type: String(mention.type ?? "") as "user" | "all" | "lead",
+            userId: typeof mention.userId === "string" ? mention.userId : null,
+            leadId: typeof mention.leadId === "string" ? mention.leadId : null,
+            start: Number(mention.start),
+            length: Number(mention.length),
+          };
+        })
+      : [];
+    const result = await internalChatService.sendMessage(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        content: typeof req.body.content === "string" ? req.body.content : "",
+        replyToMessageId: typeof req.body.replyToMessageId === "string" ? req.body.replyToMessageId : null,
+        clientMessageId: typeof req.body.clientMessageId === "string" ? req.body.clientMessageId : "",
+        attachmentId: typeof req.body.attachmentId === "string" ? req.body.attachmentId : null,
+        mentions,
+      },
+    );
+    res.status(201).json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/attachments/upload-url",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.createAttachmentUploadUrl(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        fileName: typeof req.body.fileName === "string" ? req.body.fileName : "",
+        mimeType: typeof req.body.mimeType === "string" ? req.body.mimeType : "",
+        fileSize: Number(req.body.fileSize ?? 0),
+        kind: typeof req.body.kind === "string" ? req.body.kind : "",
+      },
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/read",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.markRead(req.authContext!, getSingleParam(req.params.id)));
+  }),
+);
+
+app.patch(
+  "/api/chat/internal/conversations/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.updateConversation(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        name: typeof req.body.name === "string" ? req.body.name : undefined,
+        archived: typeof req.body.archived === "boolean" ? req.body.archived : undefined,
+      },
+    ));
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/members",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.status(201).json(await internalChatService.addMember(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        userId: typeof req.body.userId === "string" ? req.body.userId : "",
+        isAdmin: req.body.isAdmin === true,
+      },
+    ));
+  }),
+);
+
+app.patch(
+  "/api/chat/internal/conversations/:id/members/:userId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.updateMember(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      getSingleParam(req.params.userId),
+      {
+        isAdmin: typeof req.body.isAdmin === "boolean" ? req.body.isAdmin : undefined,
+        isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
+      },
+    ));
+  }),
+);
+
+app.delete(
+  "/api/chat/internal/conversations/:id/members/:userId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.removeMember(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      getSingleParam(req.params.userId),
+    ));
   }),
 );
 
