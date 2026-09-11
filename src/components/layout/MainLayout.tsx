@@ -18,6 +18,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
   const isCalendarPage = location.pathname.startsWith("/calendar");
   const isPipelinePage = location.pathname === "/pipeline";
   const isAgentsPage = location.pathname === "/agentes";
+  const isConnectionsPage = location.pathname === "/conexoes";
 
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < TABLET_BP);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -103,7 +104,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
           isChatPage && "app-main--chat",
           isCalendarPage && "app-main--calendar",
           isPipelinePage && "app-main--pipeline",
-          isAgentsPage && "app-main--agents"
+          isAgentsPage && "app-main--agents",
+          isConnectionsPage && "app-main--connections"
         )}>
           {children}
         </main>

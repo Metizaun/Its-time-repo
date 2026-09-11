@@ -2,8 +2,8 @@
 [api]
 enabled = true
 port = 55321
-schemas = ["public", "storage", "graphql_public", "crm", "meta", "calendar", "agents", "bi", "locator", "gupshup", "rb", "instagram"]
-extra_search_path = ["public", "extensions", "crm", "agents", "bi", "locator", "meta", "calendar", "gupshup", "rb", "instagram"]
+schemas = ["public", "storage", "graphql_public", "crm", "meta", "calendar", "agents", "bi", "locator", "gupshup", "rb", "instagram", "collections"]
+extra_search_path = ["public", "extensions", "crm", "agents", "bi", "locator", "meta", "calendar", "gupshup", "rb", "instagram", "collections"]
 
 [db]
 port = 55322

@@ -130,6 +130,7 @@ var(--space-10)  /* 40px — margin de página */
 
 - Uma decisão principal e um editor por superfície.
 - Hierarquia, alinhamento e progressive disclosure substituem caixas explicativas.
+- Campo simples permanece simples: não envolva checkbox ou input auxiliar em card, box ou container destacado; use label, controle e proximidade.
 - Laranja indica ação, foco ou seleção; nunca serve como fundo decorativo para formulários.
 - Fluxos mutuamente exclusivos trocam o conteúdo da superfície, sem empilhar experiências concorrentes.
 

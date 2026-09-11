@@ -59,6 +59,16 @@ const INTELLIGENT_COMPANY_DIRECTORY_MIGRATION =
   "supabase/migrations/20260821154844_intelligent_company_directory_v2.sql";
 const LEAD_FIRST_TOUCH_ATTRIBUTION_MIGRATION =
   "supabase/migrations/20260817205108_add_lead_first_touch_attribution.sql";
+const COLLECTIONS_CORE_MIGRATION =
+  "supabase/migrations/20260903205231_collections_core_v1.sql";
+const COLLECTIONS_HARDENING_MIGRATION =
+  "supabase/migrations/20260904130546_collections_core_hardening.sql";
+const COLLECTIONS_RB_CUTOVER_MIGRATION =
+  "supabase/migrations/20260904132617_collections_rb_shadow_cutover_retention.sql";
+const RB_BILLING_ADMIN_PIX_MIGRATION =
+  "supabase/migrations/20260905120000_cobranca_rb_admin_pix.sql";
+const COLLECTIONS_INTEGRITY_MIGRATION =
+  "supabase/migrations/20260910192757_collections_dispatch_integrity.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -685,6 +695,51 @@ function isMissingRpcError(error: PostgrestError) {
     || /schema cache|function .* does not exist/i.test(normalized.message);
 }
 
+async function validateCollectionIntegrityRpcs(
+  collectionsClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    collectionsClient.rpc("resolve_source_dispatcher", {
+      p_source_connection_id: NIL_UUID,
+    }),
+    collectionsClient.rpc("prepare_rb_source", {
+      p_aces_id: -1,
+      p_legacy_connection_id: NIL_UUID,
+      p_config: {},
+      p_capabilities: {},
+    }),
+    collectionsClient.rpc("rotate_source_credential", {
+      p_aces_id: -1,
+      p_source_connection_id: NIL_UUID,
+      p_credential_type: "invalid",
+      p_ciphertext: "\\x01",
+      p_iv: "\\x000000000000000000000000",
+      p_auth_tag: "\\x00000000000000000000000000000000",
+      p_key_version: "v1",
+      p_valid_until: null,
+    }),
+    collectionsClient.rpc("activate_collection_onboarding", {
+      p_aces_id: -1,
+      p_source_connection_id: NIL_UUID,
+    }),
+    collectionsClient.rpc("set_rb_billing_state", {
+      p_aces_id: -1,
+      p_enabled: false,
+    }),
+    collectionsClient.rpc("complete_canonical_cutover", {
+      p_aces_id: -1,
+      p_source_connection_id: NIL_UUID,
+      p_reason: "schema_preflight",
+      p_actor_id: null,
+    }),
+  ];
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => error && isMissingRpcError(error));
+  return missing?.error
+    ? buildSchemaFailure("RPCs de integridade da cobrança independente", COLLECTIONS_INTEGRITY_MIGRATION, missing.error)
+    : null;
+}
+
 async function validateCompaniesCalendarRoutingRpcs(
   serviceClient: SupabaseClient<any, any, any>,
   calendarClient: SupabaseClient<any, any, any>
@@ -987,7 +1042,76 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const collectionsClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "collections" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
+    validateSelectedColumns(
+      collectionsClient,
+      "source_connections",
+      ["id", "public_id", "aces_id", "source_type", "status", "capabilities", "last_success_at"],
+      "collections.source_connections",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "source_credentials",
+      ["id", "aces_id", "source_connection_id", "credential_type", "ciphertext", "iv", "auth_tag", "key_version", "status", "valid_until"],
+      "collections.source_credentials",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "onboarding_bindings",
+      ["id", "aces_id", "source_connection_id", "agent_id", "agent_tool_id", "pipeline_id", "funnel_id", "journey_rule_id", "first_step_id", "status", "sending_enabled"],
+      "collections.onboarding_bindings",
+      "supabase/migrations/20260909191317_collection_onboarding.sql",
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "receivables",
+      ["id", "source_connection_id", "case_id", "financial_status", "record_status", "source_updated_at"],
+      "collections.receivables",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "cases",
+      ["id", "aces_id", "lead_id", "communication_status", "source_freshness", "total_open_amount"],
+      "collections.cases",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "runtime_controls",
+      ["aces_id", "active_dispatcher", "business_timezone", "changed_at"],
+      "collections.runtime_controls",
+      COLLECTIONS_RB_CUTOVER_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "spreadsheet_imports",
+      ["id", "status", "publish_requested_at", "failure_summary", "expires_at", "storage_deleted_at"],
+      "collections.spreadsheet_imports (publicacao e retencao)",
+      COLLECTIONS_RB_CUTOVER_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "operational_events",
+      ["id", "aces_id", "event_type", "severity", "actor_id", "details", "created_at"],
+      "collections.operational_events",
+      COLLECTIONS_HARDENING_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "rb_funnel_mappings",
+      ["id", "aces_id", "source_connection_id", "legacy_funnel_id", "canonical_funnel_id"],
+      "collections.rb_funnel_mappings",
+      COLLECTIONS_RB_CUTOVER_MIGRATION,
+    ),
+    validateCollectionIntegrityRpcs(collectionsClient),
     validateSelectedColumns(
       locatorClient,
       "stores",
@@ -1208,9 +1332,11 @@ export async function assertRuntimeSchemaCompatibility(
         "timezone",
         "is_active",
         "search_key",
+        "pix_key",
+        "use_cnpj_as_pix",
       ],
       "crm.empresas",
-      FEATURE_CLOSING_MIGRATION
+      RB_BILLING_ADMIN_PIX_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -1626,9 +1752,16 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       rbClient,
       "connections",
-      ["id", "aces_id", "rb_aces_id", "rb_base_url", "rb_token_api", "rb_empresa_ids", "is_active"],
+      ["id", "aces_id", "rb_aces_id", "rb_base_url", "rb_token_api", "rb_empresa_ids", "is_active", "billing_enabled"],
       "rb.connections",
-      "supabase/migrations/20260728185300_add_rb_connections_and_visagism_storage.sql"
+      RB_BILLING_ADMIN_PIX_MIGRATION
+    ),
+    validateSelectedColumns(
+      rbClient,
+      "pix_migration_reviews",
+      ["id", "aces_id", "company_id", "legacy_key", "candidate_pix_keys", "reason", "status"],
+      "rb.pix_migration_reviews",
+      RB_BILLING_ADMIN_PIX_MIGRATION
     ),
     validateSelectedColumns(
       rbClient,

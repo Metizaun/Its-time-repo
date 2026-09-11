@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AppProvider } from "@/context/AppContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
@@ -23,6 +23,8 @@ const Chat = lazy(() => import("./pages/Chat"));
 const Calendar = lazy(() => import("./pages/Calendar"));
 const CalendarSettings = lazy(() => import("./pages/CalendarSettings"));
 const Agentes = lazy(() => import("./pages/Agentes"));
+const Conexoes = lazy(() => import("./pages/Conexoes"));
+const Collections = lazy(() => import("./pages/Collections"));
 const Auth = lazy(() => import("./pages/Auth"));
 const Updates = lazy(() => import("./pages/Updates"));
 const AgendaGuide = lazy(() => import("./pages/AgendaGuide"));
@@ -65,6 +67,8 @@ const App = () => (
                   <Route path="/buscar" element={<ProtectedRoute><MainLayout><Buscar /></MainLayout></ProtectedRoute>} />
                   <Route path="/automacao" element={<ProtectedRoute><MainLayout><Automacao /></MainLayout></ProtectedRoute>} />
                   <Route path="/agentes" element={<ProtectedRoute><MainLayout><Agentes /></MainLayout></ProtectedRoute>} />
+                  <Route path="/conexoes" element={<ProtectedRoute><MainLayout><Conexoes /></MainLayout></ProtectedRoute>} />
+                  <Route path="/cobranca" element={<ProtectedRoute><MainLayout><Collections /></MainLayout></ProtectedRoute>} />
                   <Route path="/admin" element={<ProtectedRoute><MainLayout><Admin /></MainLayout></ProtectedRoute>} />
                   <Route path="/superadmin" element={<ProtectedRoute><MainLayout><SuperAdmin /></MainLayout></ProtectedRoute>} />
                   <Route path="*" element={<NotFound />} />

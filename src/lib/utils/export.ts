@@ -112,3 +112,24 @@ export function downloadLeadImportTemplate(filename: string = "modelo-importacao
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+/** Modelo oficial de títulos de cobrança, com nomes de negócio para o usuário. */
+export function downloadCollectionImportTemplate(filename: string = "modelo-importacao-cobranca.csv") {
+  const headers = [
+    "Identificador do cliente", "Nome do cliente", "Telefone", "Documento do cliente",
+    "Identificador do credor", "Nome do credor", "Identificador do título", "Descrição do título",
+    "Saldo em aberto", "Valor original", "Moeda", "Data de vencimento", "Status financeiro",
+    "Forma de pagamento", "Chave Pix", "Link de pagamento",
+  ];
+  const bom = "\uFEFF";
+  const blob = new Blob([bom + headers.join(",") + "\n"], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}

@@ -6,7 +6,6 @@ import { AgentBotIcon, ToolGlyph } from "@/components/agents/AgentCapabilityFlow
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { OpticsToolConfigPanel } from "@/components/agents/OpticsToolConfigPanel";
-import { RbBillingConfigPanel } from "@/components/agents/RbBillingConfigPanel";
 import { AudioToolConfigPanel } from "@/components/agents/AudioToolConfigPanel";
 import { ForwardingConfigPanel } from "@/components/agents/ForwardingConfigPanel";
 import { CalendarToolConfigPanel } from "@/components/agents/CalendarToolConfigPanel";
@@ -25,7 +24,7 @@ type AgentToolsPanelProps = {
   onConfigure?: (toolKey: ConfigurableToolKey) => void;
 };
 
-type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "prescription_analyst" | "visagism" | "rb_billing" | "store_locator";
+type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "prescription_analyst" | "visagism" | "store_locator";
 
 function readinessCopy(tool: AgentTool) {
   if (tool.enabled) return "Ativa";
@@ -35,7 +34,7 @@ function readinessCopy(tool: AgentTool) {
 }
 
 function isConfigurableToolKey(value: string): value is ConfigurableToolKey {
-  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "prescription_analyst" || value === "visagism" || value === "rb_billing" || value === "store_locator";
+  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "prescription_analyst" || value === "visagism" || value === "store_locator";
 }
 
 export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose, onCreateSubagent, onConfigure }: AgentToolsPanelProps) {
@@ -191,13 +190,6 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
             )}
           </div>
           )}
-          {tool.key === "rb_billing" && toolFilterKey === tool.key ? (
-            <RbBillingConfigPanel
-              agentId={agentId}
-              onClose={closeConfiguration}
-              onChanged={() => setReloadKey((value) => value + 1)}
-            />
-          ) : null}
           {tool.key === "ai_audio" && toolFilterKey === tool.key ? (
             <AudioToolConfigPanel agentId={agentId} tool={tool} onClose={closeConfiguration} onChanged={() => setReloadKey((value) => value + 1)} />
           ) : null}

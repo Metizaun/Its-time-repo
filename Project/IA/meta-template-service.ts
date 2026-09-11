@@ -17,7 +17,7 @@ type MetaChannelRow = {
   access_token_secret_ref: string | null;
 };
 
-type MetaTemplatePayload = {
+export type MetaTemplatePayload = {
   id?: string;
   name: string;
   language?: string;
@@ -25,6 +25,13 @@ type MetaTemplatePayload = {
   status?: string;
   components?: unknown[];
   rejection_reason?: string | null;
+};
+
+export type CreateMetaTemplateInput = {
+  name: string;
+  language?: string;
+  category?: string;
+  components: unknown[];
 };
 
 const DEFAULT_MOCK_TEMPLATES: MetaTemplatePayload[] = [
@@ -103,6 +110,53 @@ export class MetaTemplateService {
     };
   }
 
+  async createTemplate(instanceName: string, input: CreateMetaTemplateInput) {
+    const channel = await this.requireChannel(instanceName);
+    const name = normalizeTemplateName(input.name);
+    if (!/^[a-z0-9_]{1,512}$/.test(name)) {
+      throw new Error("Nome do template Meta deve usar apenas letras minusculas, numeros e underscore");
+    }
+    if (!Array.isArray(input.components) || input.components.length === 0) {
+      throw new Error("O template Meta precisa de ao menos um componente");
+    }
+
+    const template: MetaTemplatePayload = this.config.providerMode === "mock"
+      ? {
+          id: `mock_${name}_${Date.now()}`,
+          name,
+          language: input.language ?? "pt_BR",
+          category: input.category ?? "UTILITY",
+          status: "PENDING",
+          components: input.components,
+        }
+      : await this.createGraphTemplate(channel, {
+          name,
+          language: input.language ?? "pt_BR",
+          category: input.category ?? "UTILITY",
+          components: input.components,
+        });
+
+    const { data, error } = await this.metaClient
+      .from("whatsapp_templates")
+      .upsert({
+        channel_id: channel.id,
+        meta_template_id: template.id ?? null,
+        name,
+        language: template.language ?? "pt_BR",
+        category: template.category ?? "UTILITY",
+        status: template.status ?? "PENDING",
+        components_json: template.components ?? input.components,
+        variables_json: extractTemplateVariables(template.components ?? input.components),
+        rejection_reason: template.rejection_reason ?? null,
+        last_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "channel_id,name,language" })
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
   private async requireChannel(instanceName: string) {
     const { data, error } = await this.metaClient
       .from("whatsapp_channels")
@@ -158,6 +212,30 @@ export class MetaTemplateService {
 
     const payload = response.data as { data?: MetaTemplatePayload[] };
     return Array.isArray(payload.data) ? payload.data : [];
+  }
+
+  private async createGraphTemplate(channel: MetaChannelRow, payload: {
+    name: string;
+    language: string;
+    category: string;
+    components: unknown[];
+  }) {
+    if (!channel.waba_id) throw new Error("waba_id Meta ausente para criacao de template");
+    const accessToken = await this.resolveAccessToken(channel);
+    const response = await axios.post(
+      `https://graph.facebook.com/${this.config.graphApiVersion}/${channel.waba_id}/message_templates`,
+      payload,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const result = (response.data ?? {}) as Record<string, unknown>;
+    return {
+      id: typeof result.id === "string" ? result.id : undefined,
+      name: payload.name,
+      language: payload.language,
+      category: payload.category,
+      status: typeof result.status === "string" ? result.status : "PENDING",
+      components: payload.components,
+    } satisfies MetaTemplatePayload;
   }
 
   private async resolveAccessToken(channel: MetaChannelRow) {

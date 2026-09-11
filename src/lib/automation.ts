@@ -15,7 +15,7 @@ export type AutomationConditionVisibility = "user" | "internal";
 export type AutomationTimeUnit = "minute" | "hour" | "day";
 export type AutomationStepContentMode = "text" | "media";
 export type AutomationStepMediaKind = "image" | "video" | "document";
-export type AutomationJourneyEntrySource = "conditions" | "rb" | "calendar_event";
+export type AutomationJourneyEntrySource = "conditions" | "rb" | "collection" | "calendar_event";
 export type AutomationTriggerEventStatus =
   | "scheduled"
   | "confirmed"

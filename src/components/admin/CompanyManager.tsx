@@ -3,6 +3,7 @@ import { Building2, Loader2, MapPin, Pencil, Plus, Search, Users } from "lucide-
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -40,6 +41,8 @@ const EMPTY_FORM: CompanyInput = {
   name: "",
   phone: "",
   email: "",
+  pixKey: "",
+  useCnpjAsPix: false,
   address: "",
   city: "",
   state: "",
@@ -99,6 +102,8 @@ export function CompanyManager() {
       name: company.name,
       phone: company.phone ?? "",
       email: company.email ?? "",
+      pixKey: company.pixKey ?? "",
+      useCnpjAsPix: company.useCnpjAsPix,
       address: company.address,
       city: company.city,
       state: company.state,
@@ -126,6 +131,9 @@ export function CompanyManager() {
     if (form.postalCode.trim() && form.postalCode.replace(/\D/g, "").length !== 8) {
       nextErrors.postalCode = "Informe um CEP com 8 dígitos.";
     }
+    if (form.pixKey.trim().length > 255) {
+      nextErrors.pixKey = "A chave Pix deve ter no maximo 255 caracteres.";
+    }
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -141,6 +149,7 @@ export function CompanyManager() {
         name: form.name.trim(),
         phone: form.phone.trim(),
         email: form.email.trim().toLowerCase(),
+        pixKey: form.pixKey.trim(),
         address: form.address.trim(),
         city: form.city.trim(),
         state: form.state.trim().toUpperCase(),
@@ -306,7 +315,7 @@ export function CompanyManager() {
                 />
                 {errors.cnpj ? <p className="text-xs text-[var(--color-error-600)]">{errors.cnpj}</p> : null}
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 sm:col-start-2 sm:row-start-1">
                 <Label htmlFor="company-legal-name">Razão social</Label>
                 <Input
                   id="company-legal-name"
@@ -317,7 +326,28 @@ export function CompanyManager() {
                 />
                 {errors.legalName ? <p className="text-xs text-[var(--color-error-600)]">{errors.legalName}</p> : null}
               </div>
-              <div className="space-y-2 sm:col-span-2">
+              <div className="flex w-full items-center gap-2 sm:col-span-2 sm:row-start-2">
+                <Checkbox
+                  id="company-use-cnpj-as-pix"
+                  checked={form.useCnpjAsPix}
+                  onCheckedChange={(checked) => setForm((current) => ({ ...current, useCnpjAsPix: checked === true }))}
+                />
+                <Label htmlFor="company-use-cnpj-as-pix" className="cursor-pointer font-normal">Usar CNPJ como Pix</Label>
+              </div>
+              <div className="space-y-2 sm:col-start-1 sm:row-start-3">
+                <Label htmlFor="company-pix-key">Chave Pix</Label>
+                <Input
+                  id="company-pix-key"
+                  value={form.pixKey}
+                  onChange={(event) => setForm((current) => ({ ...current, pixKey: event.target.value }))}
+                  placeholder="E-mail, telefone ou chave Pix"
+                  disabled={form.useCnpjAsPix}
+                  aria-invalid={Boolean(errors.pixKey)}
+                  className="shadow-inset"
+                />
+                {errors.pixKey ? <p className="text-xs text-[var(--color-error-600)]">{errors.pixKey}</p> : null}
+              </div>
+              <div className="space-y-2 sm:col-start-2 sm:row-start-3">
                 <Label htmlFor="company-name">Nome fantasia</Label>
                 <Input
                   id="company-name"

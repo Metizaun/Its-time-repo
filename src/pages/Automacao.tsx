@@ -128,8 +128,9 @@ export default function Automacao() {
     void Promise.allSettled(
       agents.map(async (agent) => {
         const tools = await listAgentTools(agent.id);
-        const rbTool = tools.find((tool) => tool.key === "rb_billing");
-        return rbTool?.enabled && rbTool.readiness === "ready" ? agent.instance_name : null;
+        const collectionTool = tools.find((tool) => tool.key === "collection_orchestration")
+          ?? tools.find((tool) => tool.key === "rb_billing");
+        return collectionTool?.enabled && collectionTool.readiness === "ready" ? agent.instance_name : null;
       }),
     ).then((results) => {
       if (!active) {

@@ -3,7 +3,6 @@ import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
   Building2,
-  Cable,
   Clock,
   Plus,
   Shield,
@@ -18,7 +17,6 @@ import { CompanyAccessSelect } from "@/components/admin/CompanyAccessSelect";
 import { CompanyManager } from "@/components/admin/CompanyManager";
 import { CreateUserModal, CreateUserFormData } from "@/components/admin/CreateUserModal";
 import { InstanceAccessSelect } from "@/components/admin/InstanceAccessSelect";
-import { InstanceManager } from "@/components/admin/InstanceManager";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -121,10 +119,6 @@ export default function Admin() {
           <TabsTrigger value="companies" className="gap-2">
             <Building2 />
             Empresas
-          </TabsTrigger>
-          <TabsTrigger value="instances" className="gap-2">
-            <Cable />
-            Conexões
           </TabsTrigger>
         </TabsList>
 
@@ -262,9 +256,6 @@ export default function Admin() {
           <CompanyManager />
         </TabsContent>
 
-        <TabsContent value="instances" className="mt-0">
-          <InstanceManager />
-        </TabsContent>
       </Tabs>
 
       <CreateUserModal

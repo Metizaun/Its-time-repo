@@ -7,6 +7,7 @@ export interface Instance {
   color: string | null;
   aces_id: number;
   provider: "evolution" | "meta" | "gupshup";
+  phoneNumber?: string | null;
   status?: string | null;
   setup_status?: "pending_qr" | "connected" | "expired" | "cancelled" | null;
   created_by?: string | null;

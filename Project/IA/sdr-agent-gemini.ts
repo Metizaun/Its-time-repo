@@ -575,6 +575,9 @@ type EvolutionTransport = {
 
 type InstanceListItem = {
   instanceName: string;
+  displayName: string | null;
+  profilePictureUrl: string | null;
+  phoneNumber: string | null;
   status: "connected" | "disconnected" | "connecting" | "error";
   setupStatus: InstanceSetupStatus;
   connectionMode: InstanceConnectionMode;
@@ -3397,6 +3400,41 @@ export class AgentManager {
     );
   }
 
+  private async fetchEvolutionInstancePresentation(instance: InstanceRow) {
+    const fallback = {
+      displayName: null as string | null,
+      profilePictureUrl: null as string | null,
+      phoneNumber: null as string | null,
+    };
+
+    try {
+      const transport = await this.resolveEvolutionTransport(instance.instancia, instance.aces_id);
+      const { data } = await axios.get(
+        `${transport.apiUrl}/instance/fetchInstances`,
+        { headers: { apikey: transport.apiKey }, timeout: 8_000 },
+      );
+      const rows = Array.isArray(data) ? data : [];
+      const match = rows.find((row) => {
+        const item = asRecord(row);
+        const nested = asRecord(item.instance);
+        return [item.name, item.instanceName, nested.instanceName, nested.name]
+          .some((value) => String(value ?? "") === transport.instanceName);
+      });
+      const item = asRecord(match);
+      const nested = asRecord(item.instance);
+      const ownerJid = asString(item.ownerJid) ?? asString(nested.ownerJid);
+      return {
+        displayName: asString(item.profileName) ?? asString(nested.profileName) ?? asString(item.name) ?? null,
+        profilePictureUrl:
+          asString(item.profilePicUrl) ?? asString(item.profilePictureUrl) ?? asString(nested.profilePicUrl) ?? null,
+        phoneNumber:
+          asString(item.number) ?? asString(nested.number) ?? (ownerJid ? ownerJid.split("@")[0] : null),
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
   private async getAgentForAccount(
     agentId: string,
     acesId: number,
@@ -3930,12 +3968,15 @@ export class AgentManager {
       return;
     }
 
-    const ready = await this.isRbBillingConnected(acesId);
+    const state = await this.getRbBillingState(acesId);
+    const ready = state.ready;
     const { error: updateError } = await this.agentsClient
       .from("agent_tools")
       .update({
         readiness: ready ? "ready" : "needs_config",
-        is_enabled: ready ? (autoEnableReady ? true : Boolean(binding.is_enabled)) : false,
+        is_enabled: ready
+          ? (autoEnableReady ? true : Boolean(binding.is_enabled))
+          : state.enabled ? false : Boolean(binding.is_enabled),
         last_validated_at: new Date().toISOString(),
       })
       .eq("id", binding.id)
@@ -4021,7 +4062,6 @@ export class AgentManager {
       rb_mode: "live",
       rb_base_url: "https://app.registrobase.com.br:32077",
       rb_empresa_ids: usePilotDefaults ? RB_PILOT_DEFAULTS.rb_empresa_ids : [],
-      pix_mapping_by_store: usePilotDefaults ? RB_PILOT_DEFAULTS.pix_mapping_by_store : {},
       gupshup_defaults: usePilotDefaults ? RB_PILOT_DEFAULTS.gupshup_defaults : {},
       trigger_time: usePilotDefaults ? RB_PILOT_DEFAULTS.trigger_time : "10:00",
       timezone: "America/Sao_Paulo",
@@ -4291,15 +4331,28 @@ export class AgentManager {
     return { success: true };
   }
 
-  private async isRbBillingConnected(acesId: number) {
+  private async getRbBillingState(acesId: number) {
     const { data, error } = await this.rbClient
       .from("connections")
-      .select("rb_empresa_ids")
+      .select("rb_empresa_ids, billing_enabled, is_active, rb_token_api")
       .eq("aces_id", acesId)
-      .eq("is_active", true)
-      .not("rb_token_api", "is", null);
+      .maybeSingle();
     if (error) throw new HttpError(500, "Nao foi possivel validar a conexao Via RB", error);
-    return (data ?? []).some((connection) => Array.isArray(connection.rb_empresa_ids) && connection.rb_empresa_ids.length > 0);
+    const enabled = Boolean(data?.billing_enabled);
+    return {
+      enabled,
+      ready: Boolean(
+        enabled
+        && data?.is_active
+        && data?.rb_token_api
+        && Array.isArray(data.rb_empresa_ids)
+        && data.rb_empresa_ids.length > 0,
+      ),
+    };
+  }
+
+  private async isRbBillingConnected(acesId: number) {
+    return (await this.getRbBillingState(acesId)).ready;
   }
 
   private async isVisagismReady(acesId: number) {
@@ -4380,12 +4433,19 @@ export class AgentManager {
       ])
     );
 
-    return (bindings ?? []).map((binding) => {
+    const rbBillingReady = (await this.getRbBillingState(context.acesId)).ready;
+    return (bindings ?? [])
+      .filter((binding) => binding.tool_key !== "rb_billing" || rbBillingReady)
+      .map((binding) => {
       const definition = definitionMap.get(
         `${String(binding.tool_key)}:${Number(binding.tool_version)}`
       );
       const publicConfig = { ...asRecord(binding.config) };
-      if (binding.tool_key === "rb_billing") delete publicConfig.rb_token_api;
+      if (binding.tool_key === "rb_billing") {
+        delete publicConfig.rb_token_api;
+        delete publicConfig.rb_empresa_ids;
+        delete publicConfig.pix_mapping_by_store;
+      }
       return {
         id: String(binding.id),
         key: String(binding.tool_key),
@@ -4398,7 +4458,7 @@ export class AgentManager {
         config: publicConfig,
         lastValidatedAt: binding.last_validated_at ? String(binding.last_validated_at) : null,
       };
-    });
+      });
   }
 
   private storeLocatorHttpError(error: unknown): HttpError {
@@ -4568,6 +4628,11 @@ export class AgentManager {
       throw new HttpError(404, "Tool nao instalada neste agente");
     }
 
+    const isRbBillingTool = toolKey === "rb_billing";
+    if (isRbBillingTool && input.config !== undefined) {
+      throw new HttpError(422, "A Tool CobranÃ§a RB Ã© configurada no Administrativo");
+    }
+
     const nextConfig =
       input.config !== undefined
         ? { ...asRecord(current.config), ...input.config }
@@ -4581,11 +4646,11 @@ export class AgentManager {
     const audioReady = toolKey === "ai_audio"
       ? Boolean(this.elevenLabsTtsEnabled && this.elevenLabsApiKey && asString(nextConfig.voiceId))
       : false;
-    const isRbBillingTool = toolKey === "rb_billing";
     if (isRbBillingTool) delete nextConfig.rb_token_api;
-    const rbBillingReady = isRbBillingTool
-      ? await this.isRbBillingConnected(context.acesId)
-      : false;
+    const rbBillingState = isRbBillingTool
+      ? await this.getRbBillingState(context.acesId)
+      : { enabled: false, ready: false };
+    const rbBillingReady = rbBillingState.ready;
     const isVisagismTool = toolKey === "visagism";
     const visagismReady = isVisagismTool
       ? await this.isVisagismReady(context.acesId)
@@ -4681,6 +4746,17 @@ export class AgentManager {
     await this.syncPlatformToolReadiness(agentId, context.acesId);
     await this.syncDataToolReadiness(agentId, context.acesId);
     if (isRbBillingTool) {
+      if (input.isEnabled !== undefined) {
+        const { error: canonicalToolError } = await this.agentsClient
+          .from("agent_tools")
+          .update({ is_enabled: input.isEnabled, readiness: "ready" })
+          .eq("agent_id", agentId)
+          .eq("aces_id", context.acesId)
+          .eq("tool_key", "collection_orchestration");
+        if (canonicalToolError) {
+          throw new HttpError(500, "Nao foi possivel sincronizar a Tool canonica de cobranca", canonicalToolError);
+        }
+      }
       await this.refreshRbBillingToolReadiness(context.acesId, current.id);
     }
     const tools = await this.listAgentTools(context, agentId);
@@ -5146,6 +5222,10 @@ export class AgentManager {
     this.ensureAdmin(context);
     const agent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
     const binding = await this.getAgentToolBinding(context.acesId, agentId, "rb_billing");
+    const rbBillingState = await this.getRbBillingState(context.acesId);
+    if (!rbBillingState.ready) {
+      throw new HttpError(409, "Ative a CobranÃ§a RB e cadastre as credenciais no Administrativo antes de configurar a Tool");
+    }
     
     const { data: account } = await this.serviceClient
       .from("accounts")
@@ -5181,7 +5261,6 @@ export class AgentManager {
       nextConfig.rb_mode = "mock";
       nextConfig.rb_base_url = "https://app.registrobase.com.br:32077";
       nextConfig.rb_empresa_ids = [];
-      nextConfig.pix_mapping_by_store = {};
       nextConfig.gupshup_defaults = {};
     }
     const { data: currentTool, error: currentToolError } = await this.agentsClient
@@ -5198,6 +5277,7 @@ export class AgentManager {
       ...nextConfig,
     };
     delete mergedConfig.rb_token_api;
+    delete mergedConfig.pix_mapping_by_store;
     const { error: updateError } = await this.agentsClient
       .from("agent_tools")
       .update({
@@ -6507,11 +6587,16 @@ export class AgentManager {
     const rows = (data ?? []) as InstanceRow[];
     const visibleRows = rows.filter((instance) => accessibleInstances.has(instance.instancia));
     const leadCounts = await this.buildLeadCountMap(context.acesId, visibleRows);
+    const presentations = await Promise.all(visibleRows.map((instance) => this.fetchEvolutionInstancePresentation(instance)));
 
-    return visibleRows.map((instance): InstanceListItem => {
+    return visibleRows.map((instance, index): InstanceListItem => {
       const setupStatus = this.deriveSetupStatus(instance);
+      const presentation = presentations[index];
       return {
         instanceName: instance.instancia,
+        displayName: presentation.displayName,
+        profilePictureUrl: presentation.profilePictureUrl,
+        phoneNumber: presentation.phoneNumber,
         status: this.normalizeInstanceStatus(instance.status),
         setupStatus,
         connectionMode: this.normalizeInstanceConnectionMode(instance.connection_mode),
@@ -11953,6 +12038,9 @@ export class AgentManager {
 
   private async getLeadBillingContextString(leadId: string, agentId: string, acesId: number): Promise<string> {
     try {
+      if (!(await this.isRbBillingConnected(acesId))) {
+        return "";
+      }
       const { data: toolBinding } = await this.agentsClient
         .from("agent_tools")
         .select("id, is_enabled")

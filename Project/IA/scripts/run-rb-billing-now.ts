@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import "../load-env.js";
 import { RbBillingWorker } from "../rb-billing-worker.js";
+import { RbConnectionService } from "../rb-connection-service.js";
 
 function requireEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -100,11 +101,18 @@ async function resolveAcesIdForAgent(agentId: string) {
 
 async function main() {
   const { acesId, agentId } = parseArgs(process.argv.slice(2));
+  const connectionService = new RbConnectionService({
+    supabaseUrl: requireEnv("SUPABASE_URL"),
+    supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    rbApiBaseUrl: process.env.RB_API_BASE_URL,
+  });
   const worker = new RbBillingWorker({
     supabaseUrl: requireEnv("SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
     mockFixturePath: process.env.RB_BILLING_MOCK_FIXTURE_PATH,
     pollMs: Number(process.env.RB_BILLING_WORKER_POLL_MS ?? 60000),
+    resolveConnection: (currentAcesId, currentAgentId) =>
+      connectionService.resolveBillingConfig(currentAcesId, currentAgentId),
   });
 
   const targets =

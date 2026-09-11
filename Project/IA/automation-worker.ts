@@ -45,6 +45,34 @@ type ClaimedExecution = {
   rb_titles_count?: number | null;
   rb_store_emp_id?: string | null;
   rb_store_emp_cpf_cnpj?: string | null;
+  collection_variables?: Record<string, string> | null;
+};
+
+type CollectionDispatchContext = {
+  collection?: boolean;
+  action?: "continue" | "cancel";
+  reason?: string;
+  caseId?: string;
+  timezone?: string;
+  context?: {
+    cases?: Array<{
+      totalOpenAmount?: string | number | null;
+      currency?: string | null;
+      openReceivablesCount?: number | null;
+      oldestDueDate?: string | null;
+      mostOverdueDays?: number | null;
+      customer?: { name?: string | null } | null;
+      creditor?: { name?: string | null; document?: string | null } | null;
+      payment?: { method?: string | null; pixKey?: string | null; paymentUrl?: string | null } | null;
+    }>;
+  };
+};
+
+type CollectionDispatchReservation = {
+  reserved?: boolean;
+  collection?: boolean;
+  reason?: string;
+  deferUntil?: string;
 };
 
 type ClaimedCalendarFollowup = {
@@ -153,8 +181,8 @@ class AutomationDispatchError extends Error {
 }
 
 const HOLIDAY_COUNTRY_CODE = "BR";
-const PLACEHOLDER_PATTERN = /(\{|\[)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(\}|\])/g;
-const UNRESOLVED_PLACEHOLDER_PATTERN = /(?:\{|\[)\s*[a-zA-Z_][a-zA-Z0-9_]*\s*(?:\}|\])/;
+const PLACEHOLDER_PATTERN = /(\{|\[)\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*(\}|\])/g;
+const UNRESOLVED_PLACEHOLDER_PATTERN = /(?:\{|\[)\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*(?:\}|\])/;
 const TRANSIENT_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const PERMANENT_HTTP_STATUS_CODES = new Set([400]);
 const TRANSIENT_NETWORK_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"]);
@@ -325,6 +353,7 @@ export function buildExecutionTemplateVariables(execution: ClaimedExecution) {
     dtvencimento: dueDate,
     vl_liquido: totalAmount,
     valor_liquido: totalAmount,
+    ...(execution.collection_variables ?? {}),
   };
 }
 
@@ -434,6 +463,12 @@ async function assertAutomationConversationWindow(
   const hasTemplate = Boolean(
     execution.gupshup_template_id?.trim() || execution.gupshup_template_name?.trim(),
   );
+  if (providerName === "meta" && !hasTemplate) {
+    throw new AutomationDispatchError("Este WhatsApp exige um template oficial aprovado", {
+      kind: "permanent",
+      errorCode: "META_TEMPLATE_REQUIRED",
+    });
+  }
   if (providerName !== "gupshup" || hasTemplate) {
     return;
   }
@@ -846,13 +881,16 @@ async function sendWhatsAppMessage(
   }
 
   try {
+    const templateName = providerName === "meta"
+      ? execution.gupshup_template_name
+      : execution.gupshup_template_id || execution.gupshup_template_name;
     const response =
-      providerName === "gupshup" &&
-      (execution.gupshup_template_id || execution.gupshup_template_name)
+      (providerName === "gupshup" || providerName === "meta") &&
+      templateName
         ? await provider.sendTemplate({
             instanceName: execution.instance_name,
             to: execution.phone,
-            templateName: execution.gupshup_template_id || execution.gupshup_template_name || "",
+            templateName: templateName || "",
             languageCode: execution.gupshup_template_language || "pt_BR",
             parameters: renderExecutionTemplateParameters(execution),
             sourceType: "automation",
@@ -1054,6 +1092,11 @@ export function startAutomationWorker() {
 
   const calendarSupabase = createClient(supabaseUrl, serviceRoleKey, {
     db: { schema: "calendar" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const collectionsSupabase = createClient(supabaseUrl, serviceRoleKey, {
+    db: { schema: "collections" },
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
@@ -1677,6 +1720,89 @@ export function startAutomationWorker() {
     }
   }
 
+  function formatCollectionMoney(value: string | number | null | undefined) {
+    const amount = Number(value);
+    return Number.isFinite(amount)
+      ? amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : "";
+  }
+
+  function formatCollectionDate(value: string | null | undefined) {
+    if (!value) return "";
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+  }
+
+  async function prepareCollectionExecution(execution: ClaimedExecution) {
+    const { data, error } = await collectionsSupabase.rpc("get_execution_dispatch_context", {
+      p_execution_id: execution.execution_id,
+    });
+    if (error) throw error;
+    const dispatchContext = (data ?? {}) as CollectionDispatchContext;
+    if (!dispatchContext.collection) return { collection: false };
+    if (dispatchContext.action === "cancel") {
+      const reason = dispatchContext.reason || "collection_case_not_eligible";
+      const { error: cancelError } = await collectionsSupabase.rpc("cancel_collection_execution", {
+        p_execution_id: execution.execution_id,
+        p_reason: reason,
+      });
+      if (cancelError) throw cancelError;
+      return { collection: true, cancelled: true };
+    }
+
+    const collectionCase = dispatchContext.context?.cases?.[0];
+    if (!collectionCase) {
+      throw new AutomationDispatchError("Contexto canonico de cobranca indisponivel", {
+        kind: "permanent",
+      });
+    }
+    const amount = formatCollectionMoney(collectionCase.totalOpenAmount);
+    const dueDate = formatCollectionDate(collectionCase.oldestDueDate);
+    const variables: Record<string, string> = {
+      nome: collectionCase.customer?.name ?? "",
+      valor: amount ? `R$ ${amount}` : "",
+      vencimento: dueDate,
+      credor: collectionCase.creditor?.name ?? "",
+      "collection.total_open_amount": amount,
+      "collection.currency": collectionCase.currency ?? "",
+      "collection.open_receivables_count": String(collectionCase.openReceivablesCount ?? 0),
+      "collection.oldest_due_date": dueDate,
+      "collection.most_overdue_days": String(collectionCase.mostOverdueDays ?? 0),
+      "collection.creditor_name": collectionCase.creditor?.name ?? "",
+      "collection.creditor_document": collectionCase.creditor?.document ?? "",
+      "collection.payment_method": collectionCase.payment?.method ?? "",
+      "collection.pix_key": collectionCase.payment?.pixKey ?? "",
+      "collection.payment_url": collectionCase.payment?.paymentUrl ?? "",
+      // Aliases temporarios para templates RB durante o corte para o contrato canonico.
+      rb_pix_key: collectionCase.payment?.pixKey ?? "",
+      rb_total_amount: amount,
+      rb_next_due_date: dueDate,
+      rb_titles_count: String(collectionCase.openReceivablesCount ?? 0),
+      pix: collectionCase.payment?.pixKey ?? "",
+      dtvencimento: dueDate,
+      vl_liquido: amount,
+      valor_liquido: amount,
+    };
+    execution.collection_variables = variables;
+    return { collection: true, cancelled: false };
+  }
+
+  async function reserveCollectionDispatch(executionId: string) {
+    const { data, error } = await collectionsSupabase.rpc("reserve_collection_dispatch", {
+      p_execution_id: executionId,
+    });
+    if (error) throw error;
+    return (data ?? {}) as CollectionDispatchReservation;
+  }
+
+  async function markCollectionDispatchSent(executionId: string, sentAt: string) {
+    const { error } = await collectionsSupabase.rpc("mark_collection_dispatch_sent", {
+      p_execution_id: executionId,
+      p_sent_at: sentAt,
+    });
+    if (error) throw error;
+  }
+
   async function repairAutomationAiFreezes(leadId?: string | null, reference?: string | null) {
     const { error } = await supabase.rpc("rpc_repair_automation_ai_freezes", {
       p_lead_id: leadId ?? null,
@@ -1819,6 +1945,11 @@ export function startAutomationWorker() {
           let renderedMessage: string | null = null;
 
           try {
+            const collectionState = await prepareCollectionExecution(execution);
+            if (collectionState.cancelled) {
+              continue;
+            }
+
             if (!execution.instance_name) {
               throw new AutomationDispatchError("Instancia de envio nao definida", {
                 kind: "permanent",
@@ -1857,6 +1988,23 @@ export function startAutomationWorker() {
             );
             const provider = whatsAppProviders.getProvider(providerName);
             await assertAutomationConversationWindow(supabase, providerName, execution);
+
+            const reservation = await reserveCollectionDispatch(execution.execution_id);
+            if (reservation.collection && reservation.reserved === false) {
+              const deferUntil = reservation.deferUntil;
+              if (!deferUntil) {
+                throw new AutomationDispatchError("Reserva diaria de cobranca sem data de adiamento", {
+                  kind: "transient",
+                });
+              }
+              await deferExecution(execution.execution_id, deferUntil, {
+                ...(dispatchPlan.dispatch_meta ?? {}),
+                collection_dispatch_reason: reservation.reason ?? "deferred_contact_daily_limit",
+                deferred_contact_daily_limit: true,
+              });
+              continue;
+            }
+
             const sendResult =
               contentMode === "media"
                 ? await sendWhatsAppMedia(provider, providerName, execution, renderExecutionCaption(execution))
@@ -1888,6 +2036,9 @@ export function startAutomationWorker() {
             }
             await markDispatchSent(execution.execution_id, sentAt);
             await completeExecution(execution.execution_id, renderedMessage);
+            if (reservation.collection) {
+              await markCollectionDispatchSent(execution.execution_id, sentAt);
+            }
           } catch (error: any) {
             const failure = classifyExecutionFailure(error);
 

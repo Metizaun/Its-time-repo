@@ -3,12 +3,16 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
   "scripts": {
     "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
     "start-dev": "powershell -NoProfile -ExecutionPolicy Bypass -File start-dev.ps1",
     "dev:frontend": "vite",
     "dev:test": "vite --mode test",
-    "dev:backend": "docker compose up --build redis backend",
+    "dev:backend": "docker compose up --build redis backend collection-worker",
     "build": "npm run typecheck && vite build",
     "build:dev": "vite build --mode development",
     "build:test": "vite build --mode test",
@@ -69,7 +73,7 @@
     "react-hook-form": "^7.61.1",
     "react-leaflet": "^4.2.1",
     "react-resizable-panels": "^2.1.9",
-    "react-router-dom": "6.30.3",
+    "react-router-dom": "7.18.3",
     "recharts": "^2.15.4",
     "sonner": "^1.7.4",
     "ssh2": "^1.17.0",
