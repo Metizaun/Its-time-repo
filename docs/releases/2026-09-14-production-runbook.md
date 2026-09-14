@@ -3,7 +3,7 @@
 ## Escopo imutável
 
 - Branch: `release/2026-09-14`
-- Tag: `release-2026-09-14.1`
+- Tag: `release-2026-09-14.2`
 - Supabase: `https://supa.itstime.pro`
 - API: `https://api.itstime.pro`
 - Frontend: `https://app.itstime.pro`
