@@ -73,6 +73,11 @@ services:
       RB_BILLING_WORKER_POLL_MS: ${RB_BILLING_WORKER_POLL_MS:-60000}
       RB_WEBHOOK_JWT_SECRET: ${RB_WEBHOOK_JWT_SECRET}
       RB_API_BASE_URL: ${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}
+      COLLECTION_SECRETS_ENCRYPTION_KEY: ${COLLECTION_SECRETS_ENCRYPTION_KEY}
+      COLLECTION_SECRETS_ENCRYPTION_KEY_VERSION: ${COLLECTION_SECRETS_ENCRYPTION_KEY_VERSION:-v1}
+      AGENDA_SECRETS_ENCRYPTION_KEY: ${AGENDA_SECRETS_ENCRYPTION_KEY}
+      AGENDA_SECRETS_ENCRYPTION_KEY_VERSION: ${AGENDA_SECRETS_ENCRYPTION_KEY_VERSION:-v1}
+      AGENDA_INBOUND_RATE_LIMIT_PER_MINUTE: ${AGENDA_INBOUND_RATE_LIMIT_PER_MINUTE:-120}
       VISAGISM_CATALOG_ANALYSIS_MODEL: ${VISAGISM_CATALOG_ANALYSIS_MODEL:-gemini-3.1-flash-lite}
       VISAGISM_CATALOG_MAX_SOURCE_BYTES: ${VISAGISM_CATALOG_MAX_SOURCE_BYTES:-10485760}
       VISAGISM_CATALOG_MAX_STORED_BYTES: ${VISAGISM_CATALOG_MAX_STORED_BYTES:-1500000}
@@ -112,6 +117,75 @@ services:
         - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}-rb.service=${TRAEFIK_SERVICE_NAME}"
         - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.server.port=${API_PORT}"
         - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.passhostheader=true"
+
+  collection-worker:
+    image: ${BACKEND_IMAGE}
+    command: ["node", "dist/collection-worker-entry.js"]
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      COLLECTION_SECRETS_ENCRYPTION_KEY: ${COLLECTION_SECRETS_ENCRYPTION_KEY}
+      COLLECTION_SECRETS_ENCRYPTION_KEY_VERSION: ${COLLECTION_SECRETS_ENCRYPTION_KEY_VERSION:-v1}
+      COLLECTION_WORKER_POLL_MS: ${COLLECTION_WORKER_POLL_MS:-5000}
+      COLLECTION_WORKER_BATCH_SIZE: ${COLLECTION_WORKER_BATCH_SIZE:-50}
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - traefik-public
+      - evolution-internal
+    deploy:
+      replicas: ${COLLECTION_WORKER_REPLICAS:-1}
+      placement:
+        constraints:
+          - node.hostname == ${SWARM_NODE_HOSTNAME}
+      restart_policy:
+        condition: any
+      update_config:
+        order: stop-first
+        failure_action: rollback
+
+  agenda-worker:
+    image: ${BACKEND_IMAGE}
+    command: ["node", "dist/agenda-worker-entry.js"]
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      AGENDA_SECRETS_ENCRYPTION_KEY: ${AGENDA_SECRETS_ENCRYPTION_KEY}
+      AGENDA_SECRETS_ENCRYPTION_KEY_VERSION: ${AGENDA_SECRETS_ENCRYPTION_KEY_VERSION:-v1}
+      AGENDA_WORKER_POLL_MS: ${AGENDA_WORKER_POLL_MS:-2000}
+      AGENDA_WORKER_BATCH_SIZE: ${AGENDA_WORKER_BATCH_SIZE:-20}
+      AGENDA_WORKER_LEASE_SECONDS: ${AGENDA_WORKER_LEASE_SECONDS:-60}
+      AGENDA_WORKER_HTTP_TIMEOUT_MS: ${AGENDA_WORKER_HTTP_TIMEOUT_MS:-10000}
+      AGENDA_WORKER_MAX_RESPONSE_BYTES: ${AGENDA_WORKER_MAX_RESPONSE_BYTES:-65536}
+      AGENDA_RESYNC_WORKER_POLL_MS: ${AGENDA_RESYNC_WORKER_POLL_MS:-2000}
+      AGENDA_RESYNC_WORKER_BATCH_SIZE: ${AGENDA_RESYNC_WORKER_BATCH_SIZE:-100}
+      AGENDA_RESYNC_WORKER_LEASE_SECONDS: ${AGENDA_RESYNC_WORKER_LEASE_SECONDS:-60}
+      AGENDA_INBOUND_RATE_LIMIT_PER_MINUTE: ${AGENDA_INBOUND_RATE_LIMIT_PER_MINUTE:-120}
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - traefik-public
+      - evolution-internal
+    deploy:
+      replicas: ${AGENDA_WORKER_REPLICAS:-1}
+      placement:
+        constraints:
+          - node.hostname == ${SWARM_NODE_HOSTNAME}
+      restart_policy:
+        condition: any
+      update_config:
+        order: stop-first
+        failure_action: rollback
 
 networks:
   traefik-public:

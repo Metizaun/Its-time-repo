@@ -1,0 +1,3 @@
+# Arquivo local ignorado pelo Git. Use credencial longa e exclusiva para o Studio.
+SUPABASE_STUDIO_BASIC_AUTH_USER=studio-admin
+SUPABASE_STUDIO_BASIC_AUTH_PASSWORD=

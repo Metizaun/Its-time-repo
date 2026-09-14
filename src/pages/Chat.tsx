@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ChatHeader } from "@/components/chat/ChatHeader";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatWindowNotice } from "@/components/chat/ChatWindowNotice";
+import { InternalChatWorkspace } from "@/components/chat/InternalChatWorkspace";
 import { MessageList } from "@/components/chat/MessageList";
 import { RoutingQueueBanner } from "@/components/chat/RoutingQueueBanner";
 import { LeadSidebar } from "@/components/leads/LeadSidebar";
@@ -41,7 +42,10 @@ import type { ChatComposerPayload } from "@/types/chat";
 type HandoffDialogView = "choice" | "forward" | "finalize";
 
 export default function Chat() {
-  const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
+  const { leads, loading: leadsLoading, refetch } = useLeads({
+    enableRealtime: true,
+    includeInteractionModes: true,
+  });
   const { pipelines, loading: pipelinesLoading } = usePipelines();
   const { instances, loading: instancesLoading } = useInstances();
   const { setSearchQuery, ui } = useApp();
@@ -81,7 +85,9 @@ export default function Chat() {
     const latestMessage = [...messages].reverse().find((message) => message.instance_name);
     return latestMessage?.instance_name ?? selectedLead?.instance_name ?? null;
   }, [messages, selectedLead?.instance_name]);
-  const { byLead: unreadByLead, markRead } = useChatUnread();
+  const { byLead: unreadByLead, markRead, internalTotal } = useChatUnread();
+  const isTeamMode = searchParams.get("mode") === "team";
+  const selectedInternalConversationId = isTeamMode ? searchParams.get("conversationId") : null;
   const { stages, loading: stagesLoading } = usePipelineStages(
     finalizePipelineId || null,
     finalizeDialogOpen && handoffDialogView === "finalize" && Boolean(finalizePipelineId)
@@ -181,10 +187,11 @@ export default function Chat() {
   }, [instances, selectedInstance]);
 
   useEffect(() => {
+    if (isTeamMode) return;
     const leadIdFromQuery = searchParams.get("leadId");
     if (!leadIdFromQuery) return;
     setSelectedLeadId(leadIdFromQuery);
-  }, [searchParams]);
+  }, [isTeamMode, searchParams]);
 
   useEffect(() => {
     const conversationTarget = (location.state as { conversationTarget?: unknown } | null)?.conversationTarget;
@@ -202,13 +209,40 @@ export default function Chat() {
     setSearchParams({});
   };
 
+  const handleOpenTeam = () => {
+    setSelectedLeadId(null);
+    setSearchParams({ mode: "team" });
+  };
+
+  const handleSelectInternalConversation = (conversationId: string | null) => {
+    setSearchParams(conversationId ? { mode: "team", conversationId } : { mode: "team" });
+  };
+
+  const handleOpenLeadMode = (filter: "all" | "unread" | "manual") => {
+    setActiveFilter(filter);
+    setSelectedLeadId(null);
+    setSearchParams({});
+  };
+
+  const handleOpenMentionedLead = (leadId: string) => {
+    setSelectedLeadId(leadId);
+    setActiveFilter("all");
+    setSearchParams({ leadId });
+  };
+
   const selectedRouting = selectedLeadId ? routingQueue.byLead.get(selectedLeadId) ?? null : null;
 
   useEffect(() => {
-    if (activeFilter === "manual" && selectedLead && selectedLead.interaction_mode !== "human") {
-      setActiveFilter("all");
+    if (leadsLoading || !selectedLeadId || activeFilter === "all") return;
+    if (sidebarLeads.some((lead) => lead.id === selectedLeadId)) return;
+
+    setSelectedLeadId(null);
+    if (searchParams.has("leadId")) {
+      const nextSearchParams = new URLSearchParams(searchParams);
+      nextSearchParams.delete("leadId");
+      setSearchParams(nextSearchParams);
     }
-  }, [activeFilter, selectedLead]);
+  }, [activeFilter, leadsLoading, searchParams, selectedLeadId, setSearchParams, sidebarLeads]);
 
   useEffect(() => {
     if (!finalizeDialogOpen || !finalizePipelineId) return;
@@ -239,12 +273,13 @@ export default function Chat() {
   const showSidebar = !isMobile || !selectedLead;
   const showChatPanel = !isMobile || Boolean(selectedLead);
 
-  const handleSendMessage = (payload: ChatComposerPayload) => {
+  const handleSendMessage = async (payload: ChatComposerPayload) => {
     if (!selectedLead) {
-      return Promise.resolve();
+      return;
     }
 
-    return sendMessage(payload, selectedLead.contact_phone || undefined, activeInstanceName);
+    await sendMessage(payload, selectedLead.contact_phone || undefined, activeInstanceName);
+    await refetch({ showLoading: false });
   };
 
   const handleSchedule = () => {
@@ -377,6 +412,19 @@ export default function Chat() {
     }
   };
 
+  if (isTeamMode) {
+    return (
+      <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
+        <InternalChatWorkspace
+          selectedConversationId={selectedInternalConversationId}
+          onSelectConversation={handleSelectInternalConversation}
+          onOpenLeadMode={handleOpenLeadMode}
+          onOpenLead={handleOpenMentionedLead}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100vh_-_var(--layout-topbar-height))] overflow-hidden">
       {showSidebar && (
@@ -408,6 +456,8 @@ export default function Chat() {
             companies={companyOptions}
             selectedCompany={selectedCompany}
             onCompanyChange={setSelectedCompany}
+            internalUnreadCount={internalTotal}
+            onOpenTeam={handleOpenTeam}
           />
         </div>
       )}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Encrypted Its Time Supabase backup to the independent VPS
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/supabase-selfhost/hourly-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

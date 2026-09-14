@@ -10,6 +10,8 @@ export type Company = {
   name: string;
   phone: string | null;
   email: string | null;
+  pixKey: string | null;
+  useCnpjAsPix: boolean;
   address: string;
   city: string;
   state: string;
@@ -28,6 +30,8 @@ export type CompanyInput = {
   name: string;
   phone: string;
   email: string;
+  pixKey: string;
+  useCnpjAsPix: boolean;
   address: string;
   city: string;
   state: string;

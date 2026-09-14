@@ -124,6 +124,12 @@ type WorkerConfig = {
   } | null>;
 };
 
+type CompanyPixConfig = {
+  cnpj: string;
+  pix_key: string | null;
+  use_cnpj_as_pix: boolean;
+};
+
 const RB_PAYMENT_TYPE_LABELS: Record<string, string> = {
   "1": "Dinheiro",
   "2": "Cartao",
@@ -295,13 +301,28 @@ function isConfigReady(config: RbBillingToolConfig) {
   return true;
 }
 
-function getPixKey(config: RbBillingToolConfig, record: RbBillingRecord) {
+function getPixKey(
+  config: RbBillingToolConfig,
+  record: RbBillingRecord,
+  companyPixByCnpj: Map<string, CompanyPixConfig>,
+) {
+  const companyCnpj = normalizeCpfCnpj(record.EMP_CPFCNPJ);
+  const company = companyPixByCnpj.get(companyCnpj);
+  if (company) {
+    if (company.use_cnpj_as_pix) return normalizeCpfCnpj(company.cnpj);
+    return asString(company.pix_key);
+  }
+
   const byEmpId = config.pix_mapping_by_store[asString(record.EMP_ID)];
-  const byEmpCpfCnpj = config.pix_mapping_by_store[normalizeCpfCnpj(record.EMP_CPFCNPJ)];
-  return byEmpId || byEmpCpfCnpj || normalizeCpfCnpj(record.EMP_CPFCNPJ) || asString(record.EMP_CPFCNPJ);
+  const byEmpCpfCnpj = config.pix_mapping_by_store[companyCnpj];
+  return byEmpId || byEmpCpfCnpj || "";
 }
 
-function groupRbRecords(records: RbBillingRecord[], config: RbBillingToolConfig) {
+function groupRbRecords(
+  records: RbBillingRecord[],
+  config: RbBillingToolConfig,
+  companyPixByCnpj: Map<string, CompanyPixConfig>,
+) {
   const grouped = new Map<string, GroupedDebt>();
 
   for (const record of records) {
@@ -327,7 +348,7 @@ function groupRbRecords(records: RbBillingRecord[], config: RbBillingToolConfig)
         customerName: asString(record.CLIE_NOMEPRINC),
         storeEmpId,
         storeEmpCpfCnpj,
-        pixKey: getPixKey(config, record),
+        pixKey: getPixKey(config, record, companyPixByCnpj),
         totalAmount: amount,
         titlesCount: 1,
         nextDueDate: dueDate,
@@ -382,6 +403,7 @@ export class RbBillingWorker {
   private readonly serviceClient: SupabaseClient<any, "crm", any>;
   private readonly agentsClient: SupabaseClient<any, "agents", any>;
   private readonly rbServiceClient: SupabaseClient<any, "rb", any>;
+  private readonly collectionsClient: SupabaseClient<any, "collections", any>;
   private readonly config: WorkerConfig;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -399,6 +421,10 @@ export class RbBillingWorker {
     this.rbServiceClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       db: { schema: "rb" },
+    });
+    this.collectionsClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      db: { schema: "collections" },
     });
   }
 
@@ -489,6 +515,62 @@ export class RbBillingWorker {
     }
 
     return data as RbToolBinding;
+  }
+
+  private async getBillingState(acesId: number) {
+    const { data, error } = await this.rbServiceClient
+      .from("connections")
+      .select("billing_enabled, is_active, rb_token_api, rb_empresa_ids")
+      .eq("aces_id", acesId)
+      .maybeSingle();
+    if (error) throw new Error(`Nao foi possivel validar a CobranÃ§a RB: ${error.message}`);
+    const enabled = Boolean(data?.billing_enabled);
+    return {
+      enabled,
+      ready: Boolean(
+        enabled
+        && data?.is_active
+        && data?.rb_token_api
+        && Array.isArray(data.rb_empresa_ids)
+        && data.rb_empresa_ids.length > 0,
+      ),
+    };
+  }
+
+  private async isCanonicalRbActive(acesId: number) {
+    const { data, error } = await this.collectionsClient
+      .from("source_connections")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("source_type", "rb");
+    if (error) throw new Error(`Nao foi possivel validar a rota canonica RB: ${error.message}`);
+    for (const source of data ?? []) {
+      const { data: dispatcher, error: dispatcherError } = await this.collectionsClient.rpc(
+        "resolve_source_dispatcher",
+        { p_source_connection_id: source.id },
+      );
+      if (dispatcherError) throw new Error(`Nao foi possivel resolver a rota RB: ${dispatcherError.message}`);
+      if (dispatcher === "canonical") return true;
+    }
+    return false;
+  }
+
+  private async listCompanyPix(acesId: number, records: RbBillingRecord[]) {
+    const cnpjs = Array.from(new Set(
+      records.map((item) => normalizeCpfCnpj(item.EMP_CPFCNPJ)).filter(Boolean),
+    ));
+    const result = new Map<string, CompanyPixConfig>();
+    if (cnpjs.length === 0) return result;
+    const { data, error } = await this.serviceClient
+      .from("empresas")
+      .select("cnpj, pix_key, use_cnpj_as_pix")
+      .eq("aces_id", acesId)
+      .in("cnpj", cnpjs);
+    if (error) throw new Error(`Nao foi possivel carregar o Pix das empresas: ${error.message}`);
+    for (const company of data ?? []) {
+      result.set(normalizeCpfCnpj(company.cnpj), company as CompanyPixConfig);
+    }
+    return result;
   }
 
   private async getAgent(agentId: string, acesId: number) {
@@ -1121,6 +1203,26 @@ export class RbBillingWorker {
   }
 
   private async runTool(binding: RbToolBinding, options: { forceSchedule: boolean }) {
+    const billingState = await this.getBillingState(binding.aces_id);
+    if (!billingState.enabled) {
+      return { skipped: true, reason: "billing_disabled" };
+    }
+    if (await this.isCanonicalRbActive(binding.aces_id)) {
+      return { skipped: true, reason: "dispatcher_canonical" };
+    }
+
+    const { data: runtimeControl, error: runtimeError } = await this.collectionsClient
+      .from("runtime_controls")
+      .select("active_dispatcher")
+      .eq("aces_id", binding.aces_id)
+      .maybeSingle();
+    if (runtimeError) {
+      throw new Error(`Nao foi possivel validar o dispatcher RB: ${runtimeError.message}`);
+    }
+    if (runtimeControl?.active_dispatcher === "paused") {
+      return { skipped: true, reason: `dispatcher_${runtimeControl.active_dispatcher}` };
+    }
+
     const storedConfig = parseRbConfig(binding.config);
     const connection = storedConfig.rb_mode === "mock"
       ? null
@@ -1214,7 +1316,8 @@ export class RbBillingWorker {
         summary.overdue_records_count += journeyItem.rbMessageKind === "charge" ? rows.length : 0;
         summary.skipped_without_phone_count += rows.filter((item) => !normalizePhone(item.CLIE_FONE)).length;
 
-        const grouped = groupRbRecords(rows, config);
+        const companyPixByCnpj = await this.listCompanyPix(binding.aces_id, rows);
+        const grouped = groupRbRecords(rows, config, companyPixByCnpj);
         summary.grouped_contacts_count += grouped.length;
 
         const activeKeysForStage =

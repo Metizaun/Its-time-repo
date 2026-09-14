@@ -574,6 +574,9 @@ type EvolutionTransport = {
 
 type InstanceListItem = {
   instanceName: string;
+  displayName: string | null;
+  profilePictureUrl: string | null;
+  phoneNumber: string | null;
   status: "connected" | "disconnected" | "connecting" | "error";
   setupStatus: InstanceSetupStatus;
   connectionMode: InstanceConnectionMode;
@@ -761,6 +764,12 @@ type LeadAiControlState = {
   pausedUntil: string | null;
   bypassingGlobalInactive: boolean;
   reason: LeadAiReason;
+};
+
+type LeadInteractionModeResponse = {
+  leadId: string;
+  instanceName: string | null;
+  interactionMode: "ai" | "human";
 };
 
 export type ParsedWebhookMessage = {
@@ -3389,6 +3398,41 @@ export class AgentManager {
     );
   }
 
+  private async fetchEvolutionInstancePresentation(instance: InstanceRow) {
+    const fallback = {
+      displayName: null as string | null,
+      profilePictureUrl: null as string | null,
+      phoneNumber: null as string | null,
+    };
+
+    try {
+      const transport = await this.resolveEvolutionTransport(instance.instancia, instance.aces_id);
+      const { data } = await axios.get(
+        `${transport.apiUrl}/instance/fetchInstances`,
+        { headers: { apikey: transport.apiKey }, timeout: 8_000 },
+      );
+      const rows = Array.isArray(data) ? data : [];
+      const match = rows.find((row) => {
+        const item = asRecord(row);
+        const nested = asRecord(item.instance);
+        return [item.name, item.instanceName, nested.instanceName, nested.name]
+          .some((value) => String(value ?? "") === transport.instanceName);
+      });
+      const item = asRecord(match);
+      const nested = asRecord(item.instance);
+      const ownerJid = asString(item.ownerJid) ?? asString(nested.ownerJid);
+      return {
+        displayName: asString(item.profileName) ?? asString(nested.profileName) ?? asString(item.name) ?? null,
+        profilePictureUrl:
+          asString(item.profilePicUrl) ?? asString(item.profilePictureUrl) ?? asString(nested.profilePicUrl) ?? null,
+        phoneNumber:
+          asString(item.number) ?? asString(nested.number) ?? (ownerJid ? ownerJid.split("@")[0] : null),
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
   private async getAgentForAccount(
     agentId: string,
     acesId: number,
@@ -3854,7 +3898,17 @@ export class AgentManager {
         throw new HttpError(500, `Nao foi possivel validar a Tool ${binding.tool_key}`, countError);
       }
 
-      const ready = Number(count ?? 0) > 0;
+      let ready = Number(count ?? 0) > 0;
+      if (binding.tool_key === "forwarding") {
+        const { data: eligibleDestinationCount, error: eligibilityError } = await this.agentsClient.rpc(
+          "count_ready_forwarding_destinations",
+          { p_aces_id: acesId, p_agent_tool_id: binding.id },
+        );
+        if (eligibilityError) {
+          throw new HttpError(500, "Nao foi possivel validar os vendedores do encaminhamento", eligibilityError);
+        }
+        ready = Number(eligibleDestinationCount ?? 0) > 0;
+      }
       const { error: updateError } = await this.agentsClient
         .from("agent_tools")
         .update({
@@ -3922,12 +3976,15 @@ export class AgentManager {
       return;
     }
 
-    const ready = await this.isRbBillingConnected(acesId);
+    const state = await this.getRbBillingState(acesId);
+    const ready = state.ready;
     const { error: updateError } = await this.agentsClient
       .from("agent_tools")
       .update({
         readiness: ready ? "ready" : "needs_config",
-        is_enabled: ready ? (autoEnableReady ? true : Boolean(binding.is_enabled)) : false,
+        is_enabled: ready
+          ? (autoEnableReady ? true : Boolean(binding.is_enabled))
+          : state.enabled ? false : Boolean(binding.is_enabled),
         last_validated_at: new Date().toISOString(),
       })
       .eq("id", binding.id)
@@ -4013,7 +4070,6 @@ export class AgentManager {
       rb_mode: "live",
       rb_base_url: "https://app.registrobase.com.br:32077",
       rb_empresa_ids: usePilotDefaults ? RB_PILOT_DEFAULTS.rb_empresa_ids : [],
-      pix_mapping_by_store: usePilotDefaults ? RB_PILOT_DEFAULTS.pix_mapping_by_store : {},
       gupshup_defaults: usePilotDefaults ? RB_PILOT_DEFAULTS.gupshup_defaults : {},
       trigger_time: usePilotDefaults ? RB_PILOT_DEFAULTS.trigger_time : "10:00",
       timezone: "America/Sao_Paulo",
@@ -4283,15 +4339,28 @@ export class AgentManager {
     return { success: true };
   }
 
-  private async isRbBillingConnected(acesId: number) {
+  private async getRbBillingState(acesId: number) {
     const { data, error } = await this.rbClient
       .from("connections")
-      .select("rb_empresa_ids")
+      .select("rb_empresa_ids, billing_enabled, is_active, rb_token_api")
       .eq("aces_id", acesId)
-      .eq("is_active", true)
-      .not("rb_token_api", "is", null);
+      .maybeSingle();
     if (error) throw new HttpError(500, "Nao foi possivel validar a conexao Via RB", error);
-    return (data ?? []).some((connection) => Array.isArray(connection.rb_empresa_ids) && connection.rb_empresa_ids.length > 0);
+    const enabled = Boolean(data?.billing_enabled);
+    return {
+      enabled,
+      ready: Boolean(
+        enabled
+        && data?.is_active
+        && data?.rb_token_api
+        && Array.isArray(data.rb_empresa_ids)
+        && data.rb_empresa_ids.length > 0,
+      ),
+    };
+  }
+
+  private async isRbBillingConnected(acesId: number) {
+    return (await this.getRbBillingState(acesId)).ready;
   }
 
   private async isVisagismReady(acesId: number) {
@@ -4372,12 +4441,19 @@ export class AgentManager {
       ])
     );
 
-    return (bindings ?? []).map((binding) => {
+    const rbBillingReady = (await this.getRbBillingState(context.acesId)).ready;
+    return (bindings ?? [])
+      .filter((binding) => binding.tool_key !== "rb_billing" || rbBillingReady)
+      .map((binding) => {
       const definition = definitionMap.get(
         `${String(binding.tool_key)}:${Number(binding.tool_version)}`
       );
       const publicConfig = { ...asRecord(binding.config) };
-      if (binding.tool_key === "rb_billing") delete publicConfig.rb_token_api;
+      if (binding.tool_key === "rb_billing") {
+        delete publicConfig.rb_token_api;
+        delete publicConfig.rb_empresa_ids;
+        delete publicConfig.pix_mapping_by_store;
+      }
       return {
         id: String(binding.id),
         key: String(binding.tool_key),
@@ -4390,7 +4466,7 @@ export class AgentManager {
         config: publicConfig,
         lastValidatedAt: binding.last_validated_at ? String(binding.last_validated_at) : null,
       };
-    });
+      });
   }
 
   private storeLocatorHttpError(error: unknown): HttpError {
@@ -4560,6 +4636,11 @@ export class AgentManager {
       throw new HttpError(404, "Tool nao instalada neste agente");
     }
 
+    const isRbBillingTool = toolKey === "rb_billing";
+    if (isRbBillingTool && input.config !== undefined) {
+      throw new HttpError(422, "A Tool CobranÃ§a RB Ã© configurada no Administrativo");
+    }
+
     const nextConfig =
       input.config !== undefined
         ? { ...asRecord(current.config), ...input.config }
@@ -4573,11 +4654,11 @@ export class AgentManager {
     const audioReady = toolKey === "ai_audio"
       ? Boolean(this.elevenLabsTtsEnabled && this.elevenLabsApiKey && asString(nextConfig.voiceId))
       : false;
-    const isRbBillingTool = toolKey === "rb_billing";
     if (isRbBillingTool) delete nextConfig.rb_token_api;
-    const rbBillingReady = isRbBillingTool
-      ? await this.isRbBillingConnected(context.acesId)
-      : false;
+    const rbBillingState = isRbBillingTool
+      ? await this.getRbBillingState(context.acesId)
+      : { enabled: false, ready: false };
+    const rbBillingReady = rbBillingState.ready;
     const isVisagismTool = toolKey === "visagism";
     const visagismReady = isVisagismTool
       ? await this.isVisagismReady(context.acesId)
@@ -4650,6 +4731,15 @@ export class AgentManager {
         configUpdated,
         ready: calendarReady,
       });
+    } else if (toolKey === "ai_audio") {
+      payload.readiness = audioReady ? "ready" : "needs_config";
+      payload.last_validated_at = new Date().toISOString();
+      payload.is_enabled = resolveAgentToolEnabledState({
+        currentEnabled: Boolean(current.is_enabled),
+        explicitEnabled: input.isEnabled,
+        configUpdated,
+        ready: audioReady,
+      });
     } else if (input.isEnabled !== undefined) {
       payload.is_enabled = input.isEnabled;
     } else if (configUpdated) {
@@ -4667,12 +4757,31 @@ export class AgentManager {
       .eq("aces_id", context.acesId);
 
     if (error) {
-      throw new HttpError(500, "Nao foi possivel atualizar a Tool", error);
+      const isReadinessConstraintError = error.code === "23514"
+        && error.message.includes("agent_tools_enabled_ready_check");
+      throw new HttpError(
+        isReadinessConstraintError ? 409 : 500,
+        isReadinessConstraintError
+          ? "Conclua a configuracao da Tool antes de ativa-la"
+          : "Nao foi possivel atualizar a Tool",
+        error,
+      );
     }
 
     await this.syncPlatformToolReadiness(agentId, context.acesId);
     await this.syncDataToolReadiness(agentId, context.acesId);
     if (isRbBillingTool) {
+      if (input.isEnabled !== undefined) {
+        const { error: canonicalToolError } = await this.agentsClient
+          .from("agent_tools")
+          .update({ is_enabled: input.isEnabled, readiness: "ready" })
+          .eq("agent_id", agentId)
+          .eq("aces_id", context.acesId)
+          .eq("tool_key", "collection_orchestration");
+        if (canonicalToolError) {
+          throw new HttpError(500, "Nao foi possivel sincronizar a Tool canonica de cobranca", canonicalToolError);
+        }
+      }
       await this.refreshRbBillingToolReadiness(context.acesId, current.id);
     }
     const tools = await this.listAgentTools(context, agentId);
@@ -5138,6 +5247,10 @@ export class AgentManager {
     this.ensureAdmin(context);
     const agent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
     const binding = await this.getAgentToolBinding(context.acesId, agentId, "rb_billing");
+    const rbBillingState = await this.getRbBillingState(context.acesId);
+    if (!rbBillingState.ready) {
+      throw new HttpError(409, "Ative a CobranÃ§a RB e cadastre as credenciais no Administrativo antes de configurar a Tool");
+    }
     
     const { data: account } = await this.serviceClient
       .from("accounts")
@@ -5173,7 +5286,6 @@ export class AgentManager {
       nextConfig.rb_mode = "mock";
       nextConfig.rb_base_url = "https://app.registrobase.com.br:32077";
       nextConfig.rb_empresa_ids = [];
-      nextConfig.pix_mapping_by_store = {};
       nextConfig.gupshup_defaults = {};
     }
     const { data: currentTool, error: currentToolError } = await this.agentsClient
@@ -5190,6 +5302,7 @@ export class AgentManager {
       ...nextConfig,
     };
     delete mergedConfig.rb_token_api;
+    delete mergedConfig.pix_mapping_by_store;
     const { error: updateError } = await this.agentsClient
       .from("agent_tools")
       .update({
@@ -5927,7 +6040,11 @@ export class AgentManager {
       if (!empresaId) throw new HttpError(400, "Empresa de destino e obrigatoria");
       if (sellerIds.length === 0) throw new HttpError(400, "Selecione ao menos um vendedor da empresa");
 
-      const [{ data: company }, { data: memberships, error: membershipsError }] = await Promise.all([
+      const [
+        { data: company },
+        { data: memberships, error: membershipsError },
+        { data: sellers, error: sellersError },
+      ] = await Promise.all([
         this.serviceClient
           .from("empresas")
           .select("id")
@@ -5942,12 +6059,24 @@ export class AgentManager {
           .eq("aces_id", context.acesId)
           .eq("is_active", true)
           .in("crm_user_id", sellerIds),
+        this.serviceClient
+          .from("users")
+          .select("id")
+          .eq("aces_id", context.acesId)
+          .eq("role", "VENDEDOR")
+          .in("id", sellerIds),
       ]);
-      if (membershipsError) throw new HttpError(500, "Nao foi possivel validar os vendedores da empresa", membershipsError);
+      if (membershipsError) {
+        throw new HttpError(500, "Nao foi possivel validar os vendedores da empresa", membershipsError);
+      }
+      if (sellersError) {
+        throw new HttpError(500, "Nao foi possivel validar os papeis dos vendedores", sellersError);
+      }
       if (!company) throw new HttpError(404, "Empresa de destino nao encontrada ou inativa");
       const allowedSellerIds = new Set((memberships ?? []).map((membership) => membership.crm_user_id));
-      if (sellerIds.some((sellerId) => !allowedSellerIds.has(sellerId))) {
-        throw new HttpError(400, "Todos os vendedores devem possuir acesso ativo a empresa");
+      const vendorIds = new Set((sellers ?? []).map((seller) => seller.id));
+      if (sellerIds.some((sellerId) => !allowedSellerIds.has(sellerId) || !vendorIds.has(sellerId))) {
+        throw new HttpError(400, "Todos os vendedores devem possuir papel VENDEDOR e acesso ativo a empresa");
       }
     }
 
@@ -5961,6 +6090,36 @@ export class AgentManager {
 
     if (bindingError) throw new HttpError(500, "Nao foi possivel carregar a Tool Encaminhar", bindingError);
     if (!binding) throw new HttpError(404, "Tool Encaminhar nao instalada");
+
+    if (input.mode === "internal_company") {
+      const { data: rpcData, error: rpcError } = await this.agentsClient.rpc(
+        "upsert_forwarding_destination_internal",
+        {
+          p_aces_id: context.acesId,
+          p_agent_id: agentId,
+          p_agent_tool_id: binding.id,
+          p_destination_key: destinationKey,
+          p_display_name: input.displayName.trim(),
+          p_empresa_id: empresaId,
+          p_seller_ids: sellerIds,
+          p_context_instruction: input.contextInstruction.trim(),
+        },
+      );
+      if (rpcError) {
+        const isValidationError = rpcError.code === "22023" || rpcError.code === "23514";
+        throw new HttpError(
+          isValidationError ? 400 : 500,
+          isValidationError ? "Todos os vendedores devem possuir papel VENDEDOR e acesso ativo a empresa" : "Nao foi possivel salvar o destino",
+          rpcError,
+        );
+      }
+      const destination = rpcData?.destination;
+      if (!destination || typeof destination !== "object") {
+        throw new HttpError(500, "A RPC de encaminhamento retornou um destino invalido");
+      }
+      await this.syncDataToolReadiness(agentId, context.acesId, true);
+      return { ...destination, seller_ids: sellerIds };
+    }
 
     const { data, error } = await this.agentsClient
       .from("forwarding_destinations")
@@ -5984,43 +6143,12 @@ export class AgentManager {
 
     if (error) throw new HttpError(500, "Nao foi possivel salvar o destino", error);
 
-    if (input.mode === "internal_company") {
-      const { error: sellerUpsertError } = await this.agentsClient
-        .from("forwarding_destination_sellers")
-        .upsert(
-          sellerIds.map((sellerId) => ({
-            aces_id: context.acesId,
-            forwarding_destination_id: data.id,
-            crm_user_id: sellerId,
-          })),
-          { onConflict: "forwarding_destination_id,crm_user_id" },
-        );
-      if (sellerUpsertError) throw new HttpError(500, "Destino salvo, mas os vendedores nao foram vinculados", sellerUpsertError);
-
-      const { data: currentSellerRows, error: currentSellersError } = await this.agentsClient
-        .from("forwarding_destination_sellers")
-        .select("id, crm_user_id")
-        .eq("aces_id", context.acesId)
-        .eq("forwarding_destination_id", data.id);
-      if (currentSellersError) throw new HttpError(500, "Nao foi possivel validar os vendedores vinculados", currentSellersError);
-      const obsoleteIds = (currentSellerRows ?? [])
-        .filter((row) => !sellerIds.includes(row.crm_user_id))
-        .map((row) => row.id);
-      if (obsoleteIds.length > 0) {
-        const { error: removeError } = await this.agentsClient
-          .from("forwarding_destination_sellers")
-          .delete()
-          .in("id", obsoleteIds);
-        if (removeError) throw new HttpError(500, "Nao foi possivel remover vendedores antigos do destino", removeError);
-      }
-    } else {
-      const { error: removeError } = await this.agentsClient
-        .from("forwarding_destination_sellers")
-        .delete()
-        .eq("aces_id", context.acesId)
-        .eq("forwarding_destination_id", data.id);
-      if (removeError) throw new HttpError(500, "Nao foi possivel limpar vendedores antigos do destino", removeError);
-    }
+    const { error: removeError } = await this.agentsClient
+      .from("forwarding_destination_sellers")
+      .delete()
+      .eq("aces_id", context.acesId)
+      .eq("forwarding_destination_id", data.id);
+    if (removeError) throw new HttpError(500, "Nao foi possivel limpar vendedores antigos do destino", removeError);
 
     await this.syncDataToolReadiness(agentId, context.acesId, true);
     return { ...data, seller_ids: sellerIds };
@@ -6363,6 +6491,119 @@ export class AgentManager {
     return this.resolveLeadAiState(lead.id, agent, selectedInstanceName, lead.interaction_mode);
   }
 
+  async listLeadInteractionModes(context: AuthContext, leadIdsInput: string[]) {
+    const leadIds = Array.from(
+      new Set(leadIdsInput.map((leadId) => String(leadId ?? "").trim()).filter(Boolean))
+    );
+
+    if (leadIds.length > 200) {
+      throw new HttpError(400, "A consulta de modos do chat aceita no maximo 200 leads");
+    }
+
+    if (leadIds.some((leadId) => !isUuid(leadId))) {
+      throw new HttpError(400, "leadIds contem um identificador invalido");
+    }
+
+    if (leadIds.length === 0) {
+      return [] as LeadInteractionModeResponse[];
+    }
+
+    const scopedClient = this.createScopedCrmClient(context.accessToken);
+    const { data: leadData, error: leadError } = await scopedClient
+      .from("leads")
+      .select("id, aces_id, owner_id, instancia, interaction_mode")
+      .eq("aces_id", context.acesId)
+      .eq("view", true)
+      .in("id", leadIds);
+
+    if (leadError) {
+      throw new HttpError(500, "Nao foi possivel carregar os leads do chat", leadError);
+    }
+
+    const leads = (leadData ?? []) as LeadRow[];
+    const instanceNames = Array.from(
+      new Set(
+        leads
+          .map((lead) => lead.instancia?.trim())
+          .filter((instanceName): instanceName is string => Boolean(instanceName))
+      )
+    );
+
+    if (instanceNames.length === 0) {
+      return leads.map((lead) => ({
+        leadId: lead.id,
+        instanceName: null,
+        interactionMode: lead.interaction_mode,
+      }));
+    }
+
+    const { data: agentData, error: agentError } = await this.agentsClient
+      .from("ai_agents")
+      .select("id, instance_name, is_active, updated_at")
+      .eq("aces_id", context.acesId)
+      .eq("agent_type", "primary")
+      .in("instance_name", instanceNames)
+      .order("is_active", { ascending: false })
+      .order("updated_at", { ascending: false });
+
+    if (agentError) {
+      throw new HttpError(500, "Nao foi possivel localizar os agentes do chat", agentError);
+    }
+
+    const agentByInstance = new Map<string, { id: string; instance_name: string }>();
+    for (const agent of (agentData ?? []) as Array<{ id: string; instance_name: string }>) {
+      if (!agentByInstance.has(agent.instance_name)) {
+        agentByInstance.set(agent.instance_name, agent);
+      }
+    }
+
+    const agentIds = Array.from(agentByInstance.values()).map((agent) => agent.id);
+    const { data: stateData, error: stateError } = agentIds.length > 0
+      ? await this.agentsClient
+          .from("ai_lead_state")
+          .select("agent_id, lead_id, interaction_mode, pause_origin, status")
+          .in("agent_id", agentIds)
+          .in("lead_id", leads.map((lead) => lead.id))
+      : { data: [], error: null };
+
+    if (stateError) {
+      throw new HttpError(500, "Nao foi possivel carregar os estados do chat", stateError);
+    }
+
+    const stateByLeadAndAgent = new Map<string, {
+      interaction_mode: "ai" | "human" | null;
+      pause_origin: string | null;
+      status: string | null;
+    }>();
+    for (const state of (stateData ?? []) as Array<{
+      agent_id: string;
+      lead_id: string;
+      interaction_mode: "ai" | "human" | null;
+      pause_origin: string | null;
+      status: string | null;
+    }>) {
+      stateByLeadAndAgent.set(`${state.agent_id}:${state.lead_id}`, state);
+    }
+
+    return leads.map((lead): LeadInteractionModeResponse => {
+      const instanceName = lead.instancia?.trim() || null;
+      const agent = instanceName ? agentByInstance.get(instanceName) : undefined;
+      const state = agent ? stateByLeadAndAgent.get(`${agent.id}:${lead.id}`) : undefined;
+      const legacyHumanState =
+        state?.pause_origin === "manual_send" ||
+        state?.pause_origin === "human_webhook" ||
+        (state?.pause_origin === "ai_policy" && state.status === "paused");
+      const interactionMode = state?.interaction_mode ??
+        (legacyHumanState ? "human" : agent ? "ai" : lead.interaction_mode);
+
+      return {
+        leadId: lead.id,
+        instanceName,
+        interactionMode,
+      };
+    });
+  }
+
   async updateLeadAiState(
     context: AuthContext,
     leadId: string,
@@ -6499,11 +6740,16 @@ export class AgentManager {
     const rows = (data ?? []) as InstanceRow[];
     const visibleRows = rows.filter((instance) => accessibleInstances.has(instance.instancia));
     const leadCounts = await this.buildLeadCountMap(context.acesId, visibleRows);
+    const presentations = await Promise.all(visibleRows.map((instance) => this.fetchEvolutionInstancePresentation(instance)));
 
-    return visibleRows.map((instance): InstanceListItem => {
+    return visibleRows.map((instance, index): InstanceListItem => {
       const setupStatus = this.deriveSetupStatus(instance);
+      const presentation = presentations[index];
       return {
         instanceName: instance.instancia,
+        displayName: presentation.displayName,
+        profilePictureUrl: presentation.profilePictureUrl,
+        phoneNumber: presentation.phoneNumber,
         status: this.normalizeInstanceStatus(instance.status),
         setupStatus,
         connectionMode: this.normalizeInstanceConnectionMode(instance.connection_mode),
@@ -11882,6 +12128,9 @@ export class AgentManager {
 
   private async getLeadBillingContextString(leadId: string, agentId: string, acesId: number): Promise<string> {
     try {
+      if (!(await this.isRbBillingConnected(acesId))) {
+        return "";
+      }
       const { data: toolBinding } = await this.agentsClient
         .from("agent_tools")
         .select("id, is_enabled")

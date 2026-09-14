@@ -1,0 +1,74 @@
+{
+  "captured_at": "2026-09-12T01:55:25.17102+00:00",
+  "project_ref": "hvziqfbnkicryfndoepk",
+  "database_size_bytes": 405539987,
+  "table_count": 185,
+  "view_count": 11,
+  "trigger_count": 177,
+  "rls_table_count": 164,
+  "policy_count": 160,
+  "auth_users": 74,
+  "auth_identities": 74,
+  "migration_count": 181,
+  "latest_migration": "20260905185754_source_dispatcher_resolution_consistency",
+  "storage": {
+    "bucket_count": 4,
+    "object_count": 936,
+    "buckets": [
+      { "id": "automation-media", "public": true, "file_size_limit": 104857600 },
+      { "id": "chat-attachments", "public": false, "file_size_limit": 104857600 },
+      { "id": "collection-imports", "public": false, "file_size_limit": 20971520 },
+      { "id": "visagism-catalog", "public": false, "file_size_limit": 1572864 }
+    ]
+  },
+  "edge_functions": [
+    { "slug": "send-user-invitation", "version": 5, "verify_jwt": true },
+    { "slug": "buscar-leads", "version": 7, "verify_jwt": false },
+    { "slug": "import-leads-csv", "version": 7, "verify_jwt": false }
+  ],
+  "installed_extensions": [
+    "btree_gist@1.7",
+    "pg_cron@1.6.4",
+    "pg_stat_statements@1.11",
+    "pg_trgm@1.6",
+    "pgcrypto@1.3",
+    "plpgsql@1.0",
+    "postgis@3.3.7",
+    "supabase_vault@0.3.1",
+    "unaccent@1.1",
+    "uuid-ossp@1.1",
+    "vector@0.8.0"
+  ],
+  "realtime_publication_tables": [
+    "calendar.events",
+    "crm.chat_read_states",
+    "crm.internal_conversation_members",
+    "crm.internal_conversations",
+    "crm.internal_message_attachments",
+    "crm.internal_message_mentions",
+    "crm.internal_messages",
+    "crm.leads",
+    "crm.message_attachments",
+    "crm.message_history",
+    "crm.notification_reads",
+    "crm.notifications",
+    "crm.pipeline_stages",
+    "crm.pipelines"
+  ],
+  "advisor_summary": {
+    "security": {
+      "rls_enabled_no_policy": 71,
+      "function_search_path_mutable": 36,
+      "anon_security_definer_function_executable": 2,
+      "authenticated_security_definer_function_executable": 34,
+      "auth_leaked_password_protection": 1
+    },
+    "performance": {
+      "unindexed_foreign_keys": 190,
+      "auth_rls_initplan": 10,
+      "unused_index": 96,
+      "multiple_permissive_policies": 2,
+      "duplicate_index": 2
+    }
+  }
+}

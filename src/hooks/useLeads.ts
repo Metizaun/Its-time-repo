@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { createRealtimeChannelName } from "@/lib/realtime";
+import { listLeadInteractionModes } from "@/services/chatService";
 import { toast } from "sonner";
 
 export const LEADS_UPDATED_EVENT = "leads-updated";
@@ -49,6 +50,7 @@ export interface Lead {
 interface UseLeadsOptions {
   enableRealtime?: boolean;
   enabled?: boolean;
+  includeInteractionModes?: boolean;
 }
 
 function sortLeadsByRecency(value: Lead[]): Lead[] {
@@ -73,7 +75,11 @@ function sortLeadsByRecency(value: Lead[]): Lead[] {
 }
 
 export function useLeads(options: UseLeadsOptions = {}) {
-  const { enableRealtime = false, enabled = true } = options;
+  const {
+    enableRealtime = false,
+    enabled = true,
+    includeInteractionModes = false,
+  } = options;
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(enabled);
   const pendingRealtimeLeadIdsRef = useRef<Set<string>>(new Set());
@@ -87,6 +93,25 @@ export function useLeads(options: UseLeadsOptions = {}) {
       isMountedRef.current = false;
     };
   }, []);
+
+  const hydrateInteractionModes = useCallback(async (value: Lead[]) => {
+    if (!includeInteractionModes || value.length === 0) {
+      return value;
+    }
+
+    try {
+      const modes = await listLeadInteractionModes(value.map((lead) => lead.id));
+      const modeByLeadId = new Map(modes.map((item) => [item.leadId, item.interactionMode]));
+
+      return value.map((lead) => {
+        const interactionMode = modeByLeadId.get(lead.id);
+        return interactionMode ? { ...lead, interaction_mode: interactionMode } : lead;
+      });
+    } catch (error) {
+      console.warn("[useLeads] Nao foi possivel atualizar os modos efetivos do chat; usando o modo legado.", error);
+      return value;
+    }
+  }, [includeInteractionModes]);
 
   const fetchLeads = useCallback(async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
     if (!isMountedRef.current) {
@@ -180,7 +205,13 @@ export function useLeads(options: UseLeadsOptions = {}) {
         return;
       }
 
-      setLeads(sortLeadsByRecency(allLeads));
+      const hydratedLeads = await hydrateInteractionModes(allLeads);
+
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      setLeads(sortLeadsByRecency(hydratedLeads));
     } catch (error: unknown) {
       console.error("Erro ao carregar leads:", error);
       toast.error("Erro ao carregar leads");
@@ -189,7 +220,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [hydrateInteractionModes]);
 
   const flushRealtimeLeadUpdates = useCallback(async () => {
     if (!isMountedRef.current) {
@@ -251,6 +282,8 @@ export function useLeads(options: UseLeadsOptions = {}) {
         }
       }
 
+      const hydratedUpdatedLeads = await hydrateInteractionModes(updatedLeads);
+
       if (!isMountedRef.current) {
         return;
       }
@@ -271,12 +304,12 @@ export function useLeads(options: UseLeadsOptions = {}) {
           next = next.filter((lead) => !removeSet.has(lead.id));
         }
 
-        if (updatedLeads.length > 0) {
+        if (hydratedUpdatedLeads.length > 0) {
           if (next === prev) {
             next = [...next];
           }
           const byId = new Map(next.map((lead) => [lead.id, lead]));
-          for (const lead of updatedLeads) {
+          for (const lead of hydratedUpdatedLeads) {
             byId.set(lead.id, lead);
           }
           next = Array.from(byId.values());
@@ -290,7 +323,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
         void fetchLeads({ showLoading: false });
       }
     }
-  }, [fetchLeads]);
+  }, [fetchLeads, hydrateInteractionModes]);
 
   const queueRealtimeLeadUpdate = useCallback(
     (leadId: string) => {

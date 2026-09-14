@@ -36,6 +36,13 @@ async function getAccessToken() {
   return accessToken;
 }
 
+async function refreshAccessToken() {
+  const { data, error } = await supabase.auth.refreshSession();
+  if (error) return null;
+
+  return data.session?.access_token ?? null;
+}
+
 async function parseBackendResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => null);
 
@@ -58,53 +65,54 @@ async function parseBackendResponse<T>(response: Response): Promise<T> {
 }
 
 export async function getCrmBackend<T>(path: string): Promise<T> {
-  const accessToken = await getAccessToken();
-  const response = await fetch(buildBackendUrl(path), {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  return parseBackendResponse<T>(response);
+  return requestCrmBackend<T>(path, { method: "GET" });
 }
 
 export async function postCrmBackend<T>(path: string, body: unknown): Promise<T> {
-  const accessToken = await getAccessToken();
-  const response = await fetch(buildBackendUrl(path), {
+  return requestCrmBackend<T>(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(body ?? {}),
   });
-
-  return parseBackendResponse<T>(response);
 }
 
 export async function patchCrmBackend<T>(path: string, body: unknown): Promise<T> {
-  const accessToken = await getAccessToken();
-  const response = await fetch(buildBackendUrl(path), {
+  return requestCrmBackend<T>(path, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(body ?? {}),
   });
-
-  return parseBackendResponse<T>(response);
 }
 
 export async function deleteCrmBackend<T>(path: string): Promise<T> {
+  return requestCrmBackend<T>(path, { method: "DELETE" });
+}
+
+async function requestCrmBackend<T>(path: string, init: RequestInit): Promise<T> {
+  const url = buildBackendUrl(path);
   const accessToken = await getAccessToken();
-  const response = await fetch(buildBackendUrl(path), {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+
+  const send = (token: string) =>
+    fetch(url, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+  let response = await send(accessToken);
+
+  if (response.status === 401) {
+    const refreshedToken = await refreshAccessToken();
+    if (refreshedToken && refreshedToken !== accessToken) {
+      response = await send(refreshedToken);
+    }
+  }
 
   return parseBackendResponse<T>(response);
 }

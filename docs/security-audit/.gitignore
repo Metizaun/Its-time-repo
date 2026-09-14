@@ -1,0 +1,4 @@
+# artefatos de build do gerador do relatorio
+.charts/
+__pycache__/
+.venv/

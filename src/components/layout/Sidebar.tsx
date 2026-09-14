@@ -7,6 +7,7 @@ import {
   Users,
   MessageSquare,
   CalendarDays,
+  Webhook,
   Settings,
   Search,
   Workflow,
@@ -199,6 +200,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
 
             {isAdmin && <NavItem path="/automacao" icon={Workflow} name="Automacao" />}
             {isAdmin && <NavItem path="/agentes" icon={Bot} name="Agentes" />}
+            {isAdmin && <NavItem path="/conexoes" icon={Webhook} name="Conexões" />}
             {isAdmin && <NavItem path="/admin" icon={Settings} name="Admin" />}
             {isStaff && <NavItem path="/superadmin" icon={ShieldCheck} name="Superadmin" />}
           </ul>

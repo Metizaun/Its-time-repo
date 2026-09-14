@@ -39,6 +39,8 @@ const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
   "supabase/migrations/20260714172130_chat_realtime_notifications_audio.sql";
+const INTERNAL_TEAM_CHAT_MIGRATION =
+  "supabase/migrations/20260902144107_add_internal_team_chat.sql";
 const PIPELINE_CLASSIFIER_MIGRATION =
   "supabase/migrations/20260716184250_standardize_pipeline_classifier_stages.sql";
 const PIPELINE_ATTENDANCE_MIGRATION =
@@ -59,6 +61,24 @@ const INTELLIGENT_COMPANY_DIRECTORY_MIGRATION =
   "supabase/migrations/20260821154844_intelligent_company_directory_v2.sql";
 const LEAD_FIRST_TOUCH_ATTRIBUTION_MIGRATION =
   "supabase/migrations/20260817205108_add_lead_first_touch_attribution.sql";
+const COLLECTIONS_CORE_MIGRATION =
+  "supabase/migrations/20260903205231_collections_core_v1.sql";
+const COLLECTIONS_HARDENING_MIGRATION =
+  "supabase/migrations/20260904130546_collections_core_hardening.sql";
+const COLLECTIONS_RB_CUTOVER_MIGRATION =
+  "supabase/migrations/20260904132617_collections_rb_shadow_cutover_retention.sql";
+const RB_BILLING_ADMIN_PIX_MIGRATION =
+  "supabase/migrations/20260905120000_cobranca_rb_admin_pix.sql";
+const COLLECTIONS_INTEGRITY_MIGRATION =
+  "supabase/migrations/20260910192757_collections_dispatch_integrity.sql";
+const AGENDA_SYNC_CORE_MIGRATION =
+  "supabase/migrations/20260911182200_agenda_sync_core_contract.sql";
+const AGENDA_SYNC_ADMIN_MIGRATION =
+  "supabase/migrations/20260911184017_agenda_sync_admin_security.sql";
+const AGENDA_SYNC_INBOUND_MIGRATION =
+  "supabase/migrations/20260912172120_agenda_sync_inbound_status.sql";
+const AGENDA_SYNC_RESYNC_MIGRATION =
+  "supabase/migrations/20260914000917_agenda_sync_resync_operations.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -232,6 +252,40 @@ async function validateSelectedColumns(
 ) {
   const { error } = await serviceClient.from(table).select(columns.join(",")).limit(1);
   return error ? buildSchemaFailure(label, migration, error) : null;
+}
+
+async function validateInternalTeamChatRpcs(
+  serviceClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    serviceClient.rpc("rpc_create_internal_conversation", {
+      p_kind: "direct",
+      p_name: null,
+      p_member_ids: [],
+    }),
+    serviceClient.rpc("rpc_send_internal_message", {
+      p_conversation_id: NIL_UUID,
+      p_content: "",
+      p_reply_to_message_id: null,
+      p_client_message_id: NIL_UUID,
+      p_mentions: [],
+      p_attachment_id: null,
+    }),
+    serviceClient.rpc("rpc_get_internal_unread_counts"),
+    serviceClient.rpc("rpc_mark_internal_conversation_read", {
+      p_conversation_id: NIL_UUID,
+    }),
+  ];
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => {
+    if (!error) return false;
+    const normalized = normalizePostgrestError(error);
+    return normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message);
+  });
+
+  return missing?.error
+    ? buildSchemaFailure("RPCs do Chat interno", INTERNAL_TEAM_CHAT_MIGRATION, missing.error)
+    : null;
 }
 
 async function validateMessagingChannelRpcs(
@@ -684,6 +738,84 @@ function isMissingRpcError(error: PostgrestError) {
     || /schema cache|function .* does not exist/i.test(normalized.message);
 }
 
+async function validateCollectionIntegrityRpcs(
+  collectionsClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    collectionsClient.rpc("resolve_source_dispatcher", {
+      p_source_connection_id: NIL_UUID,
+    }),
+    collectionsClient.rpc("prepare_rb_source", {
+      p_aces_id: -1,
+      p_legacy_connection_id: NIL_UUID,
+      p_config: {},
+      p_capabilities: {},
+    }),
+    collectionsClient.rpc("rotate_source_credential", {
+      p_aces_id: -1,
+      p_source_connection_id: NIL_UUID,
+      p_credential_type: "invalid",
+      p_ciphertext: "\\x01",
+      p_iv: "\\x000000000000000000000000",
+      p_auth_tag: "\\x00000000000000000000000000000000",
+      p_key_version: "v1",
+      p_valid_until: null,
+    }),
+    collectionsClient.rpc("activate_collection_onboarding", {
+      p_aces_id: -1,
+      p_source_connection_id: NIL_UUID,
+    }),
+    collectionsClient.rpc("set_rb_billing_state", {
+      p_aces_id: -1,
+      p_enabled: false,
+    }),
+    collectionsClient.rpc("complete_canonical_cutover", {
+      p_aces_id: -1,
+      p_source_connection_id: NIL_UUID,
+      p_reason: "schema_preflight",
+      p_actor_id: null,
+    }),
+  ];
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => error && isMissingRpcError(error));
+  return missing?.error
+    ? buildSchemaFailure("RPCs de integridade da cobrança independente", COLLECTIONS_INTEGRITY_MIGRATION, missing.error)
+    : null;
+}
+
+async function validateAgendaSyncReadRpcs(
+  agendaClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    agendaClient.rpc("connection_metrics", {
+      p_aces_id: -1,
+      p_connection_id: NIL_UUID,
+    }),
+    agendaClient.rpc("unit_resource", {
+      p_unit_id: NIL_UUID,
+      p_aces_id: -1,
+    }),
+    agendaClient.rpc("professional_resource", {
+      p_professional_id: NIL_UUID,
+      p_aces_id: -1,
+    }),
+    agendaClient.rpc("availability_resource", {
+      p_assignment_id: NIL_UUID,
+      p_aces_id: -1,
+    }),
+  ];
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => error && isMissingRpcError(error));
+
+  return missing?.error
+    ? buildSchemaFailure(
+        "RPCs somente-leitura da Agenda Universal",
+        AGENDA_SYNC_RESYNC_MIGRATION,
+        missing.error,
+      )
+    : null;
+}
+
 async function validateCompaniesCalendarRoutingRpcs(
   serviceClient: SupabaseClient<any, any, any>,
   calendarClient: SupabaseClient<any, any, any>
@@ -986,7 +1118,138 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const collectionsClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "collections" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const agendaClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "agenda_sync" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
+    validateSelectedColumns(
+      agendaClient,
+      "connections",
+      ["id", "public_id", "aces_id", "name", "outbound_url", "scope_mode", "status", "next_sequence", "scope_revision", "tested_at"],
+      "agenda_sync.connections",
+      AGENDA_SYNC_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "connection_audit",
+      ["id", "connection_id", "aces_id", "actor_id", "action", "details", "created_at"],
+      "agenda_sync.connection_audit",
+      AGENDA_SYNC_ADMIN_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "outbox",
+      ["id", "connection_id", "aces_id", "sequence", "event_id", "event_type", "status", "attempt_count", "resync_run_id", "resync_phase"],
+      "agenda_sync.outbox",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "deliveries",
+      ["id", "connection_id", "aces_id", "outbox_id", "event_id", "event_type", "attempt_number", "outcome", "http_status", "duration_ms"],
+      "agenda_sync.deliveries",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "inbound_events",
+      ["id", "connection_id", "aces_id", "event_id", "event_type", "outcome", "response_status", "response_body", "reported_status", "reported_at", "metadata"],
+      "agenda_sync.inbound_events",
+      AGENDA_SYNC_INBOUND_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "resync_runs",
+      ["id", "connection_id", "aces_id", "status", "stage", "fence_sequence", "snapshot_count", "delta_count", "locked_until"],
+      "agenda_sync.resync_runs",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "resync_deltas",
+      ["id", "run_id", "connection_id", "aces_id", "event_id", "event_type", "resource_type", "resource_id", "resource_version"],
+      "agenda_sync.resync_deltas",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "inbound_rate_limits",
+      ["aces_id", "connection_id", "ip_hash", "window_started_at", "request_count", "updated_at"],
+      "agenda_sync.inbound_rate_limits",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateAgendaSyncReadRpcs(agendaClient),
+    validateSelectedColumns(
+      collectionsClient,
+      "source_connections",
+      ["id", "public_id", "aces_id", "source_type", "status", "capabilities", "last_success_at"],
+      "collections.source_connections",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "source_credentials",
+      ["id", "aces_id", "source_connection_id", "credential_type", "ciphertext", "iv", "auth_tag", "key_version", "status", "valid_until"],
+      "collections.source_credentials",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "onboarding_bindings",
+      ["id", "aces_id", "source_connection_id", "agent_id", "agent_tool_id", "pipeline_id", "funnel_id", "journey_rule_id", "first_step_id", "status", "sending_enabled"],
+      "collections.onboarding_bindings",
+      "supabase/migrations/20260909191317_collection_onboarding.sql",
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "receivables",
+      ["id", "source_connection_id", "case_id", "financial_status", "record_status", "source_updated_at"],
+      "collections.receivables",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "cases",
+      ["id", "aces_id", "lead_id", "communication_status", "source_freshness", "total_open_amount"],
+      "collections.cases",
+      COLLECTIONS_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "runtime_controls",
+      ["aces_id", "active_dispatcher", "business_timezone", "changed_at"],
+      "collections.runtime_controls",
+      COLLECTIONS_RB_CUTOVER_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "spreadsheet_imports",
+      ["id", "status", "publish_requested_at", "failure_summary", "expires_at", "storage_deleted_at"],
+      "collections.spreadsheet_imports (publicacao e retencao)",
+      COLLECTIONS_RB_CUTOVER_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "operational_events",
+      ["id", "aces_id", "event_type", "severity", "actor_id", "details", "created_at"],
+      "collections.operational_events",
+      COLLECTIONS_HARDENING_MIGRATION,
+    ),
+    validateSelectedColumns(
+      collectionsClient,
+      "rb_funnel_mappings",
+      ["id", "aces_id", "source_connection_id", "legacy_funnel_id", "canonical_funnel_id"],
+      "collections.rb_funnel_mappings",
+      COLLECTIONS_RB_CUTOVER_MIGRATION,
+    ),
+    validateCollectionIntegrityRpcs(collectionsClient),
     validateSelectedColumns(
       locatorClient,
       "stores",
@@ -1016,6 +1279,49 @@ export async function assertRuntimeSchemaCompatibility(
       STORE_LOCATOR_MIGRATION,
     ),
     validateChatAttachmentsStorage(serviceClient),
+    validateInternalTeamChatRpcs(serviceClient),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_conversations",
+      ["id", "aces_id", "kind", "name", "created_by", "direct_key", "archived_at", "last_message_at"],
+      "crm.internal_conversations",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_conversation_members",
+      ["conversation_id", "user_id", "aces_id", "is_admin", "last_read_at", "is_active", "joined_at", "removed_at"],
+      "crm.internal_conversation_members",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_messages",
+      ["id", "conversation_id", "aces_id", "author_id", "content", "reply_to_message_id", "client_message_id", "edited_at", "deleted_at"],
+      "crm.internal_messages",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_message_mentions",
+      ["id", "message_id", "conversation_id", "aces_id", "mention_type", "mentioned_user_id", "lead_id", "token_start", "token_length"],
+      "crm.internal_message_mentions",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_message_attachments",
+      ["id", "message_id", "conversation_id", "aces_id", "uploaded_by", "kind", "mime_type", "storage_bucket", "storage_path", "file_name", "file_size"],
+      "crm.internal_message_attachments",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "internal_message_attachment_upload_intents",
+      ["id", "message_id", "attachment_id", "conversation_id", "aces_id", "created_by", "kind", "mime_type", "storage_bucket", "storage_path", "file_name", "file_size", "status", "intent_expires_at"],
+      "crm.internal_message_attachment_upload_intents",
+      INTERNAL_TEAM_CHAT_MIGRATION
+    ),
     validateAutomationMediaStorage(serviceClient),
     validateCompaniesCalendarRoutingRpcs(serviceClient, calendarClient),
     validateIntelligentCompanyDirectoryRpc(serviceClient),
@@ -1164,9 +1470,11 @@ export async function assertRuntimeSchemaCompatibility(
         "timezone",
         "is_active",
         "search_key",
+        "pix_key",
+        "use_cnpj_as_pix",
       ],
       "crm.empresas",
-      FEATURE_CLOSING_MIGRATION
+      RB_BILLING_ADMIN_PIX_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -1582,9 +1890,16 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       rbClient,
       "connections",
-      ["id", "aces_id", "rb_aces_id", "rb_base_url", "rb_token_api", "rb_empresa_ids", "is_active"],
+      ["id", "aces_id", "rb_aces_id", "rb_base_url", "rb_token_api", "rb_empresa_ids", "is_active", "billing_enabled"],
       "rb.connections",
-      "supabase/migrations/20260728185300_add_rb_connections_and_visagism_storage.sql"
+      RB_BILLING_ADMIN_PIX_MIGRATION
+    ),
+    validateSelectedColumns(
+      rbClient,
+      "pix_migration_reviews",
+      ["id", "aces_id", "company_id", "legacy_key", "candidate_pix_keys", "reason", "status"],
+      "rb.pix_migration_reviews",
+      RB_BILLING_ADMIN_PIX_MIGRATION
     ),
     validateSelectedColumns(
       rbClient,

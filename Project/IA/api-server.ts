@@ -38,6 +38,13 @@ import {
   validateCreateGupshupTemplateInput,
   type CreateGupshupTemplateInput,
 } from "./gupshup-template-service.js";
+import { InternalChatService } from "./internal-chat-service.js";
+import { createCollectionApiRuntime } from "./collections/collection-api.js";
+import { CollectionValidationError } from "./collections/domain.js";
+import { CollectionOnboardingError } from "./collections/collection-onboarding-service.js";
+import { AgendaAdminError, AgendaConnectionService } from "./agenda-sync/connection-service.js";
+import { AgendaInboundError, AgendaInboundService } from "./agenda-sync/inbound-service.js";
+import { requireRbBillingAdmin } from "./rb-billing-authorization.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -76,6 +83,34 @@ function asString(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function parseCollectionMessageInput(body: unknown) {
+  const payload = asRecord(body);
+  const rawTemplate = payload.template && typeof payload.template === "object" && !Array.isArray(payload.template)
+    ? asRecord(payload.template)
+    : null;
+  const provider = rawTemplate ? asString(rawTemplate.provider) : null;
+  if (provider && provider !== "meta" && provider !== "gupshup") {
+    throw new HttpError(400, "Provedor de template invalido", { code: "TEMPLATE_PROVIDER_INVALID" });
+  }
+  return {
+    label: asString(payload.label),
+    messageTemplate: String(payload.messageTemplate ?? ""),
+    timingRelation: asString(payload.timingRelation) as "before_due" | "on_due" | "after_due" | null,
+    daysOffset: payload.daysOffset === undefined || payload.daysOffset === null ? null : Number(payload.daysOffset),
+    template: rawTemplate
+      ? {
+          provider: provider as "meta" | "gupshup",
+          id: asString(rawTemplate.id),
+          name: String(rawTemplate.name ?? ""),
+          language: asString(rawTemplate.language),
+          status: asString(rawTemplate.status),
+          params: Array.isArray(rawTemplate.params) ? rawTemplate.params.map((item) => String(item).trim()).filter(Boolean) : [],
+          rejectionReason: asString(rawTemplate.rejectionReason),
+        }
+      : null,
+  };
 }
 
 function normalizeCnpj(value: unknown) {
@@ -123,6 +158,8 @@ function parseCompanyInput(body: unknown) {
   const name = asString(payload.name);
   const phone = asString(payload.phone);
   const email = asString(payload.email)?.toLowerCase() ?? null;
+  const pixKey = asString(payload.pixKey) ?? null;
+  const useCnpjAsPix = payload.useCnpjAsPix === true;
   const address = asString(payload.address);
   const city = asString(payload.city);
   const state = asString(payload.state)?.toUpperCase() ?? null;
@@ -163,6 +200,9 @@ function parseCompanyInput(body: unknown) {
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new HttpError(400, "E-mail invalido");
   }
+  if (pixKey && pixKey.length > 255) {
+    throw new HttpError(400, "A chave Pix deve ter no maximo 255 caracteres");
+  }
 
   return {
     cnpj,
@@ -170,6 +210,8 @@ function parseCompanyInput(body: unknown) {
     name,
     phone,
     email,
+    pix_key: pixKey,
+    use_cnpj_as_pix: useCnpjAsPix,
     address,
     city,
     state,
@@ -476,6 +518,12 @@ const manager = new AgentManager({
   instagramService,
 });
 
+const internalChatService = new InternalChatService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  supabaseAnonKey: process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY"),
+  supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
 const metaWebhookProcessor = new MetaWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -525,6 +573,19 @@ const rbBillingWorker = new RbBillingWorker({
     rbConnectionService.resolveBillingConfig(acesId, agentId),
 });
 
+const collectionApi = createCollectionApiRuntime({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
+const agendaConnectionService = new AgendaConnectionService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  encryptionKey: process.env.AGENDA_SECRETS_ENCRYPTION_KEY,
+  encryptionKeyVersion: process.env.AGENDA_SECRETS_ENCRYPTION_KEY_VERSION,
+});
+const agendaInboundService = new AgendaInboundService(agendaConnectionService);
+
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -538,6 +599,55 @@ const gupshupAdminService = new GupshupAdminService({
 });
 
 const app = express();
+app.set("trust proxy", 1);
+app.post(
+  "/api/integrations/collections/v1/sources/:publicSourceId/events",
+  express.raw({ type: "application/json", limit: "1mb" }),
+  collectionApi.webhookHandler,
+);
+app.post(
+  "/api/integrations/agenda/v1/connections/:publicConnectionId/events",
+  express.raw({ type: "application/json", limit: "64kb" }),
+  asyncHandler(async (req, res) => {
+    if (!req.is("application/json")) {
+      res.status(415).json({ error: "Content-Type deve ser application/json", code: "unsupported_media_type" });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "Corpo JSON obrigatorio", code: "invalid_request" });
+      return;
+    }
+    try {
+      const result = await agendaInboundService.process({
+        publicConnectionId: getSingleParam(req.params.publicConnectionId),
+        rawBody: req.body,
+        idempotencyKey: req.header("idempotency-key"),
+        timestamp: req.header("x-agenda-timestamp"),
+        signature: req.header("x-agenda-signature"),
+        clientIp: req.ip,
+      });
+      console.info("[agenda-inbound] processed", {
+        publicConnectionId: getSingleParam(req.params.publicConnectionId),
+        eventId: result.body.eventId,
+        status: result.status,
+        duplicate: result.body.duplicate === true,
+      });
+      res.status(result.status).json(result.body);
+    } catch (error) {
+      if (error instanceof AgendaInboundError) {
+        console.warn("[agenda-inbound] rejected", {
+          publicConnectionId: getSingleParam(req.params.publicConnectionId),
+          status: error.status,
+          code: error.code,
+        });
+        if (error.status === 429) res.setHeader("Retry-After", "60");
+        res.status(error.status).json({ error: error.message, code: error.code, details: error.details ?? null });
+        return;
+      }
+      throw error;
+    }
+  }),
+);
 app.use("/webhook/login", express.urlencoded({ extended: false }));
 app.use("/webhook/image", (req, res, next) => {
   const contentLength = Number(req.headers["content-length"] ?? 0);
@@ -579,7 +689,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256",
+    "Content-Type, Authorization, Idempotency-Key, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256, x-collection-timestamp, x-collection-signature, x-agenda-timestamp, x-agenda-signature",
   );
   res.setHeader(
     "Access-Control-Allow-Methods",
@@ -1006,6 +1116,895 @@ app.post(
   }),
 );
 
+function requireCollectionAdmin(req: AuthenticatedRequest) {
+  const context = req.authContext!;
+  if (context.role !== "ADMIN") {
+    throw new HttpError(403, "Apenas administradores podem configurar cobrancas");
+  }
+  return context;
+}
+
+function requireAgendaAdmin(req: AuthenticatedRequest) {
+  const context = req.authContext!;
+  if (context.role !== "ADMIN") {
+    throw new HttpError(403, "Apenas administradores podem configurar a Agenda Universal");
+  }
+  return context;
+}
+
+function asAgendaHttpError(error: unknown) {
+  if (error instanceof AgendaAdminError) {
+    return new HttpError(error.status, error.message, { code: error.code });
+  }
+  return error;
+}
+
+async function agendaAdminCall<T>(operation: () => Promise<T>) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw asAgendaHttpError(error);
+  }
+}
+
+function parseAgendaConnectionInput(body: unknown, partial = false) {
+  const input = asRecord(body);
+  const result: Record<string, unknown> = {};
+  const assign = (name: string) => {
+    if (name in input) result[name] = input[name];
+  };
+  for (const name of ["name", "outboundUrl", "scopeMode", "unitIds", "assignmentIds", "defaultTimezone"]) {
+    assign(name);
+  }
+  if (!partial) {
+    for (const required of ["name", "outboundUrl", "scopeMode"]) {
+      if (!(required in result)) throw new HttpError(400, `${required} e obrigatorio`);
+    }
+  } else if (Object.keys(result).length === 0) {
+    throw new HttpError(400, "Nenhum campo de conexao informado");
+  }
+  return result;
+}
+
+const agendaAdminBase = "/api/admin/integrations/agenda/v1/connections";
+
+app.get(
+  `${agendaAdminBase}/scope-options`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    res.json({ success: true, ...(await agendaAdminCall(() => agendaConnectionService.getScopeOptions(context.acesId))) });
+  }),
+);
+
+app.get(
+  agendaAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const connections = await agendaAdminCall(() => agendaConnectionService.listConnections(context.acesId));
+    res.json({ success: true, connections });
+  }),
+);
+
+app.post(
+  agendaAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const result = await agendaAdminCall(() => agendaConnectionService.createConnection(
+      context.acesId,
+      context.crmUserId,
+      parseAgendaConnectionInput(req.body) as Parameters<typeof agendaConnectionService.createConnection>[2],
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+    res.status(201).json({ success: true, ...result, displayedOnce: true });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const connection = await agendaAdminCall(() => agendaConnectionService.getConnection(
+      context.acesId,
+      getSingleParam(req.params.id),
+    ));
+    if (!connection) throw new HttpError(404, "Conexao de agenda nao encontrada");
+    res.json({ success: true, connection });
+  }),
+);
+
+app.patch(
+  `${agendaAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const connection = await agendaAdminCall(() => agendaConnectionService.updateConnection(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+      parseAgendaConnectionInput(req.body, true),
+    ));
+    res.json({ success: true, connection });
+  }),
+);
+
+app.post(
+  `${agendaAdminBase}/:id/credentials/:direction/rotate`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const direction = getSingleParam(req.params.direction);
+    const secret = await agendaAdminCall(() => agendaConnectionService.rotateCredential(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+      direction as "inbound" | "outbound",
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+    res.json({ success: true, direction, secret, displayedOnce: true, previousSecretValidForHours: 24 });
+  }),
+);
+
+app.post(
+  `${agendaAdminBase}/:id/test`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const test = await agendaAdminCall(() => agendaConnectionService.queueTest(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+    ));
+    res.status(202).json({ success: true, test });
+  }),
+);
+
+for (const operation of ["activate", "pause", "resume"] as const) {
+  app.post(
+    `${agendaAdminBase}/:id/${operation}`,
+    authMiddleware,
+    asyncHandler(async (req: AuthenticatedRequest, res) => {
+      const context = requireAgendaAdmin(req);
+      const result = await agendaAdminCall(() => agendaConnectionService.operate(
+        context.acesId,
+        context.crmUserId,
+        getSingleParam(req.params.id),
+        operation,
+      ));
+      res.json({ success: true, ...result });
+    }),
+  );
+}
+
+app.delete(
+  `${agendaAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const result = await agendaAdminCall(() => agendaConnectionService.operate(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+      "disable",
+    ));
+    res.json({ success: true, ...result });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/deliveries`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const deliveries = await agendaAdminCall(() => agendaConnectionService.listDeliveries(
+      context.acesId,
+      getSingleParam(req.params.id),
+      {
+        limit: Number(req.query.limit ?? 100),
+        eventType: typeof req.query.eventType === "string" ? req.query.eventType : undefined,
+        outcome: typeof req.query.outcome === "string" ? req.query.outcome : undefined,
+        from: typeof req.query.from === "string" ? req.query.from : undefined,
+        to: typeof req.query.to === "string" ? req.query.to : undefined,
+        before: typeof req.query.before === "string" ? req.query.before : undefined,
+      },
+    ));
+    res.json({ success: true, deliveries });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/dead-letters`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const deadLetters = await agendaAdminCall(() => agendaConnectionService.listDeadLetters(
+      context.acesId,
+      getSingleParam(req.params.id),
+      Number(req.query.limit ?? 100),
+    ));
+    res.json({ success: true, deadLetters });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/metrics`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const metrics = await agendaAdminCall(() => agendaConnectionService.getMetrics(
+      context.acesId,
+      getSingleParam(req.params.id),
+    ));
+    res.json({ success: true, metrics });
+  }),
+);
+
+app.post(
+  `${agendaAdminBase}/:id/resync`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const result = await agendaAdminCall(() => agendaConnectionService.startResync(
+      context.acesId, context.crmUserId, getSingleParam(req.params.id), asRecord(req.body).reason,
+    ));
+    res.status(202).json({ success: true, ...result });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/audit`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const audit = await agendaAdminCall(() => agendaConnectionService.listAudit(
+      context.acesId, getSingleParam(req.params.id), Number(req.query.limit ?? 100),
+      typeof req.query.before === "string" ? req.query.before : undefined,
+    ));
+    res.json({ success: true, audit });
+  }),
+);
+
+for (const resolution of ["retry", "skip"] as const) {
+  app.post(
+    `${agendaAdminBase}/:id/dead-letters/:outboxId/${resolution}`,
+    authMiddleware,
+    asyncHandler(async (req: AuthenticatedRequest, res) => {
+      const context = requireAgendaAdmin(req);
+      const result = await agendaAdminCall(() => agendaConnectionService.resolveDeadLetter(
+        context.acesId, context.crmUserId, getSingleParam(req.params.id),
+        getSingleParam(req.params.outboxId), resolution, asRecord(req.body).reason,
+      ));
+      res.json({ success: true, ...result });
+    }),
+  );
+}
+
+app.post(
+  `${agendaAdminBase}/:id/appointments/:appointmentId/correct-status`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const body = asRecord(req.body);
+    const result = await agendaAdminCall(() => agendaConnectionService.correctAppointmentStatus(
+      context.acesId, context.crmUserId, getSingleParam(req.params.id),
+      getSingleParam(req.params.appointmentId), body.status, body.reason,
+    ));
+    res.json({ success: true, ...result });
+  }),
+);
+
+app.get(
+  "/api/collections/sources",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    res.json({ success: true, sources: await collectionApi.collectionService.listSources(context.acesId) });
+  }),
+);
+
+app.post(
+  "/api/collections/sources",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const sourceType = String(req.body.sourceType ?? "").trim();
+    const deliveryMode = String(req.body.deliveryMode ?? "");
+    const defaultIngestionMode = req.body.defaultIngestionMode === "snapshot" ? "snapshot" : "incremental";
+    if (!/^[a-z][a-z0-9_]{1,63}$/.test(sourceType) || !["pull", "push", "file"].includes(deliveryMode)) {
+      throw new HttpError(400, "Tipo ou modo de entrega da fonte invalido");
+    }
+    if (sourceType === "rb") {
+      if (deliveryMode !== "pull") {
+        throw new HttpError(400, "A fonte Registro Base usa recebimento automatico");
+      }
+      try {
+        const preparedSource = await collectionApi.rbCanonicalService.prepareCanonicalSource(context.acesId);
+        const requestedConfig = asRecord(req.body.config);
+        const hasName = typeof req.body.name === "string" && req.body.name.trim();
+        const source = await collectionApi.collectionService.updateSource(context.acesId, preparedSource.id, {
+          name: hasName ? req.body.name : undefined,
+          config: Object.keys(requestedConfig).length > 0
+            ? { ...asRecord(preparedSource.config), ...requestedConfig, dispatcherMode: "canonical" }
+            : undefined,
+        });
+        res.setHeader("Cache-Control", "no-store");
+        res.status(200).json({ success: true, source: source ?? preparedSource });
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("aguardando a conclusao")) {
+          throw new HttpError(409, message, { code: "RB_BILLING_CUTOVER_BLOCKED" });
+        }
+        throw error;
+      }
+    }
+    const result = await collectionApi.collectionService.createSource(context.acesId, context.crmUserId, {
+      name: String(req.body.name ?? ""),
+      sourceType,
+      deliveryMode: deliveryMode as "pull" | "push" | "file",
+      defaultIngestionMode,
+      timezone: asString(req.body.timezone) ?? undefined,
+      staleAfterMinutes: req.body.staleAfterMinutes === undefined ? undefined : Number(req.body.staleAfterMinutes),
+      capabilities: asRecord(req.body.capabilities),
+      config: asRecord(req.body.config),
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.status(201).json({ success: true, ...result });
+  }),
+);
+
+app.patch(
+  "/api/collections/sources/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const source = await collectionApi.collectionService.updateSource(context.acesId, getSingleParam(req.params.id), {
+      name: typeof req.body.name === "string" ? req.body.name : undefined,
+      defaultIngestionMode: ["snapshot", "incremental"].includes(req.body.defaultIngestionMode)
+        ? req.body.defaultIngestionMode : undefined,
+      timezone: typeof req.body.timezone === "string" ? req.body.timezone : undefined,
+      staleAfterMinutes: req.body.staleAfterMinutes === undefined ? undefined : Number(req.body.staleAfterMinutes),
+      capabilities: req.body.capabilities === undefined ? undefined : asRecord(req.body.capabilities),
+      config: req.body.config === undefined ? undefined : asRecord(req.body.config),
+      status: typeof req.body.status === "string" ? req.body.status : undefined,
+    });
+    if (!source) throw new HttpError(404, "Fonte de cobranca nao encontrada");
+    res.json({ success: true, source });
+  }),
+);
+
+app.delete(
+  "/api/collections/sources/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const source = await collectionApi.collectionService.disableSource(context.acesId, getSingleParam(req.params.id));
+    if (!source) throw new HttpError(404, "Fonte de cobranca nao encontrada");
+    res.json({ success: true, source });
+  }),
+);
+
+app.post(
+  "/api/collections/sources/:id/rotate-secret",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const secret = await collectionApi.collectionService.rotateWebhookSecret(context.acesId, getSingleParam(req.params.id));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, secret, displayedOnce: true, previousSecretValidForHours: 24 });
+  }),
+);
+
+app.get(
+  "/api/collections/ingestions",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const sourceId = asString(req.query.sourceId);
+    res.json({ success: true, ingestions: await collectionApi.collectionService.listIngestions(context.acesId, sourceId ?? undefined) });
+  }),
+);
+
+app.get(
+  "/api/collections/imports",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const { data, error } = await collectionApi.collectionService.collections
+      .from("spreadsheet_imports")
+      .select("id, source_connection_id, original_file_name, file_kind, file_size, status, mode, preview_summary, failure_summary, ingestion_run_id, expires_at, publish_requested_at, published_at, created_at, updated_at")
+      .eq("aces_id", context.acesId).order("created_at", { ascending: false }).limit(100);
+    if (error) throw error;
+    res.json({ success: true, imports: data ?? [] });
+  }),
+);
+
+app.get(
+  "/api/collections/health",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const { data, error } = await collectionApi.collectionService.collections
+      .rpc("get_operational_health", { p_aces_id: context.acesId });
+    if (error) throw error;
+    res.json({ success: true, health: data });
+  }),
+);
+
+app.post(
+  "/api/collections/sources/:id/run",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const source = await collectionApi.collectionService.getSource(context.acesId, getSingleParam(req.params.id));
+    if (!source) throw new HttpError(404, "Fonte de cobranca nao encontrada");
+    if (source.source_type !== "rb" || source.delivery_mode !== "pull") {
+      throw new HttpError(422, "Esta fonte nao possui execucao manual pull");
+    }
+    const { data: dispatcher, error: dispatcherError } = await collectionApi.collectionService.collections.rpc(
+      "resolve_source_dispatcher",
+      { p_source_connection_id: source.id },
+    );
+    if (dispatcherError) throw dispatcherError;
+    if (dispatcher !== "canonical") {
+      throw new HttpError(409, "A fonte RB ainda aguarda a ativacao automatica do backend");
+    }
+    const result = await collectionApi.rbCanonicalService.pull(source.id, context.acesId);
+    res.status(202).json({ success: true, result });
+  }),
+);
+
+app.post(
+  "/api/collections/rb/backfill",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const result = await collectionApi.rbCanonicalService.backfill(context.acesId);
+    res.json({ success: true, result });
+  }),
+);
+
+app.get(
+  "/api/collections/rb/compare/:sourceId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const sourceId = getSingleParam(req.params.sourceId);
+    const source = await collectionApi.collectionService.getSource(context.acesId, sourceId);
+    if (!source || source.source_type !== "rb") throw new HttpError(404, "Fonte RB nao encontrada");
+    res.json({ success: true, comparison: await collectionApi.rbCanonicalService.compare(context.acesId, sourceId) });
+  }),
+);
+
+app.post(
+  "/api/collections/rb/cutover/:sourceId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const reason = String(req.body.reason ?? "").trim();
+    if (reason.length < 10) throw new HttpError(400, "Informe o motivo operacional do cutover");
+    const result = await collectionApi.rbCanonicalService.cutover(
+      context.acesId, getSingleParam(req.params.sourceId), context.crmUserId, reason,
+    );
+    res.json({ success: true, result });
+  }),
+);
+
+app.post(
+  "/api/collections/cases/rebuild",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const { data, error } = await collectionApi.collectionService.collections.rpc("rebuild_case_projections", {
+      p_aces_id: context.acesId,
+      p_source_connection_id: asString(req.body.sourceConnectionId),
+      p_case_id: asString(req.body.caseId),
+      p_reason: asString(req.body.reason) ?? "admin_rebuild",
+      p_actor_id: context.crmUserId,
+    });
+    if (error) throw error;
+    res.json({ success: true, result: data });
+  }),
+);
+
+app.post(
+  "/api/collections/contacts/communication-status",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const { data, error } = await collectionApi.collectionService.collections.rpc("set_contact_communication_status", {
+      p_aces_id: context.acesId,
+      p_phone: String(req.body.phone ?? ""),
+      p_status: String(req.body.status ?? ""),
+      p_reason: String(req.body.reason ?? "Alterado por administrador"),
+      p_actor_id: context.crmUserId,
+    });
+    if (error) throw error;
+    res.json({ success: true, result: data });
+  }),
+);
+
+app.post(
+  "/api/collections/imports/upload-intent",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const intent = await collectionApi.spreadsheetService.createUploadIntent({
+      acesId: context.acesId,
+      userId: context.crmUserId,
+      sourceConnectionId: String(req.body.sourceConnectionId ?? ""),
+      fileName: String(req.body.fileName ?? ""),
+      fileSize: Number(req.body.fileSize),
+      mimeType: String(req.body.mimeType ?? ""),
+    });
+    res.status(201).json({ success: true, ...intent });
+  }),
+);
+
+app.post(
+  "/api/collections/imports/:id/preview",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const preview = await collectionApi.spreadsheetService.preview({
+      acesId: context.acesId,
+      importId: getSingleParam(req.params.id),
+      mapping: req.body.mapping,
+      defaults: asRecord(req.body.defaults),
+      sheetName: asString(req.body.sheetName),
+      headerRow: req.body.headerRow === undefined ? undefined : Number(req.body.headerRow),
+      dateFormat: req.body.dateFormat,
+      decimalFormat: req.body.decimalFormat,
+    });
+    res.json({ success: true, preview });
+  }),
+);
+
+app.post(
+  "/api/collections/imports/:id/publish",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    if (!["snapshot", "incremental"].includes(req.body.mode)) throw new HttpError(400, "Modo de importacao invalido");
+    const receipt = await collectionApi.spreadsheetService.publish({
+      acesId: context.acesId,
+      importId: getSingleParam(req.params.id),
+      mode: req.body.mode,
+      scope: asRecord(req.body.scope),
+      confirmValidRowsOnly: req.body.confirmValidRowsOnly === true,
+    });
+    res.status(202).json({ success: true, receipt });
+  }),
+);
+
+app.get(
+  "/api/collections/mapping-profiles",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const { data, error } = await collectionApi.collectionService.collections.from("mapping_profiles")
+      .select("*").eq("aces_id", context.acesId).order("updated_at", { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, profiles: data ?? [] });
+  }),
+);
+
+app.post(
+  "/api/collections/mapping-profiles",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const row = {
+      id: asString(req.body.id) ?? undefined,
+      aces_id: context.acesId,
+      source_connection_id: String(req.body.sourceConnectionId ?? ""),
+      name: String(req.body.name ?? "").trim(),
+      file_kind: req.body.fileKind,
+      sheet_name: asString(req.body.sheetName),
+      column_mapping: asRecord(req.body.mapping),
+      default_values: asRecord(req.body.defaults),
+      date_format: req.body.dateFormat ?? "YYYY-MM-DD",
+      decimal_format: req.body.decimalFormat ?? "pt-BR",
+      header_row: Number(req.body.headerRow ?? 1),
+      created_by: context.crmUserId,
+    };
+    const { data, error } = await collectionApi.collectionService.collections.from("mapping_profiles")
+      .upsert(row).select("*").single();
+    if (error) throw error;
+    res.status(201).json({ success: true, profile: data });
+  }),
+);
+
+app.get(
+  "/api/collections/configuration",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const client = collectionApi.collectionService.collections;
+    const [bindings, rules, sourceBindings, runtime, cases, tools, funnels, migrations, onboarding, pipelines] = await Promise.all([
+      client.from("agent_source_bindings").select("*").eq("aces_id", context.acesId).order("priority", { ascending: false }),
+      client.from("journey_rules").select("*").eq("aces_id", context.acesId).order("priority", { ascending: false }),
+      client.from("journey_source_bindings").select("journey_rule_id, source_connection_id").eq("aces_id", context.acesId),
+      client.from("runtime_controls").select("*").eq("aces_id", context.acesId).maybeSingle(),
+      client.from("cases").select("communication_status, source_freshness, total_open_amount").eq("aces_id", context.acesId),
+      collectionApi.collectionService.agents.from("agent_tools")
+        .select("id, agent_id, is_enabled, readiness").eq("aces_id", context.acesId)
+        .eq("tool_key", "collection_orchestration"),
+      collectionApi.collectionService.crm.from("automation_funnels")
+        .select("id, name, instance_name, is_active, entry_source").eq("aces_id", context.acesId)
+        .eq("entry_source", "collection"),
+      client.from("rb_migration_runs").select("*").eq("aces_id", context.acesId)
+        .order("started_at", { ascending: false }).limit(20),
+      collectionApi.onboardingService.listSetups(context.acesId),
+      collectionApi.collectionService.crm.from("pipelines")
+        .select("id, name, description, is_active, classifier_key").eq("aces_id", context.acesId)
+        .order("name", { ascending: true }),
+    ]);
+    for (const result of [bindings, rules, sourceBindings, runtime, cases, tools, funnels, migrations, pipelines]) if (result.error) throw result.error;
+    res.json({ success: true, bindings: bindings.data ?? [], rules: rules.data ?? [],
+      sourceBindings: sourceBindings.data ?? [],
+      runtime: runtime.data, cases: cases.data ?? [], tools: tools.data ?? [],
+      funnels: funnels.data ?? [], migrations: migrations.data ?? [], onboarding, pipelines: pipelines.data ?? [] });
+  }),
+);
+
+app.get(
+  "/api/collections/onboarding/:sourceId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const setup = await collectionApi.onboardingService.getSetup(
+      context.acesId,
+      getSingleParam(req.params.sourceId),
+    );
+    if (!setup) throw new HttpError(404, "Fonte de cobranca nao encontrada");
+    res.json({ success: true, setup });
+  }),
+);
+
+app.post(
+  "/api/collections/onboarding/prepare",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    try {
+      const setup = await collectionApi.onboardingService.prepare({
+        acesId: context.acesId,
+        crmUserId: context.crmUserId,
+        sourceConnectionId: String(req.body.sourceConnectionId ?? ""),
+        instanceName: asString(req.body.instanceName),
+        pipelineId: asString(req.body.pipelineId),
+        createNewPipeline: req.body.createNewPipeline === true,
+      });
+      res.status(201).json({ success: true, setup });
+    } catch (error) {
+      if (error instanceof CollectionOnboardingError) {
+        throw new HttpError(error.status, error.message, { code: error.code });
+      }
+      throw error;
+    }
+  }),
+);
+
+app.post(
+  "/api/collections/onboarding/:sourceId/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    try {
+      const result = await collectionApi.onboardingService.createMessage(
+        context.acesId,
+        getSingleParam(req.params.sourceId),
+        parseCollectionMessageInput(req.body),
+      );
+      res.status(201).json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof CollectionOnboardingError) {
+        throw new HttpError(error.status, error.message, { code: error.code });
+      }
+      throw error;
+    }
+  }),
+);
+
+app.patch(
+  "/api/collections/onboarding/:sourceId/messages/:messageId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    try {
+      const result = await collectionApi.onboardingService.updateMessageById(
+        context.acesId,
+        getSingleParam(req.params.sourceId),
+        getSingleParam(req.params.messageId),
+        parseCollectionMessageInput(req.body),
+      );
+      res.json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof CollectionOnboardingError) {
+        throw new HttpError(error.status, error.message, { code: error.code });
+      }
+      throw error;
+    }
+  }),
+);
+
+app.patch(
+  "/api/collections/onboarding/:sourceId/message",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    try {
+      const result = await collectionApi.onboardingService.updateMessage(
+        context.acesId,
+        getSingleParam(req.params.sourceId),
+        String(req.body.messageTemplate ?? ""),
+        req.body.template && typeof req.body.template === "object"
+          ? {
+              provider: req.body.template.provider,
+              id: asString(req.body.template.id),
+              name: String(req.body.template.name ?? ""),
+              language: asString(req.body.template.language),
+              status: asString(req.body.template.status),
+              params: Array.isArray(req.body.template.params)
+                ? req.body.template.params.map((item: unknown) => String(item).trim()).filter(Boolean)
+                : [],
+              rejectionReason: asString(req.body.template.rejectionReason),
+            }
+          : null,
+      );
+      res.json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof CollectionOnboardingError) {
+        throw new HttpError(error.status, error.message, { code: error.code });
+      }
+      throw error;
+    }
+  }),
+);
+
+app.post(
+  "/api/collections/onboarding/:sourceId/activate",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    try {
+      const setup = await collectionApi.onboardingService.activate(
+        context.acesId,
+        getSingleParam(req.params.sourceId),
+      );
+      res.json({ success: true, setup });
+    } catch (error) {
+      if (error instanceof CollectionOnboardingError) {
+        throw new HttpError(error.status, error.message, { code: error.code });
+      }
+      throw error;
+    }
+  }),
+);
+
+app.post(
+  "/api/collections/onboarding/:sourceId/pause",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    try {
+      const setup = await collectionApi.onboardingService.pause(
+        context.acesId,
+        getSingleParam(req.params.sourceId),
+      );
+      res.json({ success: true, setup });
+    } catch (error) {
+      if (error instanceof CollectionOnboardingError) {
+        throw new HttpError(error.status, error.message, { code: error.code });
+      }
+      throw error;
+    }
+  }),
+);
+
+app.post(
+  "/api/collections/bindings",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const { data, error } = await collectionApi.collectionService.collections.from("agent_source_bindings").upsert({
+      id: asString(req.body.id) ?? undefined,
+      aces_id: context.acesId,
+      agent_tool_id: String(req.body.agentToolId ?? ""),
+      source_connection_id: String(req.body.sourceConnectionId ?? ""),
+      creditor_external_id: asString(req.body.creditorExternalId),
+      priority: Number(req.body.priority ?? 100),
+      is_enabled: req.body.isEnabled !== false,
+    }).select("*").single();
+    if (error) throw error;
+    res.status(201).json({ success: true, binding: data });
+  }),
+);
+
+app.post(
+  "/api/collections/journey-rules",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const client = collectionApi.collectionService.collections;
+    const { data, error } = await client.from("journey_rules").upsert({
+      id: asString(req.body.id) ?? undefined,
+      aces_id: context.acesId,
+      funnel_id: String(req.body.funnelId ?? ""),
+      timing_relation: req.body.timingRelation,
+      days_offset: Number(req.body.daysOffset ?? 0),
+      priority: Number(req.body.priority ?? 100),
+      financial_statuses: Array.isArray(req.body.financialStatuses) ? req.body.financialStatuses : ["open"],
+      payment_methods: Array.isArray(req.body.paymentMethods) ? req.body.paymentMethods : [],
+      currency: asString(req.body.currency)?.toUpperCase() ?? null,
+      is_active: req.body.isActive !== false,
+    }).select("*").single();
+    if (error) throw error;
+    if (Array.isArray(req.body.sourceConnectionIds)) {
+      await client.from("journey_source_bindings").delete().eq("journey_rule_id", data.id).eq("aces_id", context.acesId);
+      const rows = req.body.sourceConnectionIds.map((sourceId: unknown) => ({
+        journey_rule_id: data.id, source_connection_id: String(sourceId), aces_id: context.acesId,
+      }));
+      if (rows.length > 0) {
+        const { error: bindingError } = await client.from("journey_source_bindings").insert(rows);
+        if (bindingError) throw bindingError;
+      }
+    }
+    res.status(201).json({ success: true, rule: data });
+  }),
+);
+
+app.patch(
+  "/api/collections/runtime",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    if (!["legacy_rb", "canonical", "paused"].includes(req.body.activeDispatcher)) {
+      throw new HttpError(400, "Dispatcher invalido");
+    }
+    if (req.body.activeDispatcher === "canonical") {
+      throw new HttpError(422, "Use o cutover RB validado para ativar o dispatcher canonico");
+    }
+    const { data: currentRuntime, error: currentRuntimeError } = await collectionApi.collectionService.collections
+      .from("runtime_controls").select("active_dispatcher")
+      .eq("aces_id", context.acesId).maybeSingle();
+    if (currentRuntimeError) throw currentRuntimeError;
+    if (currentRuntime?.active_dispatcher === "canonical" && req.body.activeDispatcher === "legacy_rb") {
+      throw new HttpError(422, "O runtime canonico nao pode voltar ao legado; pause e reconcilie o incidente");
+    }
+    const { data, error } = await collectionApi.collectionService.collections.rpc("set_active_dispatcher", {
+      p_aces_id: context.acesId,
+      p_dispatcher: req.body.activeDispatcher,
+      p_reason: asString(req.body.reason) ?? "Alterado por administrador",
+      p_actor_id: context.crmUserId,
+    });
+    if (error) throw error;
+    res.json({ success: true, runtime: data });
+  }),
+);
+
+app.patch(
+  "/api/collections/business-timezone",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireCollectionAdmin(req);
+    const timezone = String(req.body.timezone ?? "").trim();
+    if (!timezone || timezone.length > 100) throw new HttpError(400, "Timezone de negocio invalida");
+    const { data, error } = await collectionApi.collectionService.collections
+      .rpc("set_account_business_timezone", {
+        p_aces_id: context.acesId, p_timezone: timezone, p_actor_id: context.crmUserId,
+      });
+    if (error) throw new HttpError(422, "Timezone de negocio invalida");
+    res.json({ success: true, timezone: data });
+  }),
+);
+
 app.get(
   "/api/rb/connections",
   authMiddleware,
@@ -1030,15 +2029,33 @@ app.post(
     if (!Number.isInteger(rbAcesId) || rbAcesId <= 0) {
       throw new HttpError(400, "rbAcesId e obrigatorio e deve ser um numero inteiro positivo");
     }
+    const previousConnections = await rbConnectionService.listConnections(context.acesId);
+    const previousBillingEnabled = previousConnections[0]?.billingEnabled ?? false;
+    const billingEnabled = typeof req.body.billingEnabled === "boolean"
+      ? req.body.billingEnabled
+      : req.body.status === "active";
     const connection = await rbConnectionService.saveConnection({
       id: asString(req.body.id),
       acesId: context.acesId,
       rbAcesId,
       rbTokenApi: asString(req.body.rbTokenApi),
       rbEmpresaIds,
-      status: req.body.status === "inactive" ? "inactive" : "active",
+      billingEnabled: false,
     });
-    res.status(req.body.id ? 200 : 201).json({ success: true, connection });
+    try {
+      await collectionApi.rbCanonicalService.setBillingState(context.acesId, billingEnabled);
+    } catch (error) {
+      await rbConnectionService.setBillingEnabled(context.acesId, previousBillingEnabled);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("aguardando a conclusao")) {
+        throw new HttpError(409, message, { code: "RB_BILLING_CUTOVER_BLOCKED" });
+      }
+      throw error;
+    }
+    res.status(req.body.id ? 200 : 201).json({
+      success: true,
+      connection: { ...connection, billingEnabled },
+    });
   }),
 );
 
@@ -1471,29 +2488,65 @@ app.get(
       string,
       "evolution" | "meta" | "gupshup"
     >();
+    const phoneByInstance = new Map<string, string>();
 
     if (instanceNames.length > 0) {
       const metaAdmin = createServiceSupabaseClient("meta");
-      const { data: providerRows, error: providerError } = await metaAdmin
-        .from("instance")
-        .select("instance_name, provider")
-        .eq("aces_id", context.acesId)
-        .in("instance_name", instanceNames);
+      const gupshupAdmin = createServiceSupabaseClient("gupshup");
+      const [providerResult, metaChannelResult, gupshupChannelResult] = await Promise.all([
+        metaAdmin
+          .from("instance")
+          .select("instance_name, provider")
+          .eq("aces_id", context.acesId)
+          .in("instance_name", instanceNames),
+        metaAdmin
+          .from("whatsapp_channels")
+          .select("instance_name, display_phone_number")
+          .eq("aces_id", context.acesId)
+          .in("instance_name", instanceNames),
+        gupshupAdmin
+          .from("channel")
+          .select("instance_name, phone_number")
+          .eq("aces_id", context.acesId)
+          .in("instance_name", instanceNames),
+      ]);
 
-      if (providerError) {
+      if (providerResult.error) {
         throw new HttpError(
           500,
           "Nao foi possivel carregar os provedores das instancias",
-          providerError,
+          providerResult.error,
+        );
+      }
+      if (metaChannelResult.error) {
+        throw new HttpError(
+          500,
+          "Nao foi possivel carregar os numeros das instancias Meta",
+          metaChannelResult.error,
+        );
+      }
+      if (gupshupChannelResult.error) {
+        throw new HttpError(
+          500,
+          "Nao foi possivel carregar os numeros das instancias Gupshup",
+          gupshupChannelResult.error,
         );
       }
 
-      for (const row of providerRows ?? []) {
+      for (const row of providerResult.data ?? []) {
         const provider =
           row.provider === "gupshup" || row.provider === "meta"
             ? row.provider
             : "evolution";
         providerByInstance.set(String(row.instance_name), provider);
+      }
+      for (const row of metaChannelResult.data ?? []) {
+        if (row.display_phone_number) phoneByInstance.set(String(row.instance_name), String(row.display_phone_number));
+      }
+      for (const row of gupshupChannelResult.data ?? []) {
+        if (row.phone_number && !phoneByInstance.has(String(row.instance_name))) {
+          phoneByInstance.set(String(row.instance_name), String(row.phone_number));
+        }
       }
     }
 
@@ -1503,6 +2556,7 @@ app.get(
         ...instance,
         provider:
           providerByInstance.get(String(instance.instancia)) ?? "evolution",
+        phoneNumber: phoneByInstance.get(String(instance.instancia)) ?? null,
       })),
     });
   }),
@@ -1921,7 +2975,7 @@ app.get(
       supabaseAdmin
         .from("empresas")
         .select(
-          "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
+          "id, cnpj, legal_name, name, phone, email, pix_key, use_cnpj_as_pix, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
         )
         .eq("aces_id", context.acesId)
         .order("name"),
@@ -1955,6 +3009,8 @@ app.get(
         name: company.name,
         phone: company.phone,
         email: company.email,
+        pixKey: company.pix_key,
+        useCnpjAsPix: company.use_cnpj_as_pix,
         address: company.address,
         city: company.city,
         state: company.state,
@@ -1989,7 +3045,7 @@ app.post(
         ...input,
       })
       .select(
-        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
+        "id, cnpj, legal_name, name, phone, email, pix_key, use_cnpj_as_pix, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
       )
       .single();
 
@@ -2018,9 +3074,13 @@ app.patch(
 
     const parsedInput = parseCompanyInput(req.body);
     const { search_aliases: _searchAliases, ...inputWithoutAliases } = parsedInput;
-    const input = Array.isArray(asRecord(req.body).searchAliases)
+    const rawBody = asRecord(req.body);
+    const input = Array.isArray(rawBody.searchAliases)
       ? parsedInput
       : inputWithoutAliases;
+    const mutableInput = input as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(rawBody, "pixKey")) delete mutableInput.pix_key;
+    if (!Object.prototype.hasOwnProperty.call(rawBody, "useCnpjAsPix")) delete mutableInput.use_cnpj_as_pix;
     const supabaseAdmin = createServiceSupabaseClient();
     const { data, error } = await supabaseAdmin
       .from("empresas")
@@ -2028,7 +3088,7 @@ app.patch(
       .eq("id", getSingleParam(req.params.id))
       .eq("aces_id", context.acesId)
       .select(
-        "id, cnpj, legal_name, name, phone, email, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
+        "id, cnpj, legal_name, name, phone, email, pix_key, use_cnpj_as_pix, address, city, state, postal_code, timezone, search_aliases, is_active, created_at, updated_at",
       )
       .maybeSingle();
 
@@ -2338,6 +3398,209 @@ app.post(
   }),
 );
 
+app.get(
+  "/api/chat/internal/users",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.listUsers(
+      req.authContext!,
+      typeof req.query.search === "string" ? req.query.search : "",
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/meta/templates",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    if (context.role !== "ADMIN") {
+      throw new HttpError(403, "Apenas administradores podem criar templates Meta");
+    }
+    const instanceName = String(req.body.instanceName ?? "").trim();
+    const name = String(req.body.name ?? "").trim();
+    const components = Array.isArray(req.body.components) ? req.body.components : [];
+    if (!instanceName || !name || components.length === 0) {
+      throw new HttpError(400, "Informe instancia, nome e componentes do template Meta");
+    }
+    const template = await metaTemplateService.createTemplate(instanceName, {
+      name,
+      language: asString(req.body.language) ?? "pt_BR",
+      category: asString(req.body.category) ?? "UTILITY",
+      components,
+    });
+    res.status(201).json({ success: true, instanceName, template });
+  }),
+);
+
+app.get(
+  "/api/chat/internal/leads",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.searchMentionableLeads(
+      req.authContext!,
+      typeof req.query.search === "string" ? req.query.search : "",
+    );
+    res.json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/internal/conversations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.listConversations(
+      req.authContext!,
+      req.query.includeArchived === "true",
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.createConversation(req.authContext!, {
+      kind: String(req.body.kind ?? ""),
+      name: typeof req.body.name === "string" ? req.body.name : null,
+      memberIds: Array.isArray(req.body.memberIds)
+        ? req.body.memberIds.map((value: unknown) => String(value))
+        : [],
+    });
+    res.status(201).json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/internal/conversations/:id/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.listMessages(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      typeof req.query.before === "string" ? req.query.before : null,
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const mentions = Array.isArray(req.body.mentions)
+      ? req.body.mentions.map((value: unknown) => {
+          const mention = asRecord(value);
+          return {
+            type: String(mention.type ?? "") as "user" | "all" | "lead",
+            userId: typeof mention.userId === "string" ? mention.userId : null,
+            leadId: typeof mention.leadId === "string" ? mention.leadId : null,
+            start: Number(mention.start),
+            length: Number(mention.length),
+          };
+        })
+      : [];
+    const result = await internalChatService.sendMessage(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        content: typeof req.body.content === "string" ? req.body.content : "",
+        replyToMessageId: typeof req.body.replyToMessageId === "string" ? req.body.replyToMessageId : null,
+        clientMessageId: typeof req.body.clientMessageId === "string" ? req.body.clientMessageId : "",
+        attachmentId: typeof req.body.attachmentId === "string" ? req.body.attachmentId : null,
+        mentions,
+      },
+    );
+    res.status(201).json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/attachments/upload-url",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await internalChatService.createAttachmentUploadUrl(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        fileName: typeof req.body.fileName === "string" ? req.body.fileName : "",
+        mimeType: typeof req.body.mimeType === "string" ? req.body.mimeType : "",
+        fileSize: Number(req.body.fileSize ?? 0),
+        kind: typeof req.body.kind === "string" ? req.body.kind : "",
+      },
+    );
+    res.json(result);
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/read",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.markRead(req.authContext!, getSingleParam(req.params.id)));
+  }),
+);
+
+app.patch(
+  "/api/chat/internal/conversations/:id",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.updateConversation(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        name: typeof req.body.name === "string" ? req.body.name : undefined,
+        archived: typeof req.body.archived === "boolean" ? req.body.archived : undefined,
+      },
+    ));
+  }),
+);
+
+app.post(
+  "/api/chat/internal/conversations/:id/members",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.status(201).json(await internalChatService.addMember(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      {
+        userId: typeof req.body.userId === "string" ? req.body.userId : "",
+        isAdmin: req.body.isAdmin === true,
+      },
+    ));
+  }),
+);
+
+app.patch(
+  "/api/chat/internal/conversations/:id/members/:userId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.updateMember(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      getSingleParam(req.params.userId),
+      {
+        isAdmin: typeof req.body.isAdmin === "boolean" ? req.body.isAdmin : undefined,
+        isActive: typeof req.body.isActive === "boolean" ? req.body.isActive : undefined,
+      },
+    ));
+  }),
+);
+
+app.delete(
+  "/api/chat/internal/conversations/:id/members/:userId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json(await internalChatService.removeMember(
+      req.authContext!,
+      getSingleParam(req.params.id),
+      getSingleParam(req.params.userId),
+    ));
+  }),
+);
+
 app.post(
   "/api/chat/send-manual",
   authMiddleware,
@@ -2389,6 +3652,22 @@ app.get(
     const leadId = getSingleParam(req.params.leadId);
     const result = await manager.getLeadAiState(req.authContext!, leadId, asString(req.query.instanceName));
     res.json(result);
+  }),
+);
+
+app.get(
+  "/api/chat/lead-interaction-modes",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const rawLeadIds = asString(req.query.leadIds);
+    const leadIds = rawLeadIds
+      ? rawLeadIds.split(",").map((leadId) => leadId.trim()).filter(Boolean)
+      : [];
+
+    res.json({
+      success: true,
+      modes: await manager.listLeadInteractionModes(req.authContext!, leadIds),
+    });
   }),
 );
 
@@ -3014,8 +4293,9 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
+    const context = requireRbBillingAdmin(req.authContext!);
     const result = await rbBillingWorker.runNowForAgent(
-      req.authContext!.acesId,
+      context.acesId,
       agentId,
     );
     res.status(202).json({ success: true, result });
@@ -3663,6 +4943,10 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
       error: error.message,
       details: error.details ?? null,
     });
+  }
+
+  if (error instanceof CollectionValidationError) {
+    return res.status(422).json({ error: error.message, code: error.code, field: error.field ?? null });
   }
 
   const payloadError = error as {

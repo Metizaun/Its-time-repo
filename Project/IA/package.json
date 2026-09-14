@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch api-server.ts",
     "automation:worker": "tsx automation-worker.ts",
+    "agenda:worker": "tsx agenda-worker-entry.ts",
     "rb:run-now": "tsx scripts/run-rb-billing-now.ts",
     "meta:bootstrap": "tsx scripts/bootstrap-meta-whatsapp.ts",
     "meta:disable": "tsx scripts/disable-meta-whatsapp.ts",
@@ -14,11 +15,12 @@
     "optics:ops": "tsx optics-template-ops.ts",
     "optics:ops:prod": "node dist/optics-template-ops.js",
     "schema:check": "tsx schema-preflight.ts",
+    "test:agenda": "node --import tsx --test tests/agenda-contract.test.ts tests/agenda-security.test.ts tests/agenda-delivery-worker.test.ts tests/agenda-inbound.test.ts tests/agenda-resync-worker.test.ts tests/agenda-company-address.test.ts tests/agenda-subworkflow.test.ts",
     "predeploy:data-check": "tsx scripts/predeploy-readiness-check.ts",
     "predeploy:duplicate-plan": "tsx scripts/plan-phone-duplicate-merge.ts",
     "build": "tsc",
     "start": "node dist/api-server.js",
-    "test": "node --import tsx --test tests/agenda-subworkflow.test.ts tests/ai-budget.test.ts tests/ai-costs.test.ts tests/audio-idempotency.test.ts tests/automation-template-variables.test.ts tests/central-ai-provider.test.ts tests/chat-quick-replies.test.ts tests/chat-send-policy.test.ts tests/forwarding-external.test.ts tests/phone-normalization.test.ts tests/pipeline-classifier.test.ts tests/prescription-matching.test.ts tests/rb-client-rule-filter.test.ts tests/rb-connection-service.test.ts tests/rb-lead-note.test.ts tests/rb-visagism-service.test.ts tests/visagism-selection.test.ts tests/optics-image-analysis.test.ts tests/visagism-delivery.test.ts tests/evolution-provider.test.ts tests/evolution-webhook-lid.test.ts tests/evolution-webhook-routing.test.ts tests/gupshup-provider.test.ts tests/gupshup-template-service.test.ts tests/gupshup-media-downloader.test.ts tests/gupshup-webhook.test.ts tests/meta-provider.test.ts tests/meta-bootstrap-service.test.ts tests/messaging-channel-resolver.test.ts tests/instagram-crypto.test.ts tests/instagram-webhook.test.ts tests/instagram-operations.test.ts",
+    "test": "node --import tsx --test tests/agenda-contract.test.ts tests/agenda-security.test.ts tests/agenda-delivery-worker.test.ts tests/agenda-inbound.test.ts tests/agenda-resync-worker.test.ts tests/agenda-company-address.test.ts tests/agenda-subworkflow.test.ts tests/ai-budget.test.ts tests/ai-costs.test.ts tests/audio-idempotency.test.ts tests/automation-template-variables.test.ts tests/central-ai-provider.test.ts tests/chat-quick-replies.test.ts tests/chat-send-policy.test.ts tests/collections-core.test.ts tests/collections-integration.test.ts tests/collections-security.test.ts tests/collections-integrity.test.ts tests/forwarding-external.test.ts tests/phone-normalization.test.ts tests/pipeline-classifier.test.ts tests/prescription-matching.test.ts tests/rb-billing-authorization.test.ts tests/rb-client-rule-filter.test.ts tests/rb-connection-service.test.ts tests/rb-lead-note.test.ts tests/rb-visagism-service.test.ts tests/visagism-selection.test.ts tests/optics-image-analysis.test.ts tests/visagism-delivery.test.ts tests/evolution-provider.test.ts tests/evolution-template-message.test.ts tests/evolution-webhook-lid.test.ts tests/evolution-webhook-routing.test.ts tests/gupshup-provider.test.ts tests/gupshup-template-service.test.ts tests/gupshup-media-downloader.test.ts tests/gupshup-webhook.test.ts tests/meta-provider.test.ts tests/meta-bootstrap-service.test.ts tests/messaging-channel-resolver.test.ts tests/store-locator-import.test.ts tests/instagram-crypto.test.ts tests/instagram-webhook.test.ts tests/instagram-operations.test.ts",
     "store-locator:instituto:prepare": "tsx scripts/prepare-instituto-store-import.ts",
     "test:instagram:integration": "node --import tsx --test tests/instagram-channel-foundation.integration.test.ts",
     "lint": "eslint .",
@@ -37,12 +39,14 @@
   "license": "MIT",
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
-    "@supabase/supabase-js": "^2.45.4",
+    "@supabase/supabase-js": "2.115.0",
     "axios": "^1.7.7",
+    "csv-parse": "7.0.2",
     "dotenv": "^16.4.5",
-    "express": "^4.21.1",
+    "express": "5.2.1",
     "ioredis": "^5.4.1",
-    "openai": "^6.36.0"
+    "openai": "^6.36.0",
+    "read-excel-file": "9.3.10"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
@@ -50,12 +54,13 @@
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
     "eslint": "^9.15.0",
+    "fflate": "0.8.3",
     "prettier": "^3.3.3",
-    "tsx": "^4.19.2",
+    "tsx": "4.23.13",
     "typescript": "^5.6.3"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
   }
 }

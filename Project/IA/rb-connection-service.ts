@@ -5,7 +5,7 @@ import {
 
 import { createClient } from "@supabase/supabase-js";
 
-type RbConnectionStatus = "active" | "inactive";
+class RestOnlyWebSocket {}
 
 type RbConnectionRow = {
   id: string;
@@ -15,6 +15,7 @@ type RbConnectionRow = {
   rb_token_api: string;
   rb_empresa_ids: unknown;
   is_active: boolean;
+  billing_enabled: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -32,7 +33,7 @@ export type SaveRbConnectionInput = {
   rbAcesId: number;
   rbTokenApi?: string | null;
   rbEmpresaIds: string[];
-  status: RbConnectionStatus;
+  billingEnabled: boolean;
 };
 
 export type RbWebhookTokenPayload = {
@@ -64,7 +65,7 @@ function normalizeConnection(row: RbConnectionRow) {
     id: row.id,
     rbAcesId: row.rb_aces_id,
     rbEmpresaIds: normalizeStringArray(row.rb_empresa_ids),
-    status: row.is_active ? ("active" as const) : ("inactive" as const),
+    billingEnabled: Boolean(row.billing_enabled),
     hasTokenApi: Boolean(row.rb_token_api),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -78,7 +79,10 @@ export class RbConnectionService {
   private readonly rbApiBaseUrl: string;
 
   constructor(config: RbConnectionServiceConfig) {
-    const options = { auth: { persistSession: false, autoRefreshToken: false } };
+    const options = {
+      auth: { persistSession: false, autoRefreshToken: false },
+      realtime: { transport: RestOnlyWebSocket as never },
+    };
     this.rbClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
       ...options,
       db: { schema: "rb" },
@@ -120,7 +124,8 @@ export class RbConnectionService {
       rb_base_url: this.rbApiBaseUrl,
       rb_token_api: tokenApi,
       rb_empresa_ids: input.rbEmpresaIds,
-      is_active: input.status === "active",
+      is_active: true,
+      billing_enabled: input.billingEnabled,
       updated_at: new Date().toISOString(),
     };
 
@@ -144,6 +149,15 @@ export class RbConnectionService {
     if (error) throw error;
     await this.syncAccountTools(acesId);
     return { success: true };
+  }
+
+  async setBillingEnabled(acesId: number, enabled: boolean) {
+    const { error } = await this.rbClient
+      .from("connections")
+      .update({ billing_enabled: enabled, updated_at: new Date().toISOString() })
+      .eq("aces_id", acesId);
+    if (error) throw error;
+    await this.syncAccountTools(acesId);
   }
 
   async authenticate(input: { rbAcesId: number }) {
@@ -223,6 +237,7 @@ export class RbConnectionService {
       .select("rb_token_api, rb_empresa_ids")
       .eq("aces_id", acesId)
       .eq("is_active", true)
+      .eq("billing_enabled", true)
       .not("rb_token_api", "is", null)
       .maybeSingle();
     if (error) throw error;
@@ -270,7 +285,8 @@ export class RbConnectionService {
     const connection = await this.findByAccount(acesId);
     const companyIds = normalizeStringArray(connection?.rb_empresa_ids);
     const billingReady = Boolean(
-      connection?.is_active
+      connection?.billing_enabled
+      && connection?.is_active
       && connection.rb_token_api
       && companyIds.length > 0,
     );
@@ -303,7 +319,9 @@ export class RbConnectionService {
         .from("agent_tools")
         .update({
           readiness: ready ? "ready" : "needs_config",
-          is_enabled: ready ? Boolean(tool.is_enabled) : false,
+          is_enabled: ready
+            ? Boolean(tool.is_enabled)
+            : connection?.billing_enabled ? false : Boolean(tool.is_enabled),
           config,
           last_validated_at: new Date().toISOString(),
         })

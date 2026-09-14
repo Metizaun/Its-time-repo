@@ -117,19 +117,15 @@ function cleanJson(text: string) {
     .replace(/\s*```$/, "");
 }
 
-function normalizeStageName(value: string) {
-  return value.trim().toLocaleLowerCase("pt-BR");
-}
-
 export function isPipelineClassifierDestination(
-  stage: Pick<PipelineClassifierStage, "name"> &
-    Partial<Pick<PipelineClassifierStage, "classifierDestination">>,
+  stage: Partial<
+    Pick<PipelineClassifierStage, "semanticKey" | "classifierDestination">
+  >,
 ) {
-  const normalizedName = normalizeStageName(stage.name);
   return (
     stage.classifierDestination !== false &&
-    normalizedName !== "atendimento" &&
-    normalizedName !== "em atendimento"
+    stage.semanticKey !== "new" &&
+    stage.semanticKey !== "active_service"
   );
 }
 
@@ -137,21 +133,18 @@ export function parsePipelineClassificationResponse(
   rawText: string,
   stages: Array<
     Pick<PipelineClassifierStage, "id"> &
-      Partial<Pick<PipelineClassifierStage, "name" | "classifierDestination">>
+      Partial<
+        Pick<
+          PipelineClassifierStage,
+          "name" | "semanticKey" | "classifierDestination"
+        >
+      >
   >,
 ) {
   const parsed = asRecord(JSON.parse(cleanJson(rawText)));
   const validStageIds = new Set(
     stages
-      .filter(
-        (stage) =>
-          stage.classifierDestination !== false &&
-          (stage.name === undefined ||
-            isPipelineClassifierDestination({
-              name: stage.name,
-              classifierDestination: stage.classifierDestination,
-            })),
-      )
+      .filter(isPipelineClassifierDestination)
       .map((stage) => stage.id),
   );
   const requestedStageId = asString(parsed.suggested_stage_id) || null;
@@ -205,6 +198,21 @@ export function buildPipelineClassificationPrompt(
   const currentStage =
     input.stages.find((stage) => stage.id === input.lead.currentStageId) ??
     null;
+  const contactedStage =
+    input.stages.find(
+      (stage) =>
+        stage.semanticKey === "contacted_unqualified" &&
+        isPipelineClassifierDestination(stage),
+    ) ?? null;
+  const originStage = input.originStage
+    ? input.stages.find((stage) => stage.id === input.originStage?.id) ?? null
+    : null;
+  const fallbackStage =
+    originStage && isPipelineClassifierDestination(originStage)
+      ? originStage
+      : currentStage && isPipelineClassifierDestination(currentStage)
+        ? currentStage
+        : contactedStage;
   const stages = input.stages
     .filter(isPipelineClassifierDestination)
     .map((stage) => ({
@@ -226,20 +234,24 @@ export function buildPipelineClassificationPrompt(
   return [
     "Você é o classificador interno pós-conversa do pipeline CRM. Não responda ao lead.",
     "A análise só é executada depois da janela de inatividade; portanto, a conversa já não está ativa neste momento.",
-    "A etapa operacional Em atendimento não é um destino permitido e não aparece em Etapas permitidas.",
+    "Novo e Em atendimento são etapas operacionais e nunca são destinos permitidos após uma conversa.",
     "Escolha exatamente um suggested_stage_id entre as Etapas permitidas.",
     "Quando houver Etapa de origem, ela representa onde o lead estava antes da nova mensagem abrir este atendimento.",
-    "Se a conversa nova nao trouxer evidencia suficiente para mudar o funil, devolva o lead para a Etapa de origem.",
+    "A Etapa de fallback é a escolha segura quando a conversa não traz evidência suficiente para outro desfecho. Nunca tente retornar para Novo ou Em atendimento.",
     "Analise o contexto e a intenção real, nunca palavras isoladas.",
     "Dê maior peso às mensagens recentes e às mensagens do lead. Mensagens automáticas da empresa não comprovam avanço do lead.",
     "Não considere silêncio como rejeição e não invente intenção, compromisso ou fato ausente.",
     "Siga esta prioridade de decisão:",
-    "1. Compromisso explícito de comprar, visitar, agendar, reservar, aceitar orçamento ou prosseguir: etapa semântica won/Fechado.",
+    "1. Direcionamento concreto para a loja ou compromisso explícito de comprar, visitar, agendar, reservar, aceitar orçamento ou prosseguir: etapa semântica won/Fechado.",
+    "1a. Se o lead pedir o endereço e a IA ou atendente fornecer o endereço, concluindo o encaminhamento para a loja, classifique como won/Fechado. Não é necessário negociar preço.",
     "2. Recusa explícita, desistência, bloqueio, compra em outro lugar ou impossibilidade definitiva: etapa semântica lost/Perdido.",
+    "2a. Frases como 'não quero saber de endereço' ou 'achei que era de graça', quando mostram rejeição ao atendimento ou à oferta, são lost/Perdido.",
     "3. Conversa encerrada após pedido ou envio de preço, orçamento, parcelas ou condições: etapa semântica quote/Orçamento.",
     "4. Interesse comercial anterior interrompido sem decisão, sem foco principal em preço e sem rejeição: etapa semântica remarketing/Remarketing.",
-    "5. Use etapas personalizadas somente quando a descrição e as evidências fornecidas corresponderem claramente ao caso.",
-    "Novo só é válido quando o histórico inteiro está vazio. Como esta execução possui mensagens, normalmente não será a escolha correta.",
+    "5. Contato realizado/contacted_unqualified é reservado a contatos internos, administrativos ou operacionais sem jornada comercial do consumidor, ou a uma troca real sem qualquer desfecho comercial.",
+    "5a. Consultas entre funcionários ou lojas sobre estoque para outra cliente, fechamento de caixa ou preenchimento de dados no sistema são Contato realizado.",
+    "5b. Nunca use Contato realizado quando houve encaminhamento concreto para a loja, rejeição explícita, orçamento ou interesse comercial recuperável.",
+    "6. Use etapas personalizadas somente quando a descrição e as evidências fornecidas corresponderem claramente ao caso.",
     "Fechado exige decisão ou compromisso claro; curiosidade, interesse vago, talvez ou 'vou pensar' não bastam.",
     "Perdido exige rejeição clara ou impossibilidade real; ausência de resposta nunca basta.",
     "Se a etapa escolhida for diferente da etapa atual, use should_apply_stage=true. Se for a mesma, use false.",
@@ -255,6 +267,7 @@ export function buildPipelineClassificationPrompt(
     `Lead: ${JSON.stringify(input.lead)}`,
     `Etapa atual: ${currentStage ? JSON.stringify({ id: currentStage.id, name: currentStage.name, semantic_key: currentStage.semanticKey }) : "(não encontrada)"}`,
     `Etapa de origem: ${input.originStage ? JSON.stringify(input.originStage) : "(sem origem registrada)"}`,
+    `Etapa de fallback: ${fallbackStage ? JSON.stringify({ id: fallbackStage.id, name: fallbackStage.name, semantic_key: fallbackStage.semanticKey }) : "(sem fallback configurado; escolha a etapa permitida mais aderente)"}`,
     `Resumo anterior: ${input.previousSummary || "(sem resumo anterior)"}`,
     `Confiança anterior: ${input.previousConfidence ?? "(sem confiança anterior)"}`,
     `Etapas permitidas: ${JSON.stringify(stages)}`,

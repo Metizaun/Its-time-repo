@@ -11,7 +11,7 @@ STACK_FILE="${STACK_FILE:-$APP_DIR/docker-stack.backend.yml}"
 STACK_NAME="${STACK_NAME:-itstime-api}"
 ENV_FILE="${ENV_FILE:-$APP_DIR/.env.local}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
-GIT_BRANCH="${GIT_BRANCH:-main}"
+GIT_BRANCH="${GIT_BRANCH:-}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-false}"
 API_DOMAIN="${API_DOMAIN:-api.itstime.pro}"
 TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-lukas_net}"
@@ -22,6 +22,8 @@ TRAEFIK_ROUTER_NAME="${TRAEFIK_ROUTER_NAME:-itstime-api}"
 TRAEFIK_SERVICE_NAME="${TRAEFIK_SERVICE_NAME:-itstime-api}"
 BACKEND_IMAGE_REPO="${BACKEND_IMAGE_REPO:-chat-query-backend}"
 BACKEND_REPLICAS="${BACKEND_REPLICAS:-1}"
+COLLECTION_WORKER_REPLICAS="${COLLECTION_WORKER_REPLICAS:-1}"
+AGENDA_WORKER_REPLICAS="${AGENDA_WORKER_REPLICAS:-1}"
 BACKEND_UPDATE_ORDER="${BACKEND_UPDATE_ORDER:-start-first}"
 SWARM_NODE_HOSTNAME="${SWARM_NODE_HOSTNAME:-$(hostname)}"
 
@@ -70,8 +72,9 @@ autodetect_redis_url() {
 }
 
 wait_for_service() {
-  local service_name="${STACK_NAME}_api"
-  local expected="${BACKEND_REPLICAS}/${BACKEND_REPLICAS}"
+  local service_name="$1"
+  local expected_replicas="$2"
+  local expected="${expected_replicas}/${expected_replicas}"
   local attempt
 
   for attempt in $(seq 1 24); do
@@ -101,6 +104,7 @@ require_command curl
 
 if [[ "$SKIP_GIT_PULL" != "true" && -d "$APP_DIR/.git" ]]; then
   require_command git
+  [[ -n "$GIT_BRANCH" ]] || fail "Defina GIT_BRANCH explicitamente para publicar uma release validada"
   log "Atualizando codigo da branch $GIT_BRANCH"
   cd "$APP_DIR"
   git fetch "$GIT_REMOTE"
@@ -160,6 +164,8 @@ require_env_value EVOLUTION_API_URL
 require_env_value EVOLUTION_API_KEY
 require_env_value GUPSHUP_WEBHOOK_SECRET
 require_env_value RB_WEBHOOK_JWT_SECRET
+require_env_value COLLECTION_SECRETS_ENCRYPTION_KEY
+require_env_value AGENDA_SECRETS_ENCRYPTION_KEY
 require_env_value WEBHOOK_PUBLIC_BASE_URL
 require_env_value CORS_ORIGINS
 
@@ -225,6 +231,8 @@ export RB_BILLING_WORKER_ENABLED
 export RB_BILLING_WORKER_POLL_MS
 export RB_WEBHOOK_JWT_SECRET
 export RB_API_BASE_URL="${RB_API_BASE_URL:-https://app.registrobase.com.br:32077}"
+export COLLECTION_WORKER_REPLICAS
+export AGENDA_WORKER_REPLICAS
 export BI_PROJECTION_WORKER_ENABLED
 export BI_PROJECTION_BATCH_SIZE
 export BACKEND_IMAGE
@@ -255,7 +263,9 @@ log "Publicando stack $STACK_NAME no Docker Swarm"
 docker stack deploy -c "$STACK_FILE" "$STACK_NAME"
 
 log "Aguardando o servico ficar saudavel"
-wait_for_service
+wait_for_service "${STACK_NAME}_api" "$BACKEND_REPLICAS"
+wait_for_service "${STACK_NAME}_collection-worker" "$COLLECTION_WORKER_REPLICAS"
+wait_for_service "${STACK_NAME}_agenda-worker" "$AGENDA_WORKER_REPLICAS"
 
 log "Status atual do servico"
 docker service ls

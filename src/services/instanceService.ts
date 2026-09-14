@@ -20,6 +20,9 @@ export type AdminInstanceStatus = "connected" | "disconnected" | "connecting" | 
 
 export type AdminInstance = {
   instanceName: string;
+  displayName: string | null;
+  profilePictureUrl: string | null;
+  phoneNumber: string | null;
   status: AdminInstanceStatus;
   setupStatus: AdminInstanceSetupStatus;
   connectionMode: InstanceConnectionMode;
@@ -103,7 +106,7 @@ export type AdminRbConnection = {
   id: string;
   rbAcesId: number | null;
   rbEmpresaIds: string[];
-  status: "active" | "inactive";
+  billingEnabled: boolean;
   hasTokenApi: boolean;
   createdAt: string;
   updatedAt: string;
@@ -447,7 +450,7 @@ export async function saveRbConnection({
   rbAcesId: number;
   rbTokenApi?: string | null;
   rbEmpresaIds: string[];
-  status: "active" | "inactive";
+  billingEnabled: boolean;
 }) {
   const response = await fetch(`${CRM_BACKEND_URL}/api/rb/connections`, {
     method: "POST",
@@ -501,5 +504,31 @@ export async function listMetaTemplates({
     instanceName: string;
     channel: AdminMetaChannel | null;
     templates: AdminMetaTemplate[];
+  }>(response);
+}
+
+export async function createMetaTemplate({
+  accessToken,
+  instanceName,
+  name,
+  language = "pt_BR",
+  category = "UTILITY",
+  components,
+}: AuthHeadersInput & {
+  instanceName: string;
+  name: string;
+  language?: string;
+  category?: string;
+  components: unknown[];
+}) {
+  const response = await fetch(`${CRM_BACKEND_URL}/api/meta/templates`, {
+    method: "POST",
+    headers: buildHeaders(accessToken),
+    body: JSON.stringify({ instanceName, name, language, category, components }),
+  });
+  return parseResponse<{
+    success: boolean;
+    instanceName: string;
+    template: AdminMetaTemplate;
   }>(response);
 }

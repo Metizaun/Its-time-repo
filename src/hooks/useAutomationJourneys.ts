@@ -83,7 +83,7 @@ function normalizeJourney(row: Record<string, unknown>) {
     daily_dispatch_weekends_enabled: Boolean(row.daily_dispatch_weekends_enabled),
     daily_dispatch_time: typeof row.daily_dispatch_time === "string" ? row.daily_dispatch_time : null,
     entry_source:
-      row.entry_source === "rb" || row.entry_source === "calendar_event"
+      row.entry_source === "rb" || row.entry_source === "collection" || row.entry_source === "calendar_event"
         ? row.entry_source
         : "conditions",
     trigger_stage_id: (row.trigger_stage_id as string | null) ?? null,

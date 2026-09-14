@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Its Time Supabase backup every hour
+
+[Timer]
+OnCalendar=*-*-* *:05:00
+Persistent=true
+AccuracySec=1min
+Unit=itstime-supabase-backup.service
+
+[Install]
+WantedBy=timers.target

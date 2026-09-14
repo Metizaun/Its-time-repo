@@ -1,0 +1,381 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.itstime.pro/contracts/agenda-universal/v1/schema.json",
+  "title": "Its Time Agenda Universal v1",
+  "oneOf": [
+    { "$ref": "#/$defs/OutboundEnvelope" },
+    { "$ref": "#/$defs/InboundRequest" }
+  ],
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "NullableTimestamp": {
+      "oneOf": [
+        { "$ref": "#/$defs/Timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "NullableUuid": {
+      "oneOf": [
+        { "$ref": "#/$defs/Uuid" },
+        { "type": "null" }
+      ]
+    },
+    "MetadataValue": {
+      "oneOf": [
+        { "type": ["string", "number", "boolean", "null"] },
+        {
+          "type": "array",
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/MetadataValue" }
+        },
+        { "$ref": "#/$defs/Metadata" }
+      ]
+    },
+    "Metadata": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": {
+        "maxLength": 64,
+        "not": {
+          "enum": [
+            "aces_id",
+            "acesId",
+            "tenant",
+            "tenant_id",
+            "tenantId",
+            "connection_id",
+            "connectionId",
+            "authorization",
+            "routing"
+          ]
+        }
+      },
+      "additionalProperties": { "$ref": "#/$defs/MetadataValue" }
+    },
+    "Closure": {
+      "type": "object",
+      "required": ["type", "startsAt", "endsAt", "reason"],
+      "properties": {
+        "type": { "enum": ["block", "pause", "holiday", "vacation"] },
+        "startsAt": { "$ref": "#/$defs/Timestamp" },
+        "endsAt": { "$ref": "#/$defs/Timestamp" },
+        "reason": { "type": ["string", "null"], "maxLength": 2000 }
+      },
+      "additionalProperties": true
+    },
+    "IntegrationTest": {
+      "type": "object",
+      "required": ["message"],
+      "properties": {
+        "message": { "const": "Its Time Agenda Universal connection test" }
+      },
+      "additionalProperties": true
+    },
+    "Unit": {
+      "type": "object",
+      "required": ["id", "cnpj", "name", "address", "city", "state", "isActive", "closures", "metadata", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "cnpj": { "type": "string", "pattern": "^[0-9]{14}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "address": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "city": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "state": { "type": "string", "pattern": "^[A-Z]{2}$" },
+        "isActive": { "type": "boolean" },
+        "closures": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/Closure" } },
+        "metadata": { "$ref": "#/$defs/Metadata" },
+        "updatedAt": { "$ref": "#/$defs/Timestamp" },
+        "deletedAt": { "$ref": "#/$defs/NullableTimestamp" }
+      },
+      "additionalProperties": true
+    },
+    "ProfessionalAssignment": {
+      "type": "object",
+      "required": ["assignmentId", "unitId", "locationName", "isActive"],
+      "properties": {
+        "assignmentId": { "$ref": "#/$defs/Uuid" },
+        "unitId": { "$ref": "#/$defs/NullableUuid" },
+        "locationName": { "type": ["string", "null"], "maxLength": 200 },
+        "isActive": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "unitId": { "type": "null" } }, "required": ["unitId"] },
+          "then": { "properties": { "locationName": { "type": "string", "minLength": 1 } } }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "Professional": {
+      "type": "object",
+      "required": ["id", "name", "specialty", "isActive", "assignments", "metadata", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "specialty": { "type": ["string", "null"], "maxLength": 200 },
+        "isActive": { "type": "boolean" },
+        "assignments": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/ProfessionalAssignment" } },
+        "metadata": { "$ref": "#/$defs/Metadata" },
+        "updatedAt": { "$ref": "#/$defs/Timestamp" },
+        "deletedAt": { "$ref": "#/$defs/NullableTimestamp" }
+      },
+      "additionalProperties": true
+    },
+    "WeeklyGridEntry": {
+      "type": "object",
+      "required": ["weekday", "startTime", "endTime", "validFrom", "validUntil"],
+      "properties": {
+        "weekday": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "startTime": { "type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "endTime": { "type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "validFrom": { "type": ["string", "null"], "format": "date" },
+        "validUntil": { "type": ["string", "null"], "format": "date" }
+      },
+      "additionalProperties": true
+    },
+    "Availability": {
+      "type": "object",
+      "required": ["assignmentId", "professionalId", "unitId", "timezone", "weeklyGrid", "exceptions", "updatedAt"],
+      "properties": {
+        "assignmentId": { "$ref": "#/$defs/Uuid" },
+        "professionalId": { "$ref": "#/$defs/Uuid" },
+        "unitId": { "$ref": "#/$defs/NullableUuid" },
+        "timezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "weeklyGrid": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/WeeklyGridEntry" } },
+        "exceptions": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/Closure" } },
+        "updatedAt": { "$ref": "#/$defs/Timestamp" }
+      },
+      "additionalProperties": true
+    },
+    "Patient": {
+      "type": "object",
+      "required": ["id", "name", "phoneE164", "document", "homeUnitId", "metadata", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "phoneE164": { "type": "string", "pattern": "^\\+[1-9][0-9]{7,14}$" },
+        "birthDate": { "type": ["string", "null"], "format": "date" },
+        "document": { "type": ["string", "null"], "maxLength": 32 },
+        "homeUnitId": { "$ref": "#/$defs/NullableUuid" },
+        "metadata": { "$ref": "#/$defs/Metadata" },
+        "updatedAt": { "$ref": "#/$defs/Timestamp" }
+      },
+      "additionalProperties": true
+    },
+    "AppointmentService": {
+      "type": "object",
+      "required": ["id", "name", "durationMinutes", "price", "currency"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "durationMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "price": { "type": ["string", "null"], "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]{2}$" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      },
+      "additionalProperties": true
+    },
+    "Appointment": {
+      "type": "object",
+      "required": ["id", "status", "startTime", "endTime", "timezone", "durationMinutes", "unitId", "locationName", "professionalId", "assignmentId", "patientId", "service", "origin", "notes", "cancelReason", "metadata", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "status": { "enum": ["scheduled", "confirmed", "cancelled", "done", "no_show"] },
+        "startTime": { "$ref": "#/$defs/Timestamp" },
+        "endTime": { "$ref": "#/$defs/Timestamp" },
+        "timezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "durationMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "unitId": { "$ref": "#/$defs/NullableUuid" },
+        "locationName": { "type": ["string", "null"], "maxLength": 200 },
+        "professionalId": { "$ref": "#/$defs/Uuid" },
+        "assignmentId": { "$ref": "#/$defs/Uuid" },
+        "patientId": { "$ref": "#/$defs/Uuid" },
+        "service": { "$ref": "#/$defs/AppointmentService" },
+        "origin": { "enum": ["manual", "ai", "api", "import", "external"] },
+        "notes": { "type": ["string", "null"], "maxLength": 2000 },
+        "cancelReason": { "type": ["string", "null"], "maxLength": 2000 },
+        "metadata": { "$ref": "#/$defs/Metadata" },
+        "updatedAt": { "$ref": "#/$defs/Timestamp" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "unitId": { "type": "null" } }, "required": ["unitId"] },
+          "then": { "properties": { "locationName": { "type": "string", "minLength": 1 } } }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "AppointmentStatusReported": {
+      "type": "object",
+      "required": ["appointmentId", "status", "reason", "reportedAt", "baseResourceVersion", "metadata"],
+      "properties": {
+        "appointmentId": { "$ref": "#/$defs/Uuid" },
+        "status": { "enum": ["done", "no_show"] },
+        "reason": { "type": ["string", "null"], "maxLength": 2000 },
+        "reportedAt": { "$ref": "#/$defs/Timestamp" },
+        "baseResourceVersion": { "type": "integer", "minimum": 1 },
+        "metadata": { "$ref": "#/$defs/Metadata" }
+      },
+      "additionalProperties": true
+    },
+    "OutboundEnvelope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resource"],
+          "properties": {
+            "schemaVersion": { "const": "1.0" },
+            "eventId": { "$ref": "#/$defs/Uuid" },
+            "eventType": { "const": "integration.test" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "resource": { "$ref": "#/$defs/IntegrationTest" }
+          },
+          "not": { "required": ["resourceVersion"] },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "properties": {
+            "schemaVersion": { "const": "1.0" },
+            "eventId": { "$ref": "#/$defs/Uuid" },
+            "eventType": { "const": "unit.upserted" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "resourceVersion": { "type": "integer", "minimum": 1 },
+            "resource": { "$ref": "#/$defs/Unit" }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "properties": {
+            "schemaVersion": { "const": "1.0" },
+            "eventId": { "$ref": "#/$defs/Uuid" },
+            "eventType": { "const": "professional.upserted" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "resourceVersion": { "type": "integer", "minimum": 1 },
+            "resource": { "$ref": "#/$defs/Professional" }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "properties": {
+            "schemaVersion": { "const": "1.0" },
+            "eventId": { "$ref": "#/$defs/Uuid" },
+            "eventType": { "const": "availability.upserted" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "resourceVersion": { "type": "integer", "minimum": 1 },
+            "resource": { "$ref": "#/$defs/Availability" }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "properties": {
+            "schemaVersion": { "const": "1.0" },
+            "eventId": { "$ref": "#/$defs/Uuid" },
+            "eventType": { "const": "patient.upserted" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "resourceVersion": { "type": "integer", "minimum": 1 },
+            "resource": { "$ref": "#/$defs/Patient" }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "properties": {
+            "schemaVersion": { "const": "1.0" },
+            "eventId": { "$ref": "#/$defs/Uuid" },
+            "eventType": { "enum": ["appointment.created", "appointment.rescheduled", "appointment.cancelled", "appointment.status_changed"] },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "resourceVersion": { "type": "integer", "minimum": 1 },
+            "resource": { "$ref": "#/$defs/Appointment" }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "eventType": { "const": "appointment.cancelled" } }, "required": ["eventType"] },
+              "then": { "properties": { "resource": { "properties": { "status": { "const": "cancelled" } } } } }
+            },
+            {
+              "if": { "properties": { "eventType": { "const": "appointment.status_changed" } }, "required": ["eventType"] },
+              "then": { "properties": { "resource": { "properties": { "status": { "enum": ["confirmed", "done", "no_show"] } } } } }
+            },
+            {
+              "if": { "properties": { "eventType": { "enum": ["appointment.created", "appointment.rescheduled"] } }, "required": ["eventType"] },
+              "then": { "properties": { "resource": { "properties": { "status": { "enum": ["scheduled", "confirmed"] } } } } }
+            }
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "InboundEnvelope": {
+      "type": "object",
+      "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resource"],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "eventId": { "$ref": "#/$defs/Uuid" },
+        "eventType": { "const": "appointment.status_reported" },
+        "occurredAt": { "$ref": "#/$defs/Timestamp" },
+        "resource": { "$ref": "#/$defs/AppointmentStatusReported" }
+      },
+      "not": { "required": ["resourceVersion"] },
+      "additionalProperties": true
+    },
+    "UnknownInboundEnvelope": {
+      "type": "object",
+      "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resource"],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "eventId": { "$ref": "#/$defs/Uuid" },
+        "eventType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "not": { "const": "appointment.status_reported" }
+        },
+        "occurredAt": { "$ref": "#/$defs/Timestamp" },
+        "resource": { "type": "object", "additionalProperties": true }
+      },
+      "not": { "required": ["resourceVersion"] },
+      "additionalProperties": true
+    },
+    "InboundRequest": {
+      "oneOf": [
+        { "$ref": "#/$defs/InboundEnvelope" },
+        { "$ref": "#/$defs/UnknownInboundEnvelope" }
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "type": "string" },
+        "message": { "type": "string" },
+        "details": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "Receipt": {
+      "type": "object",
+      "required": ["accepted", "duplicate", "eventId"],
+      "properties": {
+        "accepted": { "type": "boolean" },
+        "duplicate": { "type": "boolean" },
+        "eventId": { "$ref": "#/$defs/Uuid" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

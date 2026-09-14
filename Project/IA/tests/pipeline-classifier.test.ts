@@ -71,6 +71,7 @@ test("rejeita Em atendimento como destino mesmo quando o modelo devolve seu id",
       {
         id: "atendimento",
         name: "Em atendimento",
+        semanticKey: "active_service",
         classifierDestination: true,
       },
       {
@@ -85,8 +86,65 @@ test("rejeita Em atendimento como destino mesmo quando o modelo devolve seu id",
   assert.equal(result.shouldApplyStage, false);
 });
 
+test("rejeita Novo e aceita Contato realizado pela chave semantica", () => {
+  const pipelineStages = [
+    {
+      id: "novo",
+      name: "Novo",
+      semanticKey: "new",
+      classifierDestination: true,
+    },
+    {
+      id: "contato",
+      name: "Contato realizado",
+      semanticKey: "contacted_unqualified",
+      classifierDestination: true,
+    },
+  ];
+
+  const novo = parsePipelineClassificationResponse(
+    JSON.stringify({
+      summary: "Houve conversa.",
+      suggested_stage_id: "novo",
+      should_apply_stage: true,
+      confidence: 0.99,
+      reason: "Sem desfecho comercial.",
+      evidence: "Conversa operacional.",
+    }),
+    pipelineStages,
+  );
+  const contato = parsePipelineClassificationResponse(
+    JSON.stringify({
+      summary: "Contato interno.",
+      suggested_stage_id: "contato",
+      should_apply_stage: true,
+      confidence: 0.95,
+      reason: "Assunto interno sem jornada comercial.",
+      evidence: "Consulta de estoque para outra cliente.",
+    }),
+    pipelineStages,
+  );
+
+  assert.equal(novo.suggestedStageId, null);
+  assert.equal(novo.shouldApplyStage, false);
+  assert.equal(contato.suggestedStageId, "contato");
+  assert.equal(contato.shouldApplyStage, true);
+});
+
 test("prompt pos-conversa omite etapa operacional das opcoes permitidas", () => {
   const pipelineStages: PipelineClassifierStage[] = [
+    {
+      id: "novo",
+      name: "Novo",
+      category: "Aberto",
+      position: 0,
+      semanticKey: "new",
+      classifierDestination: true,
+      description: "Lead sem conversa.",
+      positiveSignals: [],
+      negativeSignals: [],
+      examples: [],
+    },
     {
       id: "atendimento",
       name: "Em atendimento",
@@ -95,6 +153,18 @@ test("prompt pos-conversa omite etapa operacional das opcoes permitidas", () => 
       semanticKey: "active_service",
       classifierDestination: false,
       description: "Conversa ativa.",
+      positiveSignals: [],
+      negativeSignals: [],
+      examples: [],
+    },
+    {
+      id: "contato",
+      name: "Contato realizado",
+      category: "Aberto",
+      position: 2,
+      semanticKey: "contacted_unqualified",
+      classifierDestination: true,
+      description: "Contato interno ou operacional.",
       positiveSignals: [],
       negativeSignals: [],
       examples: [],
@@ -143,8 +213,69 @@ test("prompt pos-conversa omite etapa operacional das opcoes permitidas", () => 
 
   assert.ok(allowedStagesLine);
   assert.match(prompt, /Etapa de origem:/);
-  assert.match(prompt, /devolva o lead para a Etapa de origem/);
+  assert.match(prompt, /Etapa de fallback:/);
   assert.doesNotMatch(allowedStagesLine, /atendimento/);
+  assert.doesNotMatch(allowedStagesLine, /novo/);
+  assert.match(allowedStagesLine, /contacted_unqualified/);
   assert.match(allowedStagesLine, /remarketing/);
   assert.match(prompt, /conversa já não está ativa/);
+  assert.match(prompt, /fornecer o endereço/);
+  assert.match(prompt, /fechamento de caixa/);
+  assert.match(prompt, /preenchimento de dados no sistema/);
+});
+
+test("origem Novo usa Contato realizado como fallback", () => {
+  const pipelineStages: PipelineClassifierStage[] = [
+    {
+      id: "novo",
+      name: "Novo",
+      category: "Aberto",
+      position: 0,
+      semanticKey: "new",
+      classifierDestination: false,
+      description: "Sem conversa.",
+      positiveSignals: [],
+      negativeSignals: [],
+      examples: [],
+    },
+    {
+      id: "contato",
+      name: "Contato realizado",
+      category: "Aberto",
+      position: 2,
+      semanticKey: "contacted_unqualified",
+      classifierDestination: true,
+      description: "Contato sem desfecho comercial.",
+      positiveSignals: [],
+      negativeSignals: [],
+      examples: [],
+    },
+  ];
+
+  const prompt = buildPipelineClassificationPrompt({
+    mode: "full",
+    lead: { id: "lead-2", name: "Lead", currentStageId: "novo" },
+    pipeline: { id: "pipeline-1", name: "Pipeline principal" },
+    stages: pipelineStages,
+    messages: [
+      {
+        id: "message-2",
+        content: "Consulta interna de estoque.",
+        direction: "inbound",
+        sourceType: "lead",
+        sentAt: "2026-09-03T12:00:00.000Z",
+      },
+    ],
+    previousSummary: "",
+    previousConfidence: null,
+    originStage: { id: "novo", name: "Novo" },
+    cutoffAt: "2026-09-03T14:00:00.000Z",
+  });
+
+  const fallbackLine = prompt
+    .split("\n")
+    .find((line) => line.startsWith("Etapa de fallback:"));
+
+  assert.match(fallbackLine ?? "", /contacted_unqualified/);
+  assert.doesNotMatch(fallbackLine ?? "", /"semantic_key":"new"/);
 });

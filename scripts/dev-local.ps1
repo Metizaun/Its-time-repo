@@ -80,7 +80,7 @@ function Stop-LegacyFrontendIfRunning {
 
 function Start-BackendDockerStack {
   Set-Location $rootDir
-  & docker compose up -d --build redis backend
+  & docker compose up -d --build redis backend collection-worker
   if ($LASTEXITCODE -ne 0) {
     throw "Falha ao subir o backend via Docker Compose."
   }
@@ -88,7 +88,7 @@ function Start-BackendDockerStack {
 
 function Stop-BackendDockerStack {
   Set-Location $rootDir
-  & docker compose stop backend redis | Out-Null
+  & docker compose stop collection-worker backend redis | Out-Null
 }
 
 Test-DockerAvailable
@@ -109,6 +109,10 @@ try {
 
   if ($backendAlreadyDocker) {
     Write-Host "CRM backend Docker stack is already running on http://localhost:3000."
+    & docker compose up -d --build collection-worker
+    if ($LASTEXITCODE -ne 0) {
+      throw "Falha ao iniciar o collection-worker local."
+    }
   } else {
     Write-Host "Starting CRM backend via Docker Compose on http://localhost:3000..."
     Start-BackendDockerStack

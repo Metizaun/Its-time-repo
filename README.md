@@ -1,6 +1,6 @@
 # Crm Its time - Sistema de Gestão de Vendas
 
-Sistema completo de Crm para gerenciamento de leads e vendas de ótica, desenvolvido com React, TypeScript e Tailwind CSS.
+Sistema multi-tenant de CRM e automação de atendimento, desenvolvido com React, TypeScript, Tailwind CSS, Express e Supabase.
 
 ## 🎯 Funcionalidades
 
@@ -25,7 +25,6 @@ Sistema completo de Crm para gerenciamento de leads e vendas de ótica, desenvol
 - ✅ Drawer de detalhes com ações rápidas
 
 ### Recursos Avançados
-- ✅ Tema Dark/Light com toggle animado
 - ✅ Persistência local (LocalStorage)
 - ✅ Sistema de Undo para ações críticas
 - ✅ Toasts informativos
@@ -47,13 +46,9 @@ Sistema completo de Crm para gerenciamento de leads e vendas de ótica, desenvol
 
 ## 🎨 Design System
 
-- **Background Principal**: `#161616`
-- **Surface/Cards**: `#1E1E1E`
-- **Texto**: `#F5F5F5`
-- **Accent/Primary**: `#C9A66B` (dourado)
-- **Success**: Verde
-- **Warning**: Amarelo
-- **Destructive**: Vermelho
+A interface segue o padrão White Minimalist SaaS / Soft UI documentado em
+`chat-query.design-ui-ux/`. As cores, sombras, raios e estados interativos
+devem usar os tokens definidos em `src/index.css`.
 
 ## 🚀 Começando
 
@@ -69,15 +64,32 @@ npm install
 npm run dev
 ```
 
-Esse comando sobe o backend via Docker Compose e o frontend via Vite, usando o
-ambiente local padronizado do projeto. Antes disso, garanta que o Supabase local
-esteja ativo com `npx supabase start`.
+Esse comando sobe o backend, o `collection-worker` via Docker Compose e o
+frontend via Vite, usando o ambiente local padronizado do projeto. Antes disso,
+garanta que o Supabase local esteja ativo com `npx supabase start` e que o Node.js
+22 esteja selecionado.
 
-### Padrao de Desenvolvimento para Migrations
+### Cobrança independente
+
+A cobrança independente recebe dados de RB, webhook ou CSV/XLSX por meio de um
+contrato canônico comum. A ingestão é idempotente e alimenta projeções e outbox;
+o `collection-worker` executa pulls, importações, elegibilidade, leases e
+retenção, enquanto somente o `automation-worker` envia mensagens.
+
+O onboarding de cada fonte configura WhatsApp, agente, pipeline, régua e
+mensagens. A conexão não inicia envios automaticamente: a ativação é explícita
+e pode ser pausada por fonte. Para contas RB existentes, o cutover exige
+backfill, três ciclos shadow aprovados e comparação sem divergências.
+
+### Padrão de Desenvolvimento para Migrations
 
 - Toda nova feature que depender de schema deve ter migration aplicada no ambiente antes de validar o backend.
 - A migration `supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql` passa a ser obrigatoria como padrao deste projeto.
 - Se o backend falhar no `schema-preflight`, aplique as migrations pendentes no Supabase antes de continuar o desenvolvimento ou redeploy.
+
+Para validar localmente, use `npx supabase db reset`, `npx supabase test db` e
+`npm run schema:check` dentro de `Project/IA`. Não execute `supabase db push`
+contra produção fora de uma janela de publicação aprovada.
 
 ### Build
 
@@ -115,14 +127,6 @@ npm run build
 }
 ```
 
-## 🔮 Futuras Integrações
-
-Este protótipo está preparado para integração com Supabase:
-- Autenticação de usuários
-- Database PostgreSQL
-- Storage para arquivos
-- Edge Functions para APIs
-
 ## 🎓 Tecnologias
 
 - **React 18** - Framework UI
@@ -135,9 +139,11 @@ Este protótipo está preparado para integração com Supabase:
 - **Sonner** - Toast notifications
 - **React Router** - Navigation
 
-## 📝 Mock Data
+## 📝 Operação e deploy
 
-O sistema vem com 10 leads de exemplo e 2 usuários (1 admin + 1 vendedor) para facilitar os testes.
+O procedimento de release, homologação, aplicação de migrations, verificação
+dos workers e rollback está em
+`docs/Its Time/06 - Manuais & Procedimentos (SOPs)/Deploy e rollback da cobrança independente.md`.
 
 ## 🔒 Roles e Permissões
 

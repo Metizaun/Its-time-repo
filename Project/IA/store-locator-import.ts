@@ -63,7 +63,7 @@ function parseAddress(value: string) {
   return {
     addressLine: match[1].trim(),
     addressNumber: match[2].trim(),
-    addressComplement: match[3].replace(/^[\s,\-]+/, "").trim() || null,
+    addressComplement: match[3].replace(/^[\s,-]+/, "").trim() || null,
   };
 }
 

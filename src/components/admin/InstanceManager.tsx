@@ -3,19 +3,22 @@ import {
   AlertCircle,
   ArrowRight,
   Cable,
+  CalendarSync,
   Check,
   Copy,
+  Database,
   Eraser,
   Instagram,
   Link2,
   Loader2,
   MessageCircle,
   Pencil,
+  Plus,
   QrCode,
   RefreshCw,
-  Settings2,
   Trash2,
   Unplug,
+  Webhook,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -51,6 +54,7 @@ import {
   type InstanceConnectionMode,
 } from "@/services/instanceService";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -72,6 +76,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -90,10 +101,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { ConnectionCard, type ConnectionStatus } from "@/components/connections/ConnectionCard";
+import { AgendaConnectionsPanel, type AgendaPanelSummary } from "@/components/admin/AgendaConnectionsPanel";
+import { listAgendaConnections } from "@/services/agendaService";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
 type ExternalConnectionType = "selection" | "webhook" | "gupshup" | "instagram" | "rb";
+type ConnectionProvider = "whatsapp-free" | "whatsapp-official" | "gupshup" | "instagram" | "registro-base" | "agenda";
 
 // WhatsApp Meta remains dormant until the production rollout is explicitly enabled.
 // This public flag keeps its admin surface hidden while the backend stays disabled.
@@ -142,7 +157,15 @@ function metaChannelHealthLabel(health: string | undefined) {
   return "Aguardando ativacao";
 }
 
-export function InstanceManager() {
+export function InstanceManager({
+  onOpenBilling,
+  billingStatus = "not_configured",
+  billingStatusLabel = "Não configurada",
+}: {
+  onOpenBilling?: () => void;
+  billingStatus?: ConnectionStatus;
+  billingStatusLabel?: string;
+} = {}) {
   const [instances, setInstances] = useState<AdminInstance[]>([]);
   const [rbConnections, setRbConnections] = useState<AdminRbConnection[]>([]);
   const [metaChannels, setMetaChannels] = useState<Record<string, AdminMetaChannelSummary>>({});
@@ -175,7 +198,7 @@ export function InstanceManager() {
     rbAcesId: "",
     rbTokenApi: "",
     rbEmpresaIds: "",
-    active: true,
+    billingEnabled: false,
   });
   const [creatingInstance, setCreatingInstance] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
@@ -183,6 +206,8 @@ export function InstanceManager() {
   const [createdInstanceName, setCreatedInstanceName] = useState<string | null>(null);
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
   const [createConnectionMode, setCreateConnectionMode] = useState<InstanceConnectionMode | null>(null);
+  const [connectionPanel, setConnectionPanel] = useState<ConnectionProvider | null>(null);
+  const [agendaSummary, setAgendaSummary] = useState<AgendaPanelSummary>({ active: 0, pending: 0, errors: 0, total: 0 });
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [currentSetupStatus, setCurrentSetupStatus] = useState<AdminInstanceSetupStatus | null>(null);
@@ -193,6 +218,19 @@ export function InstanceManager() {
   const [deleteLeadAction, setDeleteLeadAction] = useState<DeleteLeadAction>("transfer");
   const [deleteTransferTarget, setDeleteTransferTarget] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("panel") === "agenda") setConnectionPanel("agenda");
+  }, []);
+
+  useEffect(() => {
+    void listAgendaConnections().then((items) => setAgendaSummary({
+      total: items.length,
+      active: items.filter((item) => item.status === "active").length,
+      pending: items.filter((item) => item.status === "draft" || item.status === "syncing").length,
+      errors: items.filter((item) => item.status === "error" || Number(item.metrics?.dead_letter_count ?? 0) > 0).length,
+    })).catch(() => undefined);
+  }, []);
 
   // Guarda o ultimo status/setupStatus verificado pelo polling do QR code,
   // para so recarregar a lista completa quando algo de fato mudar (evita
@@ -358,6 +396,21 @@ export function InstanceManager() {
   const openMetaDialog = (instanceName: string) => {
     setMetaInstanceName(instanceName);
     setMetaDialogOpen(true);
+  };
+
+  const openGupshupDialog = (instanceName = "") => {
+    const channel = gupshupChannels[instanceName]?.gupshupChannel;
+    setInstanceNameInput(instanceName);
+    setGupshupForm({
+      appName: channel?.appName ?? "",
+      appId: channel?.appId ?? "",
+      apiKey: "",
+      phoneNumber: channel?.phoneNumber ?? "",
+    });
+    setConnectWebhookEnabled(true);
+    setCreateConnectionMode("external_webhook");
+    setExternalConnectionType("gupshup");
+    setCreateDialogOpen(true);
   };
 
   const checkCurrentInstanceStatus = useCallback(async (nameFromAction?: string) => {
@@ -666,7 +719,7 @@ export function InstanceManager() {
         rbAcesId,
         rbTokenApi: rbForm.rbTokenApi.trim() || null,
         rbEmpresaIds: empresaIds,
-        status: rbForm.active ? "active" : "inactive",
+        billingEnabled: rbForm.billingEnabled,
       });
       await loadInstances({ silent: true });
       toast.success("Conexão Via RB salva");
@@ -680,13 +733,41 @@ export function InstanceManager() {
     }
   };
 
+  const handleToggleRbBilling = async (connection: AdminRbConnection, billingEnabled: boolean) => {
+    if (!connection.rbAcesId) {
+      toast.error("Esta conexão não possui um ID RB válido.");
+      return;
+    }
+
+    try {
+      setBusyAction(`toggle-rb-billing:${connection.id}`);
+      const accessToken = await getAccessToken();
+      await saveRbConnection({
+        accessToken,
+        id: connection.id,
+        rbAcesId: connection.rbAcesId,
+        rbTokenApi: null,
+        rbEmpresaIds: connection.rbEmpresaIds,
+        billingEnabled,
+      });
+      await loadInstances({ silent: true });
+      toast.success(billingEnabled ? "Cobrança RB ativada" : "Cobrança RB pausada");
+    } catch (err: unknown) {
+      toast.error("Falha ao atualizar a Cobrança RB", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const openRbConnection = (connection: AdminRbConnection) => {
     setRbForm({
       id: connection.id,
       rbAcesId: connection.rbAcesId === null ? "" : String(connection.rbAcesId),
       rbTokenApi: "",
       rbEmpresaIds: connection.rbEmpresaIds.join(", "),
-      active: connection.status === "active",
+      billingEnabled: connection.billingEnabled,
     });
     setConnectWebhookEnabled(true);
     setCreateConnectionMode("external_webhook");
@@ -808,7 +889,7 @@ export function InstanceManager() {
       rbAcesId: "",
       rbTokenApi: "",
       rbEmpresaIds: "",
-      active: true,
+      billingEnabled: false,
     });
     setGupshupSaving(false);
     setCreatedInstanceName(null);
@@ -821,9 +902,9 @@ export function InstanceManager() {
     setCheckingStatus(false);
   };
 
-  const openCreateDialog = (mode: InstanceConnectionMode) => {
+  const openCreateDialog = (mode: InstanceConnectionMode, connectionType?: ExternalConnectionType) => {
     setConnectWebhookEnabled(mode === "external_webhook");
-    setExternalConnectionType(mode === "external_webhook" ? "selection" : null);
+    setExternalConnectionType(mode === "external_webhook" ? connectionType ?? "selection" : null);
     setCreateConnectionMode(mode);
     setCreateDialogOpen(true);
   };
@@ -871,45 +952,251 @@ export function InstanceManager() {
 
   if (loading) {
     return (
-      <Card className="p-6 space-y-4">
-        <Skeleton className="h-8 w-40 mb-4" />
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-12 w-full" />
-      </Card>
+      <div className="connections-manager space-y-8">
+        <Skeleton className="h-10 w-48" />
+        <div className="connections-summary-grid">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <Skeleton key={index} className="h-24 rounded-[var(--radius-2xl)]" />
+          ))}
+        </div>
+        {Array.from({ length: 3 }).map((_, sectionIndex) => (
+          <section key={sectionIndex} className="space-y-4">
+            <Skeleton className="h-4 w-40" />
+            <div className="connections-card-grid">
+              {Array.from({ length: sectionIndex === 0 ? 3 : 2 }).map((__, cardIndex) => (
+                <Skeleton key={cardIndex} className="h-60 w-full rounded-[var(--radius-2xl)]" />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
     );
   }
 
+  const getProviderForInstance = (instance: AdminInstance): ConnectionProvider => {
+    if (instance.connectionMode === "instagram" || instagramChannels[instance.instanceName]) return "instagram";
+    if (gupshupChannels[instance.instanceName]?.provider === "gupshup") return "gupshup";
+    if (metaChannels[instance.instanceName]?.provider === "meta") return "whatsapp-official";
+    return "whatsapp-free";
+  };
+  const activeInstanceCount = instances.filter((instance) =>
+    getProviderForInstance(instance) === "whatsapp-free" && instance.status === "connected"
+  ).length;
+  const pendingInstanceCount = instances.filter((instance) =>
+    getProviderForInstance(instance) === "whatsapp-free" && (instance.status === "connecting" || instance.setupStatus === "pending_qr")
+  ).length;
+  const errorInstanceCount = instances.filter((instance) =>
+    getProviderForInstance(instance) === "whatsapp-free" && instance.status === "error"
+  ).length;
+  const whatsappFreeInstances = instances.filter((instance) => getProviderForInstance(instance) === "whatsapp-free");
+  const officialInstances = instances.filter((instance) => getProviderForInstance(instance) === "whatsapp-official");
+  const gupshupInstances = instances.filter((instance) => getProviderForInstance(instance) === "gupshup");
+  const instagramInstances = instances.filter((instance) => getProviderForInstance(instance) === "instagram");
+  const hasEvolutionConnection = whatsappFreeInstances.length > 0;
+  const firstInstanceName = officialInstances[0]?.instanceName ?? instances[0]?.instanceName ?? "";
+  const metaConnectionCount = officialInstances.filter((instance) =>
+    metaChannels[instance.instanceName]?.channel?.status === "active"
+  ).length;
+  const metaHasError = officialInstances.some((instance) =>
+    metaChannels[instance.instanceName]?.channel?.status === "error"
+  );
+  const gupshupConnectionCount = gupshupInstances.filter((instance) =>
+    gupshupChannels[instance.instanceName]?.gupshupChannel?.status === "active"
+  ).length;
+  const instagramConnectionCount = instagramInstances.filter((instance) => {
+    const channel = instagramChannels[instance.instanceName];
+    return channel && channel.status !== "disabled" && channel.healthStatus !== "disabled";
+  }).length;
+  const rbConnectionCount = rbConnections.length;
+  const selectedPanelInstances = connectionPanel
+    ? instances.filter((instance) => getProviderForInstance(instance) === connectionPanel)
+    : [];
+  const panelTitle = connectionPanel === "whatsapp-free"
+    ? "WhatsApp Free"
+    : connectionPanel === "whatsapp-official"
+      ? "WhatsApp Oficial"
+      : connectionPanel === "gupshup"
+        ? "Gupshup"
+        : connectionPanel === "instagram"
+          ? "Instagram"
+          : connectionPanel === "agenda"
+            ? "Agenda Universal"
+            : "Registro Base";
+  const panelDescription = connectionPanel === "whatsapp-free"
+    ? "Instâncias Evolution conectadas à operação."
+    : connectionPanel === "whatsapp-official"
+      ? "Canais oficiais e templates da Meta."
+      : connectionPanel === "gupshup"
+        ? "Canais WhatsApp administrados pela Gupshup."
+        : connectionPanel === "instagram"
+          ? "Contas profissionais e saúde dos tokens."
+          : connectionPanel === "agenda"
+            ? "Sincronize agendas com parceiros de forma segura."
+            : "Conexões e empresas vinculadas ao Registro Base.";
+  const openProviderPanel = (provider: ConnectionProvider) => setConnectionPanel(provider);
+  const closeProviderPanel = () => setConnectionPanel(null);
+  const getCatalogStatus = (configured: boolean, pending = false, error = false): ConnectionStatus => {
+    if (error) return "attention";
+    if (pending) return "pending";
+    return configured ? "connected" : "not_configured";
+  };
+  const catalogActionLabel = (configured: boolean) => configured ? "Gerenciar" : "Criar conexão";
+
   return (
     <>
-      <Card className="p-6">
+      <Card className="p-6 connections-manager__panel">
         <div className="mb-4 flex flex-col items-start justify-between gap-4 border-b border-border pb-4 sm:flex-row sm:items-center">
           <div className="flex items-center gap-2">
-            <Settings2 className="w-5 h-5 text-primary" />
+            <Webhook className="w-5 h-5 text-primary" />
             <div>
-              <h2 className="text-xl font-semibold">Gerenciar conexões</h2>
-              <p className="text-sm text-muted-foreground">
-                Gerencie instâncias de atendimento e integrações externas.
-              </p>
+              <h2 className="text-xl font-semibold">Conexões</h2>
             </div>
           </div>
 
-          <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
-            <Button
-              variant="outline"
-              onClick={() => openCreateDialog("local")}
-              className="flex-1 gap-2 sm:flex-none"
-            >
-              <QrCode className="h-4 w-4" />
-              Integrações
-            </Button>
-            <Button
-              onClick={() => openCreateDialog("external_webhook")}
-              className="flex-1 gap-2 sm:flex-none"
-            >
-              <Link2 className="h-4 w-4" />
-              Conexões externas
-            </Button>
+        </div>
+
+        <div className="connections-summary-grid" aria-label="Resumo das conexões">
+          <div className="connections-summary-card">
+            <span className="connections-summary-card__label">Ativas</span>
+            <strong>{activeInstanceCount + metaConnectionCount + gupshupConnectionCount + instagramConnectionCount + rbConnectionCount + agendaSummary.active}</strong>
+            <span className="connections-summary-card__dot connections-summary-card__dot--success" aria-hidden="true" />
           </div>
+          <div className="connections-summary-card">
+            <span className="connections-summary-card__label">Pendentes</span>
+            <strong>{pendingInstanceCount + agendaSummary.pending}</strong>
+            <span className="connections-summary-card__dot connections-summary-card__dot--warning" aria-hidden="true" />
+          </div>
+          <div className="connections-summary-card">
+            <span className="connections-summary-card__label">Com erro</span>
+            <strong>{errorInstanceCount + agendaSummary.errors}</strong>
+            <span className="connections-summary-card__dot connections-summary-card__dot--error" aria-hidden="true" />
+          </div>
+        </div>
+
+        <div className="connections-catalog" aria-label="Catálogo de conexões">
+          <section className="connections-section">
+            <div className="section-label"><span className="section-label__text">WhatsApp e Gupshup</span></div>
+            <div className="connections-card-grid">
+              <ConnectionCard
+                title="WhatsApp Free"
+                description="Conexão interna (nativo) ou webhook"
+                icon={MessageCircle}
+                iconSrc="/connection-icons/whatsapp.png"
+                status={getCatalogStatus(hasEvolutionConnection, pendingInstanceCount > 0, errorInstanceCount > 0)}
+                statusLabel={hasEvolutionConnection ? `${whatsappFreeInstances.length} configurada${whatsappFreeInstances.length === 1 ? "" : "s"}` : "Não configurada"}
+                actionLabel={catalogActionLabel(hasEvolutionConnection)}
+                onAction={hasEvolutionConnection ? () => openProviderPanel("whatsapp-free") : () => openCreateDialog("local")}
+              />
+              {META_WHATSAPP_UI_ENABLED ? (
+                <ConnectionCard
+                  title="WhatsApp Oficial"
+                  description="Canal oficial da Meta"
+                  icon={MessageCircle}
+                  iconSrc="/connection-icons/whatsapp.png"
+                  status={getCatalogStatus(metaConnectionCount > 0, false, metaHasError)}
+                  statusLabel={metaConnectionCount > 0 ? `${metaConnectionCount} ativa${metaConnectionCount === 1 ? "" : "s"}` : "Não configurada"}
+                  actionLabel={catalogActionLabel(metaConnectionCount > 0)}
+                  onAction={metaConnectionCount > 0 ? () => openProviderPanel("whatsapp-official") : () => {
+                    if (firstInstanceName) {
+                      void openMetaDialog(firstInstanceName);
+                    } else {
+                      openProviderPanel("whatsapp-official");
+                    }
+                  }}
+                />
+              ) : null}
+              <ConnectionCard
+                title="Gupshup"
+                description="WhatsApp via provedor externo"
+                icon={MessageCircle}
+                iconSrc="/connection-icons/gupshup.png"
+                status={getCatalogStatus(gupshupConnectionCount > 0)}
+                statusLabel={gupshupConnectionCount > 0 ? `${gupshupConnectionCount} ativa${gupshupConnectionCount === 1 ? "" : "s"}` : "Não configurada"}
+                actionLabel={catalogActionLabel(gupshupConnectionCount > 0)}
+                onAction={gupshupConnectionCount > 0 ? () => openProviderPanel("gupshup") : () => openCreateDialog("external_webhook", "gupshup")}
+              />
+            </div>
+          </section>
+
+          <section className="connections-section">
+            <div className="section-label"><span className="section-label__text">Mídias sociais</span></div>
+            <div className="connections-card-grid">
+              <ConnectionCard
+                title="Instagram"
+                description="Mensagens e contas profissionais"
+                icon={Instagram}
+                iconSrc="/connection-icons/instagram.svg"
+                status={getCatalogStatus(instagramConnectionCount > 0, false, Object.values(instagramChannels).some((channel) => channel.healthStatus === "reconnect_required"))}
+                statusLabel={instagramConnectionCount > 0 ? `${instagramConnectionCount} ativa${instagramConnectionCount === 1 ? "" : "s"}` : "Não configurada"}
+                actionLabel={catalogActionLabel(instagramConnectionCount > 0)}
+                onAction={instagramConnectionCount > 0 ? () => openProviderPanel("instagram") : () => openCreateDialog("external_webhook", "instagram")}
+              />
+              <ConnectionCard
+                title="Messenger"
+                description="Canal de mensagens da Meta"
+                icon={MessageCircle}
+                iconSrc="/connection-icons/messenger.png"
+                status="coming_soon"
+                statusLabel="Em breve"
+              />
+            </div>
+          </section>
+
+          <section className="connections-section">
+            <div className="section-label"><span className="section-label__text">Integrações</span></div>
+            <div className="connections-card-grid">
+              <ConnectionCard
+                title="Registro Base"
+                description={rbConnectionCount > 0 ? `${rbConnectionCount} conexão${rbConnectionCount === 1 ? "" : "ões"} configurada${rbConnectionCount === 1 ? "" : "s"}` : "Base de dados operacional"}
+                icon={Database}
+                iconSrc="/connection-icons/registro-base.png"
+                status={getCatalogStatus(rbConnectionCount > 0)}
+                statusLabel={rbConnectionCount > 0 ? "Conectado" : "Não configurado"}
+                actionLabel={rbConnectionCount > 0 ? "Gerenciar conexões" : "Conectar Registro Base"}
+                onAction={() => openProviderPanel("registro-base")}
+                footer={(
+                  <div className="connection-card__custom-footer">
+                    <Switch
+                      checked={rbConnections.length === 1 ? rbConnections[0].billingEnabled : false}
+                      onCheckedChange={(checked) => {
+                        const target = rbConnections.length === 1 ? rbConnections[0] : null;
+                        if (!target) {
+                          toast.error("Configure o Registro Base antes de ativar a Cobrança RB");
+                          return;
+                        }
+                        void handleToggleRbBilling(target, checked);
+                      }}
+                      disabled={Boolean(busyAction)}
+                      aria-label="Ativar ou desativar Cobrança RB"
+                      className="sr-only"
+                    />
+                    <Button type="button" variant="ghost" size="sm" onClick={() => openProviderPanel("registro-base")}>
+                      Ver lista
+                    </Button>
+                  </div>
+                )}
+              />
+              <ConnectionCard
+                title="Cobrança"
+                description="Fontes financeiras, ingestões e regras"
+                icon={Webhook}
+                iconSrc="/connection-icons/cobranca.svg"
+                status={billingStatus}
+                statusLabel={billingStatusLabel}
+                actionLabel={billingStatus === "not_configured" ? "Configurar" : "Gerenciar"}
+                onAction={onOpenBilling ?? (() => { window.location.href = "/cobranca"; })}
+              />
+              <ConnectionCard
+                title="Agenda Universal"
+                description="Agendamentos integrados com parceiros"
+                icon={CalendarSync}
+                status={getCatalogStatus(agendaSummary.total > 0 && agendaSummary.active > 0, agendaSummary.pending > 0, agendaSummary.errors > 0)}
+                statusLabel={agendaSummary.errors > 0 ? "Requer atenção" : agendaSummary.total > 0 ? `${agendaSummary.total} configurada${agendaSummary.total === 1 ? "" : "s"}` : "Não configurada"}
+                actionLabel={catalogActionLabel(agendaSummary.total > 0)}
+                onAction={() => openProviderPanel("agenda")}
+              />
+            </div>
+          </section>
         </div>
 
         {error && (
@@ -926,7 +1213,150 @@ export function InstanceManager() {
           </div>
         )}
 
-        {instances.length === 0 ? (
+      </Card>
+
+      <Sheet open={connectionPanel !== null} onOpenChange={(open) => !open && closeProviderPanel()}>
+        <SheetContent side="right" className="connection-accounts-sheet sm:max-w-2xl">
+          <SheetHeader>
+            <SheetTitle>{panelTitle}</SheetTitle>
+            <SheetDescription>{panelDescription}</SheetDescription>
+          </SheetHeader>
+
+          <div className="mt-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+            {connectionPanel === "agenda" ? (
+              <AgendaConnectionsPanel onSummaryChange={setAgendaSummary} />
+            ) : connectionPanel === "registro-base" ? (
+              <div className="space-y-3">
+                {rbConnections.length === 0 ? (
+                  <div className="connection-panel-empty">
+                    <Database className="h-8 w-8 text-[var(--color-primary-500)]" />
+                    <p>Nenhuma conexão com o Registro Base.</p>
+                    <Button onClick={() => openCreateDialog("external_webhook", "rb")}>Conectar Registro Base</Button>
+                  </div>
+                ) : (
+                  <>
+                    {rbConnections.map((connection) => (
+                      <div key={connection.id} className="connection-account-card">
+                        <div className="connection-account-card__main">
+                          <div className="connection-account-card__avatar"><Database className="h-5 w-5" /></div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-[var(--color-gray-900)]">Registro Base</p>
+                            <p className="text-xs text-[var(--color-gray-500)]">ID {connection.rbAcesId ?? "não informado"}</p>
+                            <p className="mt-1 text-xs text-[var(--color-gray-600)]">
+                              {connection.rbEmpresaIds.length} {connection.rbEmpresaIds.length === 1 ? "empresa configurada" : "empresas configuradas"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="connection-account-card__actions">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <span className={cn("connection-account-card__status", connection.hasTokenApi && "connection-account-card__status--success")}>
+                              {connection.hasTokenApi ? "Conectado" : "Credencial pendente"}
+                            </span>
+                            <span className={cn("connection-account-card__status", billingStatus === "connected" && "connection-account-card__status--success")}>
+                              {billingStatusLabel}
+                            </span>
+                            <Switch
+                              checked={connection.billingEnabled}
+                              onCheckedChange={(checked) => void handleToggleRbBilling(connection, checked)}
+                              disabled={busyAction === `toggle-rb-billing:${connection.id}`}
+                              aria-label={`Ativar ou desativar Cobrança RB do Registro Base ${connection.rbAcesId ?? connection.id}`}
+                              className="sr-only"
+                            />
+                          </div>
+                          <Button variant="outline" size="sm" onClick={() => openRbConnection(connection)}><Pencil className="h-4 w-4" />Editar</Button>
+                          <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" disabled={Boolean(busyAction)} onClick={() => handleDeleteRbConnection(connection)} aria-label="Excluir conexão Registro Base">
+                            {busyAction === `delete-rb:${connection.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                    <Button className="w-full" onClick={() => openCreateDialog("external_webhook", "rb")}><Plus className="h-4 w-4" />Adicionar conexão</Button>
+                  </>
+                )}
+              </div>
+            ) : (
+              <>
+                {selectedPanelInstances.length === 0 ? (
+                  <div className="connection-panel-empty">
+                    <MessageCircle className="h-8 w-8 text-[var(--color-primary-500)]" />
+                    <p>Nenhuma conexão configurada para este provedor.</p>
+                    <Button
+                      disabled={connectionPanel === "whatsapp-official" && instances.length === 0}
+                      onClick={() => {
+                        if (connectionPanel === "whatsapp-official") {
+                          const candidate = instances[0];
+                          if (candidate) {
+                            closeProviderPanel();
+                            void openMetaDialog(candidate.instanceName);
+                          }
+                          return;
+                        }
+                        openCreateDialog(
+                          connectionPanel === "whatsapp-free" ? "local" : "external_webhook",
+                          connectionPanel === "gupshup" ? "gupshup" : connectionPanel === "instagram" ? "instagram" : undefined,
+                        );
+                      }}
+                    >
+                      {connectionPanel === "whatsapp-official" ? "Configurar canal Meta" : "Adicionar conexão"}
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    {selectedPanelInstances.map((instance) => {
+                      const channel = gupshupChannels[instance.instanceName]?.gupshupChannel;
+                      const instagramChannel = instagramChannels[instance.instanceName];
+                      return (
+                        <div key={instance.instanceName} className="connection-account-card">
+                          <div className="connection-account-card__main">
+                            <Avatar className="connection-account-card__avatar">
+                              <AvatarImage src={instance.profilePictureUrl ?? undefined} alt="" />
+                              <AvatarFallback>{(instance.displayName ?? instance.instanceName).slice(0, 2).toUpperCase()}</AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-[var(--color-gray-900)]">{instance.instanceName}</p>
+                              <p className="text-xs text-[var(--color-gray-500)]">
+                                {instance.phoneNumber ?? channel?.phoneNumber ?? instagramChannel?.igUsername ?? (getProviderForInstance(instance) === "whatsapp-official" ? metaChannels[instance.instanceName]?.channel?.displayPhoneNumber : null) ?? "Sem telefone informado"}
+                              </p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">{statusBadge(instance.status)}<span className="text-xs text-[var(--color-gray-500)]">{instance.leadCount} leads</span></div>
+                            </div>
+                          </div>
+                          <div className="connection-account-card__actions">
+                            {getProviderForInstance(instance) === "gupshup" ? <Button variant="outline" size="sm" onClick={() => openGupshupDialog(instance.instanceName)}>Editar Gupshup</Button> : null}
+                            {getProviderForInstance(instance) === "whatsapp-official" ? <Button variant="outline" size="sm" onClick={() => openMetaDialog(instance.instanceName)}>Editar Meta</Button> : null}
+                            {getProviderForInstance(instance) === "instagram" ? <Button variant="outline" size="sm" onClick={() => void handleConnectInstagram(instance.instanceName)}>Reconectar</Button> : null}
+                            {getProviderForInstance(instance) === "whatsapp-free" && instance.actions.includes("reconnect") ? <Button variant="outline" size="sm" onClick={() => void handleStartReconnect(instance.instanceName)}>Reconectar</Button> : null}
+                            {instance.actions.includes("sync_status") ? <Button variant="ghost" size="icon" onClick={() => void handleSyncStatus(instance.instanceName)} aria-label={`Atualizar status de ${instance.instanceName}`}><RefreshCw className="h-4 w-4" /></Button> : null}
+                            {instance.actions.includes("delete") ? <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => openDeleteDialog(instance)} aria-label={`Excluir ${instance.instanceName}`}><Trash2 className="h-4 w-4" /></Button> : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <Button className="w-full" onClick={() => {
+                      if (connectionPanel === "whatsapp-official") {
+                        const candidate = instances[0];
+                        if (candidate) {
+                          closeProviderPanel();
+                          void openMetaDialog(candidate.instanceName);
+                        }
+                        return;
+                      }
+                      openCreateDialog(
+                        connectionPanel === "whatsapp-free" ? "local" : "external_webhook",
+                        connectionPanel === "gupshup" ? "gupshup" : connectionPanel === "instagram" ? "instagram" : undefined,
+                      );
+                    }}>
+                      <Plus className="h-4 w-4" />
+                      {connectionPanel === "whatsapp-official" ? "Configurar canal Meta" : "Adicionar conexão"}
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+        {loading && (instances.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground bg-muted/30 rounded-lg border border-dashed flex flex-col items-center gap-2">
             <span>Nenhuma instancia ativa encontrada para sua conta.</span>
             {!error && (
@@ -936,7 +1366,7 @@ export function InstanceManager() {
             )}
           </div>
         ) : (
-          <div className="space-y-3">
+          <div id="configured-connections" className="space-y-3">
             {instances.map((instance) => {
               const actions = new Set(instance.actions);
               const isBusy = Boolean(busyAction);
@@ -1168,9 +1598,9 @@ export function InstanceManager() {
               );
             })}
           </div>
-        )}
+        ))}
 
-        {rbConnections.length > 0 ? (
+        {loading && (rbConnections.length > 0 ? (
           <div className="mt-6 border-t border-[var(--border-default)] pt-5">
             <div className="mb-3 flex items-center gap-2">
               <span className="h-0.5 w-5 bg-[var(--color-primary-500)]" />
@@ -1194,12 +1624,12 @@ export function InstanceManager() {
                         <span
                           className={cn(
                             "h-2 w-2 rounded-full",
-                            connection.status === "active"
+                            billingStatus === "connected"
                               ? "bg-[var(--color-success-500)]"
                               : "bg-[var(--color-gray-300)]",
                           )}
                         />
-                        {connection.status === "active" ? "Conexão ativa" : "Conexão inativa"}
+                        {billingStatusLabel}
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -1222,7 +1652,7 @@ export function InstanceManager() {
               ))}
             </div>
           </div>
-        ) : null}
+        ) : null)}
 
         <AlertDialog open={Boolean(instagramPendingDisable)} onOpenChange={(open) => !open && setInstagramPendingDisable(null)}>
           <AlertDialogContent>
@@ -1248,7 +1678,6 @@ export function InstanceManager() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-      </Card>
 
       {META_WHATSAPP_UI_ENABLED && <Dialog open={metaDialogOpen} onOpenChange={setMetaDialogOpen}>
         <DialogContent className="max-w-lg">
@@ -1432,7 +1861,7 @@ export function InstanceManager() {
                 ) : isRbConnectionForm ? (
                   <Cable className="h-5 w-5" />
                 ) : (
-                  <Link2 className="h-5 w-5" />
+                  <Webhook className="h-5 w-5" />
                 )
               ) : (
                 <QrCode className="h-5 w-5" />
@@ -1476,7 +1905,7 @@ export function InstanceManager() {
                   className="group flex items-center justify-between rounded-2xl border border-[var(--border-default)] bg-[var(--color-surface-2)] px-4 py-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--color-primary-200)] hover:bg-[var(--color-surface-1)] hover:shadow-md"
                 >
                   <span className="text-sm font-semibold text-[var(--color-gray-900)]">Via webhook</span>
-                  <Link2 className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
+                  <Webhook className="h-4 w-4 text-[var(--color-primary-500)] transition-transform duration-200 group-hover:translate-x-0.5" />
                 </button>
                 <button
                   type="button"
@@ -1681,8 +2110,8 @@ export function InstanceManager() {
                         <Input id="rb-company-ids" value={rbForm.rbEmpresaIds} onChange={(event) => setRbForm((current) => ({ ...current, rbEmpresaIds: event.target.value }))} placeholder="1, 2" disabled={rbSaving} />
                       </div>
                       <div className="flex items-center justify-between gap-4 border-t border-[var(--border-default)] pt-4">
-                        <Label htmlFor="rb-active">Conexão ativa</Label>
-                        <Switch id="rb-active" checked={rbForm.active} onCheckedChange={(active) => setRbForm((current) => ({ ...current, active }))} disabled={rbSaving} />
+                        <Label>Cobrança</Label>
+                        <span className="text-right text-xs text-[var(--color-gray-500)]">Configure depois de salvar, em Cobrança</span>
                       </div>
                     </div>
                 ) : null}

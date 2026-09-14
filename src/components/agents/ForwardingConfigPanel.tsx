@@ -88,6 +88,10 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
     () => setup.sellers.filter((seller) => sellerIdsForCompany.has(seller.id)),
     [sellerIdsForCompany, setup.sellers],
   );
+  const availableSellerIds = useMemo(
+    () => new Set(availableSellers.map((seller) => seller.id)),
+    [availableSellers],
+  );
 
   const companiesById = useMemo(
     () => new Map(setup.companies.map((company) => [company.id, company])),
@@ -115,8 +119,9 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
 
   const selectCompany = (companyId: string) => {
     const company = companiesById.get(companyId);
+    const sellerIds = new Set(setup.sellers.map((seller) => seller.id));
     const relatedSellerIds = setup.memberships
-      .filter((membership) => membership.empresa_id === companyId)
+      .filter((membership) => membership.empresa_id === companyId && sellerIds.has(membership.crm_user_id))
       .map((membership) => membership.crm_user_id);
     setEmpresaId(companyId);
     setSellerIds(relatedSellerIds);
@@ -143,11 +148,20 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
 
   const editDestination = (destination: ForwardingDestination) => {
     if (destination.destination_key === "legacy-handoff") return;
+    const destinationSellerIds = new Set(
+      setup.memberships
+        .filter((membership) => membership.empresa_id === destination.empresa_id)
+        .map((membership) => membership.crm_user_id),
+    );
+    const vendorIds = new Set(setup.sellers.map((seller) => seller.id));
     setMode(destination.mode);
     setEmpresaId(destination.empresa_id ?? "");
     setTargetAgentId(destination.target_agent_id ?? "");
     setTargetPhone(destination.target_phone ?? "");
-    setSellerIds(destination.seller_ids ?? []);
+    setSellerIds(destination.mode === "internal_company"
+      ? [...new Set(destination.seller_ids ?? [])]
+        .filter((sellerId) => vendorIds.has(sellerId) && destinationSellerIds.has(sellerId))
+      : []);
     setDisplayName(destination.display_name);
     setInstruction(destination.context_instruction);
     setEditingDestinationKey(destination.destination_key);
@@ -170,7 +184,14 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
       toast.error("Informe um numero de WhatsApp valido, com DDD.");
       return;
     }
-    if (mode === "internal_company" && sellerIds.length === 0) {
+    const eligibleSellerIds = mode === "internal_company"
+      ? sellerIds.filter((sellerId) => availableSellerIds.has(sellerId))
+      : [];
+    if (mode === "internal_company" && sellerIds.length !== eligibleSellerIds.length) {
+      toast.error("Remova vendedores que nao possuem mais acesso ativo a empresa.");
+      return;
+    }
+    if (mode === "internal_company" && eligibleSellerIds.length === 0) {
       toast.error("Selecione ao menos um vendedor relacionado a empresa.");
       return;
     }
@@ -183,7 +204,7 @@ export function ForwardingConfigPanel({ agentId, onClose, onChanged }: Forwardin
         mode,
         targetPhone: mode === "external_notification" ? targetPhone.trim() : null,
         empresaId: mode === "internal_company" ? empresaId : null,
-        sellerIds: mode === "internal_company" ? sellerIds : [],
+        sellerIds: eligibleSellerIds,
         targetAgentId: mode === "agent" ? targetAgentId : null,
         contextInstruction: instruction.trim(),
       });

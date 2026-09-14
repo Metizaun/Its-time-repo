@@ -17,6 +17,7 @@ services:
       - "3000:3000"
     env_file:
       - .env.local
+      - Project/IA/.env.local
     environment:
       - SUPABASE_URL=http://host.docker.internal:55321
       - CRM_BACKEND_PUBLIC_URL=https://instagram-dev-api.itstime.pro
@@ -33,6 +34,58 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - redis
+    restart: always
+
+  collection-worker:
+    build:
+      context: .
+      dockerfile: Project/IA/Dockerfile
+    container_name: chat-query-collection-worker
+    command: ["node", "dist/collection-worker-entry.js"]
+    env_file:
+      - .env.local
+      - Project/IA/.env.local
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - COLLECTION_WORKER_POLL_MS=${COLLECTION_WORKER_POLL_MS:-5000}
+      - COLLECTION_WORKER_BATCH_SIZE=${COLLECTION_WORKER_BATCH_SIZE:-50}
+      - NODE_ENV=development
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      - redis
+    restart: always
+
+  agenda-worker:
+    build:
+      context: .
+      dockerfile: Project/IA/Dockerfile
+    container_name: chat-query-agenda-worker
+    command: ["node", "dist/agenda-worker-entry.js"]
+    env_file:
+      - .env.local
+      - Project/IA/.env.local
+    environment:
+      - AGENDA_WORKER_POLL_MS=${AGENDA_WORKER_POLL_MS:-2000}
+      - AGENDA_WORKER_BATCH_SIZE=${AGENDA_WORKER_BATCH_SIZE:-20}
+      - AGENDA_WORKER_LEASE_SECONDS=${AGENDA_WORKER_LEASE_SECONDS:-60}
+      - AGENDA_WORKER_HTTP_TIMEOUT_MS=${AGENDA_WORKER_HTTP_TIMEOUT_MS:-10000}
+      - AGENDA_WORKER_MAX_RESPONSE_BYTES=${AGENDA_WORKER_MAX_RESPONSE_BYTES:-65536}
+      - AGENDA_RESYNC_WORKER_POLL_MS=${AGENDA_RESYNC_WORKER_POLL_MS:-2000}
+      - AGENDA_RESYNC_WORKER_BATCH_SIZE=${AGENDA_RESYNC_WORKER_BATCH_SIZE:-100}
+      - AGENDA_RESYNC_WORKER_LEASE_SECONDS=${AGENDA_RESYNC_WORKER_LEASE_SECONDS:-60}
+      - AGENDA_INBOUND_RATE_LIMIT_PER_MINUTE=${AGENDA_INBOUND_RATE_LIMIT_PER_MINUTE:-120}
+      - NODE_ENV=development
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: always
 
   cloudflared:

@@ -15,6 +15,7 @@ const connection: RbConnectionRecord = {
   rb_token_api: "rb_test-key",
   rb_empresa_ids: [],
   is_active: true,
+  billing_enabled: true,
   created_at: "2026-07-28T00:00:00.000Z",
   updated_at: "2026-07-28T00:00:00.000Z",
 };
@@ -110,24 +111,20 @@ test("usa somente a URL oficial configurada no backend para cobranca", async () 
     rbApiBaseUrl: "https://rb-oficial.example/api/",
   });
   (service as any).assertAgent = async () => undefined;
-  (service as any).rbClient = {
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            not: () => ({
-              maybeSingle: async () => ({
-                data: {
-                  rb_token_api: "rb_test-key",
-                  rb_empresa_ids: ["1"],
-                },
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      }),
+  const billingQuery = {
+    select() { return this; },
+    eq() { return this; },
+    not() { return this; },
+    maybeSingle: async () => ({
+      data: {
+        rb_token_api: "rb_test-key",
+        rb_empresa_ids: ["1"],
+      },
+      error: null,
     }),
+  };
+  (service as any).rbClient = {
+    from: () => billingQuery,
   };
 
   const config = await service.resolveBillingConfig(5, "agent-1");
