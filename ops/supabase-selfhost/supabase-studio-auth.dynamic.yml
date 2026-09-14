@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    supabase-studio-auth:
+      basicAuth:
+        users:
+          - "studio-admin:$2a$05$OzkEXwtAjkHltTjJcakv0uqizK3cMmeFM5PMCjdhgAg/WA.RNyrKa"

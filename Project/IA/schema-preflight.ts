@@ -69,6 +69,14 @@ const RB_BILLING_ADMIN_PIX_MIGRATION =
   "supabase/migrations/20260905120000_cobranca_rb_admin_pix.sql";
 const COLLECTIONS_INTEGRITY_MIGRATION =
   "supabase/migrations/20260910192757_collections_dispatch_integrity.sql";
+const AGENDA_SYNC_CORE_MIGRATION =
+  "supabase/migrations/20260911182200_agenda_sync_core_contract.sql";
+const AGENDA_SYNC_ADMIN_MIGRATION =
+  "supabase/migrations/20260911184017_agenda_sync_admin_security.sql";
+const AGENDA_SYNC_INBOUND_MIGRATION =
+  "supabase/migrations/20260912172120_agenda_sync_inbound_status.sql";
+const AGENDA_SYNC_RESYNC_MIGRATION =
+  "supabase/migrations/20260914000917_agenda_sync_resync_operations.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -740,6 +748,39 @@ async function validateCollectionIntegrityRpcs(
     : null;
 }
 
+async function validateAgendaSyncReadRpcs(
+  agendaClient: SupabaseClient<any, any, any>
+) {
+  const probes = [
+    agendaClient.rpc("connection_metrics", {
+      p_aces_id: -1,
+      p_connection_id: NIL_UUID,
+    }),
+    agendaClient.rpc("unit_resource", {
+      p_unit_id: NIL_UUID,
+      p_aces_id: -1,
+    }),
+    agendaClient.rpc("professional_resource", {
+      p_professional_id: NIL_UUID,
+      p_aces_id: -1,
+    }),
+    agendaClient.rpc("availability_resource", {
+      p_assignment_id: NIL_UUID,
+      p_aces_id: -1,
+    }),
+  ];
+  const results = await Promise.all(probes);
+  const missing = results.find(({ error }) => error && isMissingRpcError(error));
+
+  return missing?.error
+    ? buildSchemaFailure(
+        "RPCs somente-leitura da Agenda Universal",
+        AGENDA_SYNC_RESYNC_MIGRATION,
+        missing.error,
+      )
+    : null;
+}
+
 async function validateCompaniesCalendarRoutingRpcs(
   serviceClient: SupabaseClient<any, any, any>,
   calendarClient: SupabaseClient<any, any, any>
@@ -1047,7 +1088,69 @@ export async function assertRuntimeSchemaCompatibility(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const agendaClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    db: { schema: "agenda_sync" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const checks = await Promise.all([
+    validateSelectedColumns(
+      agendaClient,
+      "connections",
+      ["id", "public_id", "aces_id", "name", "outbound_url", "scope_mode", "status", "next_sequence", "scope_revision", "tested_at"],
+      "agenda_sync.connections",
+      AGENDA_SYNC_CORE_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "connection_audit",
+      ["id", "connection_id", "aces_id", "actor_id", "action", "details", "created_at"],
+      "agenda_sync.connection_audit",
+      AGENDA_SYNC_ADMIN_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "outbox",
+      ["id", "connection_id", "aces_id", "sequence", "event_id", "event_type", "status", "attempt_count", "resync_run_id", "resync_phase"],
+      "agenda_sync.outbox",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "deliveries",
+      ["id", "connection_id", "aces_id", "outbox_id", "event_id", "event_type", "attempt_number", "outcome", "http_status", "duration_ms"],
+      "agenda_sync.deliveries",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "inbound_events",
+      ["id", "connection_id", "aces_id", "event_id", "event_type", "outcome", "response_status", "response_body", "reported_status", "reported_at", "metadata"],
+      "agenda_sync.inbound_events",
+      AGENDA_SYNC_INBOUND_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "resync_runs",
+      ["id", "connection_id", "aces_id", "status", "stage", "fence_sequence", "snapshot_count", "delta_count", "locked_until"],
+      "agenda_sync.resync_runs",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "resync_deltas",
+      ["id", "run_id", "connection_id", "aces_id", "event_id", "event_type", "resource_type", "resource_id", "resource_version"],
+      "agenda_sync.resync_deltas",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateSelectedColumns(
+      agendaClient,
+      "inbound_rate_limits",
+      ["aces_id", "connection_id", "ip_hash", "window_started_at", "request_count", "updated_at"],
+      "agenda_sync.inbound_rate_limits",
+      AGENDA_SYNC_RESYNC_MIGRATION,
+    ),
+    validateAgendaSyncReadRpcs(agendaClient),
     validateSelectedColumns(
       collectionsClient,
       "source_connections",

@@ -1,0 +1,208 @@
+openapi: 3.1.0
+info:
+  title: Its Time Agenda Universal
+  version: 1.0.0
+  description: Contrato público e independente de parceiro para sincronização de agenda.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.itstime.pro
+security:
+  - agendaTimestamp: []
+    agendaSignature: []
+    idempotencyKey: []
+paths:
+  /api/integrations/agenda/v1/connections/{publicConnectionId}/events:
+    post:
+      operationId: reportAgendaAppointmentStatus
+      summary: Reporta o resultado de um atendimento
+      description: |
+        Aceita `appointment.status_reported`. Eventos desconhecidos são registrados
+        para idempotência e ignorados com HTTP 200.
+      parameters:
+        - name: publicConnectionId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{48}$"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/AgendaTimestamp"
+        - $ref: "#/components/parameters/AgendaSignature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./agenda-universal-v1.schema.json#/$defs/InboundRequest"
+      responses:
+        "200":
+          description: Evento desconhecido ignorado ou recibo já concluído.
+          content:
+            application/json:
+              schema:
+                $ref: "./agenda-universal-v1.schema.json#/$defs/Receipt"
+        "202":
+          description: Evento aceito ou duplicado de processamento idempotente.
+          content:
+            application/json:
+              schema:
+                $ref: "./agenda-universal-v1.schema.json#/$defs/Receipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+webhooks:
+  agendaEvent:
+    post:
+      operationId: receiveAgendaEvent
+      summary: Recebe um evento da Agenda Universal
+      description: |
+        A URL é configurada por conexão. O consumidor deve ignorar `eventType`
+        e campos desconhecidos. `Idempotency-Key` é idêntico a `eventId`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/AgendaTimestamp"
+        - $ref: "#/components/parameters/AgendaSignature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./agenda-universal-v1.schema.json#/$defs/OutboundEnvelope"
+      responses:
+        "200":
+          description: Evento aceito ou evento desconhecido ignorado.
+        "202":
+          description: Evento aceito de forma assíncrona.
+        "204":
+          description: Evento aceito sem corpo de resposta.
+        "400":
+          description: Requisição inválida; falha permanente.
+        "401":
+          description: Assinatura inválida; falha permanente.
+        "408":
+          description: Timeout; entrega será repetida.
+        "425":
+          description: Requisição antecipada; entrega será repetida.
+        "429":
+          description: Limite excedido; entrega será repetida.
+        "500":
+          description: Erro do consumidor; entrega será repetida.
+components:
+  securitySchemes:
+    agendaTimestamp:
+      type: apiKey
+      in: header
+      name: X-Agenda-Timestamp
+      description: Unix timestamp incluído no conteúdo assinado.
+    agendaSignature:
+      type: apiKey
+      in: header
+      name: X-Agenda-Signature
+      description: Assinatura HMAC-SHA256 da conexão.
+    idempotencyKey:
+      type: apiKey
+      in: header
+      name: Idempotency-Key
+      description: UUID idêntico ao eventId.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID byte a byte igual ao `eventId` do envelope.
+      schema:
+        type: string
+        format: uuid
+    AgendaTimestamp:
+      name: X-Agenda-Timestamp
+      in: header
+      required: true
+      description: Unix timestamp em segundos ou milissegundos, com tolerância de cinco minutos.
+      schema:
+        type: string
+        pattern: "^[0-9]{10}([0-9]{3})?$"
+    AgendaSignature:
+      name: X-Agenda-Signature
+      in: header
+      required: true
+      description: HMAC-SHA256 do texto `timestamp.rawBody`.
+      schema:
+        type: string
+        pattern: "^sha256=[0-9a-fA-F]{64}$"
+  responses:
+    BadRequest:
+      description: JSON ou cabeçalhos inválidos.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    Unauthorized:
+      description: Conexão, timestamp ou assinatura inválidos.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    NotFound:
+      description: Agendamento não encontrado no tenant da conexão.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    Conflict:
+      description: Conflito de idempotência ou resourceVersion obsoleta.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    PayloadTooLarge:
+      description: Corpo acima do limite permitido.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    UnsupportedMediaType:
+      description: Content-Type diferente de application/json.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    UnprocessableEntity:
+      description: Transição de estado inválida.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    TooManyRequests:
+      description: Limite de requisições excedido.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"
+    Unavailable:
+      description: Processamento temporariamente indisponível.
+      content:
+        application/json:
+          schema:
+            $ref: "./agenda-universal-v1.schema.json#/$defs/Error"

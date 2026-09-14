@@ -42,7 +42,10 @@ import type { ChatComposerPayload } from "@/types/chat";
 type HandoffDialogView = "choice" | "forward" | "finalize";
 
 export default function Chat() {
-  const { leads, loading: leadsLoading, refetch } = useLeads({ enableRealtime: true });
+  const { leads, loading: leadsLoading, refetch } = useLeads({
+    enableRealtime: true,
+    includeInteractionModes: true,
+  });
   const { pipelines, loading: pipelinesLoading } = usePipelines();
   const { instances, loading: instancesLoading } = useInstances();
   const { setSearchQuery, ui } = useApp();
@@ -198,6 +201,7 @@ export default function Chat() {
   };
 
   const handleOpenTeam = () => {
+    setSelectedLeadId(null);
     setSearchParams({ mode: "team" });
   };
 
@@ -207,7 +211,8 @@ export default function Chat() {
 
   const handleOpenLeadMode = (filter: "all" | "unread" | "manual") => {
     setActiveFilter(filter);
-    setSearchParams(selectedLeadId ? { leadId: selectedLeadId } : {});
+    setSelectedLeadId(null);
+    setSearchParams({});
   };
 
   const handleOpenMentionedLead = (leadId: string) => {
@@ -219,10 +224,16 @@ export default function Chat() {
   const selectedRouting = selectedLeadId ? routingQueue.byLead.get(selectedLeadId) ?? null : null;
 
   useEffect(() => {
-    if (activeFilter === "manual" && selectedLead && selectedLead.interaction_mode !== "human") {
-      setActiveFilter("all");
+    if (leadsLoading || !selectedLeadId || activeFilter === "all") return;
+    if (sidebarLeads.some((lead) => lead.id === selectedLeadId)) return;
+
+    setSelectedLeadId(null);
+    if (searchParams.has("leadId")) {
+      const nextSearchParams = new URLSearchParams(searchParams);
+      nextSearchParams.delete("leadId");
+      setSearchParams(nextSearchParams);
     }
-  }, [activeFilter, selectedLead]);
+  }, [activeFilter, leadsLoading, searchParams, selectedLeadId, setSearchParams, sidebarLeads]);
 
   useEffect(() => {
     if (!finalizeDialogOpen || !finalizePipelineId) return;
@@ -253,12 +264,13 @@ export default function Chat() {
   const showSidebar = !isMobile || !selectedLead;
   const showChatPanel = !isMobile || Boolean(selectedLead);
 
-  const handleSendMessage = (payload: ChatComposerPayload) => {
+  const handleSendMessage = async (payload: ChatComposerPayload) => {
     if (!selectedLead) {
-      return Promise.resolve();
+      return;
     }
 
-    return sendMessage(payload, selectedLead.contact_phone || undefined, selectedLead.instance_name);
+    await sendMessage(payload, selectedLead.contact_phone || undefined, selectedLead.instance_name);
+    await refetch({ showLoading: false });
   };
 
   const handleSchedule = () => {

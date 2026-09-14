@@ -264,6 +264,39 @@ export async function listChatMessages(leadId: string, instanceName?: string | n
   };
 }
 
+export type ChatLeadInteractionMode = {
+  leadId: string;
+  instanceName: string | null;
+  interactionMode: "ai" | "human";
+};
+
+const CHAT_LEAD_INTERACTION_MODE_BATCH_SIZE = 100;
+
+export async function listLeadInteractionModes(leadIds: string[]) {
+  const uniqueLeadIds = Array.from(
+    new Set(leadIds.map((leadId) => leadId.trim()).filter(Boolean))
+  );
+
+  if (uniqueLeadIds.length === 0) {
+    return [] as ChatLeadInteractionMode[];
+  }
+
+  const batches = [];
+  for (let index = 0; index < uniqueLeadIds.length; index += CHAT_LEAD_INTERACTION_MODE_BATCH_SIZE) {
+    batches.push(uniqueLeadIds.slice(index, index + CHAT_LEAD_INTERACTION_MODE_BATCH_SIZE));
+  }
+
+  const responses = await Promise.all(
+    batches.map((batch) =>
+      getCrmBackend<{ modes?: ChatLeadInteractionMode[] }>(
+        `/api/chat/lead-interaction-modes?leadIds=${encodeURIComponent(batch.join(","))}`
+      )
+    )
+  );
+
+  return responses.flatMap((response) => response.modes ?? []);
+}
+
 export function getTemplateRequiredPolicyFromError(error: unknown) {
   if (!(error instanceof CrmBackendError)) return null;
 

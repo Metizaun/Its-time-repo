@@ -766,6 +766,12 @@ type LeadAiControlState = {
   reason: LeadAiReason;
 };
 
+type LeadInteractionModeResponse = {
+  leadId: string;
+  instanceName: string | null;
+  interactionMode: "ai" | "human";
+};
+
 export type ParsedWebhookMessage = {
   instanceName: string;
   fromMe: boolean;
@@ -3900,7 +3906,17 @@ export class AgentManager {
         throw new HttpError(500, `Nao foi possivel validar a Tool ${binding.tool_key}`, countError);
       }
 
-      const ready = Number(count ?? 0) > 0;
+      let ready = Number(count ?? 0) > 0;
+      if (binding.tool_key === "forwarding") {
+        const { data: eligibleDestinationCount, error: eligibilityError } = await this.agentsClient.rpc(
+          "count_ready_forwarding_destinations",
+          { p_aces_id: acesId, p_agent_tool_id: binding.id },
+        );
+        if (eligibilityError) {
+          throw new HttpError(500, "Nao foi possivel validar os vendedores do encaminhamento", eligibilityError);
+        }
+        ready = Number(eligibleDestinationCount ?? 0) > 0;
+      }
       const { error: updateError } = await this.agentsClient
         .from("agent_tools")
         .update({
@@ -4723,6 +4739,15 @@ export class AgentManager {
         configUpdated,
         ready: calendarReady,
       });
+    } else if (toolKey === "ai_audio") {
+      payload.readiness = audioReady ? "ready" : "needs_config";
+      payload.last_validated_at = new Date().toISOString();
+      payload.is_enabled = resolveAgentToolEnabledState({
+        currentEnabled: Boolean(current.is_enabled),
+        explicitEnabled: input.isEnabled,
+        configUpdated,
+        ready: audioReady,
+      });
     } else if (input.isEnabled !== undefined) {
       payload.is_enabled = input.isEnabled;
     } else if (configUpdated) {
@@ -4740,7 +4765,15 @@ export class AgentManager {
       .eq("aces_id", context.acesId);
 
     if (error) {
-      throw new HttpError(500, "Nao foi possivel atualizar a Tool", error);
+      const isReadinessConstraintError = error.code === "23514"
+        && error.message.includes("agent_tools_enabled_ready_check");
+      throw new HttpError(
+        isReadinessConstraintError ? 409 : 500,
+        isReadinessConstraintError
+          ? "Conclua a configuracao da Tool antes de ativa-la"
+          : "Nao foi possivel atualizar a Tool",
+        error,
+      );
     }
 
     await this.syncPlatformToolReadiness(agentId, context.acesId);
@@ -6015,7 +6048,11 @@ export class AgentManager {
       if (!empresaId) throw new HttpError(400, "Empresa de destino e obrigatoria");
       if (sellerIds.length === 0) throw new HttpError(400, "Selecione ao menos um vendedor da empresa");
 
-      const [{ data: company }, { data: memberships, error: membershipsError }] = await Promise.all([
+      const [
+        { data: company },
+        { data: memberships, error: membershipsError },
+        { data: sellers, error: sellersError },
+      ] = await Promise.all([
         this.serviceClient
           .from("empresas")
           .select("id")
@@ -6030,12 +6067,24 @@ export class AgentManager {
           .eq("aces_id", context.acesId)
           .eq("is_active", true)
           .in("crm_user_id", sellerIds),
+        this.serviceClient
+          .from("users")
+          .select("id")
+          .eq("aces_id", context.acesId)
+          .eq("role", "VENDEDOR")
+          .in("id", sellerIds),
       ]);
-      if (membershipsError) throw new HttpError(500, "Nao foi possivel validar os vendedores da empresa", membershipsError);
+      if (membershipsError) {
+        throw new HttpError(500, "Nao foi possivel validar os vendedores da empresa", membershipsError);
+      }
+      if (sellersError) {
+        throw new HttpError(500, "Nao foi possivel validar os papeis dos vendedores", sellersError);
+      }
       if (!company) throw new HttpError(404, "Empresa de destino nao encontrada ou inativa");
       const allowedSellerIds = new Set((memberships ?? []).map((membership) => membership.crm_user_id));
-      if (sellerIds.some((sellerId) => !allowedSellerIds.has(sellerId))) {
-        throw new HttpError(400, "Todos os vendedores devem possuir acesso ativo a empresa");
+      const vendorIds = new Set((sellers ?? []).map((seller) => seller.id));
+      if (sellerIds.some((sellerId) => !allowedSellerIds.has(sellerId) || !vendorIds.has(sellerId))) {
+        throw new HttpError(400, "Todos os vendedores devem possuir papel VENDEDOR e acesso ativo a empresa");
       }
     }
 
@@ -6049,6 +6098,36 @@ export class AgentManager {
 
     if (bindingError) throw new HttpError(500, "Nao foi possivel carregar a Tool Encaminhar", bindingError);
     if (!binding) throw new HttpError(404, "Tool Encaminhar nao instalada");
+
+    if (input.mode === "internal_company") {
+      const { data: rpcData, error: rpcError } = await this.agentsClient.rpc(
+        "upsert_forwarding_destination_internal",
+        {
+          p_aces_id: context.acesId,
+          p_agent_id: agentId,
+          p_agent_tool_id: binding.id,
+          p_destination_key: destinationKey,
+          p_display_name: input.displayName.trim(),
+          p_empresa_id: empresaId,
+          p_seller_ids: sellerIds,
+          p_context_instruction: input.contextInstruction.trim(),
+        },
+      );
+      if (rpcError) {
+        const isValidationError = rpcError.code === "22023" || rpcError.code === "23514";
+        throw new HttpError(
+          isValidationError ? 400 : 500,
+          isValidationError ? "Todos os vendedores devem possuir papel VENDEDOR e acesso ativo a empresa" : "Nao foi possivel salvar o destino",
+          rpcError,
+        );
+      }
+      const destination = rpcData?.destination;
+      if (!destination || typeof destination !== "object") {
+        throw new HttpError(500, "A RPC de encaminhamento retornou um destino invalido");
+      }
+      await this.syncDataToolReadiness(agentId, context.acesId, true);
+      return { ...destination, seller_ids: sellerIds };
+    }
 
     const { data, error } = await this.agentsClient
       .from("forwarding_destinations")
@@ -6072,43 +6151,12 @@ export class AgentManager {
 
     if (error) throw new HttpError(500, "Nao foi possivel salvar o destino", error);
 
-    if (input.mode === "internal_company") {
-      const { error: sellerUpsertError } = await this.agentsClient
-        .from("forwarding_destination_sellers")
-        .upsert(
-          sellerIds.map((sellerId) => ({
-            aces_id: context.acesId,
-            forwarding_destination_id: data.id,
-            crm_user_id: sellerId,
-          })),
-          { onConflict: "forwarding_destination_id,crm_user_id" },
-        );
-      if (sellerUpsertError) throw new HttpError(500, "Destino salvo, mas os vendedores nao foram vinculados", sellerUpsertError);
-
-      const { data: currentSellerRows, error: currentSellersError } = await this.agentsClient
-        .from("forwarding_destination_sellers")
-        .select("id, crm_user_id")
-        .eq("aces_id", context.acesId)
-        .eq("forwarding_destination_id", data.id);
-      if (currentSellersError) throw new HttpError(500, "Nao foi possivel validar os vendedores vinculados", currentSellersError);
-      const obsoleteIds = (currentSellerRows ?? [])
-        .filter((row) => !sellerIds.includes(row.crm_user_id))
-        .map((row) => row.id);
-      if (obsoleteIds.length > 0) {
-        const { error: removeError } = await this.agentsClient
-          .from("forwarding_destination_sellers")
-          .delete()
-          .in("id", obsoleteIds);
-        if (removeError) throw new HttpError(500, "Nao foi possivel remover vendedores antigos do destino", removeError);
-      }
-    } else {
-      const { error: removeError } = await this.agentsClient
-        .from("forwarding_destination_sellers")
-        .delete()
-        .eq("aces_id", context.acesId)
-        .eq("forwarding_destination_id", data.id);
-      if (removeError) throw new HttpError(500, "Nao foi possivel limpar vendedores antigos do destino", removeError);
-    }
+    const { error: removeError } = await this.agentsClient
+      .from("forwarding_destination_sellers")
+      .delete()
+      .eq("aces_id", context.acesId)
+      .eq("forwarding_destination_id", data.id);
+    if (removeError) throw new HttpError(500, "Nao foi possivel limpar vendedores antigos do destino", removeError);
 
     await this.syncDataToolReadiness(agentId, context.acesId, true);
     return { ...data, seller_ids: sellerIds };
@@ -6449,6 +6497,119 @@ export class AgentManager {
         : null;
 
     return this.resolveLeadAiState(lead.id, agent, selectedInstanceName, lead.interaction_mode);
+  }
+
+  async listLeadInteractionModes(context: AuthContext, leadIdsInput: string[]) {
+    const leadIds = Array.from(
+      new Set(leadIdsInput.map((leadId) => String(leadId ?? "").trim()).filter(Boolean))
+    );
+
+    if (leadIds.length > 200) {
+      throw new HttpError(400, "A consulta de modos do chat aceita no maximo 200 leads");
+    }
+
+    if (leadIds.some((leadId) => !isUuid(leadId))) {
+      throw new HttpError(400, "leadIds contem um identificador invalido");
+    }
+
+    if (leadIds.length === 0) {
+      return [] as LeadInteractionModeResponse[];
+    }
+
+    const scopedClient = this.createScopedCrmClient(context.accessToken);
+    const { data: leadData, error: leadError } = await scopedClient
+      .from("leads")
+      .select("id, aces_id, owner_id, instancia, interaction_mode")
+      .eq("aces_id", context.acesId)
+      .eq("view", true)
+      .in("id", leadIds);
+
+    if (leadError) {
+      throw new HttpError(500, "Nao foi possivel carregar os leads do chat", leadError);
+    }
+
+    const leads = (leadData ?? []) as LeadRow[];
+    const instanceNames = Array.from(
+      new Set(
+        leads
+          .map((lead) => lead.instancia?.trim())
+          .filter((instanceName): instanceName is string => Boolean(instanceName))
+      )
+    );
+
+    if (instanceNames.length === 0) {
+      return leads.map((lead) => ({
+        leadId: lead.id,
+        instanceName: null,
+        interactionMode: lead.interaction_mode,
+      }));
+    }
+
+    const { data: agentData, error: agentError } = await this.agentsClient
+      .from("ai_agents")
+      .select("id, instance_name, is_active, updated_at")
+      .eq("aces_id", context.acesId)
+      .eq("agent_type", "primary")
+      .in("instance_name", instanceNames)
+      .order("is_active", { ascending: false })
+      .order("updated_at", { ascending: false });
+
+    if (agentError) {
+      throw new HttpError(500, "Nao foi possivel localizar os agentes do chat", agentError);
+    }
+
+    const agentByInstance = new Map<string, { id: string; instance_name: string }>();
+    for (const agent of (agentData ?? []) as Array<{ id: string; instance_name: string }>) {
+      if (!agentByInstance.has(agent.instance_name)) {
+        agentByInstance.set(agent.instance_name, agent);
+      }
+    }
+
+    const agentIds = Array.from(agentByInstance.values()).map((agent) => agent.id);
+    const { data: stateData, error: stateError } = agentIds.length > 0
+      ? await this.agentsClient
+          .from("ai_lead_state")
+          .select("agent_id, lead_id, interaction_mode, pause_origin, status")
+          .in("agent_id", agentIds)
+          .in("lead_id", leads.map((lead) => lead.id))
+      : { data: [], error: null };
+
+    if (stateError) {
+      throw new HttpError(500, "Nao foi possivel carregar os estados do chat", stateError);
+    }
+
+    const stateByLeadAndAgent = new Map<string, {
+      interaction_mode: "ai" | "human" | null;
+      pause_origin: string | null;
+      status: string | null;
+    }>();
+    for (const state of (stateData ?? []) as Array<{
+      agent_id: string;
+      lead_id: string;
+      interaction_mode: "ai" | "human" | null;
+      pause_origin: string | null;
+      status: string | null;
+    }>) {
+      stateByLeadAndAgent.set(`${state.agent_id}:${state.lead_id}`, state);
+    }
+
+    return leads.map((lead): LeadInteractionModeResponse => {
+      const instanceName = lead.instancia?.trim() || null;
+      const agent = instanceName ? agentByInstance.get(instanceName) : undefined;
+      const state = agent ? stateByLeadAndAgent.get(`${agent.id}:${lead.id}`) : undefined;
+      const legacyHumanState =
+        state?.pause_origin === "manual_send" ||
+        state?.pause_origin === "human_webhook" ||
+        (state?.pause_origin === "ai_policy" && state.status === "paused");
+      const interactionMode = state?.interaction_mode ??
+        (legacyHumanState ? "human" : agent ? "ai" : lead.interaction_mode);
+
+      return {
+        leadId: lead.id,
+        instanceName,
+        interactionMode,
+      };
+    });
   }
 
   async updateLeadAiState(

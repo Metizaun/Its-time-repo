@@ -42,6 +42,9 @@ import { InternalChatService } from "./internal-chat-service.js";
 import { createCollectionApiRuntime } from "./collections/collection-api.js";
 import { CollectionValidationError } from "./collections/domain.js";
 import { CollectionOnboardingError } from "./collections/collection-onboarding-service.js";
+import { AgendaAdminError, AgendaConnectionService } from "./agenda-sync/connection-service.js";
+import { AgendaInboundError, AgendaInboundService } from "./agenda-sync/inbound-service.js";
+import { requireRbBillingAdmin } from "./rb-billing-authorization.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -572,6 +575,14 @@ const collectionApi = createCollectionApiRuntime({
   serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
 });
 
+const agendaConnectionService = new AgendaConnectionService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  encryptionKey: process.env.AGENDA_SECRETS_ENCRYPTION_KEY,
+  encryptionKeyVersion: process.env.AGENDA_SECRETS_ENCRYPTION_KEY_VERSION,
+});
+const agendaInboundService = new AgendaInboundService(agendaConnectionService);
+
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -590,6 +601,49 @@ app.post(
   "/api/integrations/collections/v1/sources/:publicSourceId/events",
   express.raw({ type: "application/json", limit: "1mb" }),
   collectionApi.webhookHandler,
+);
+app.post(
+  "/api/integrations/agenda/v1/connections/:publicConnectionId/events",
+  express.raw({ type: "application/json", limit: "64kb" }),
+  asyncHandler(async (req, res) => {
+    if (!req.is("application/json")) {
+      res.status(415).json({ error: "Content-Type deve ser application/json", code: "unsupported_media_type" });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "Corpo JSON obrigatorio", code: "invalid_request" });
+      return;
+    }
+    try {
+      const result = await agendaInboundService.process({
+        publicConnectionId: getSingleParam(req.params.publicConnectionId),
+        rawBody: req.body,
+        idempotencyKey: req.header("idempotency-key"),
+        timestamp: req.header("x-agenda-timestamp"),
+        signature: req.header("x-agenda-signature"),
+        clientIp: req.ip,
+      });
+      console.info("[agenda-inbound] processed", {
+        publicConnectionId: getSingleParam(req.params.publicConnectionId),
+        eventId: result.body.eventId,
+        status: result.status,
+        duplicate: result.body.duplicate === true,
+      });
+      res.status(result.status).json(result.body);
+    } catch (error) {
+      if (error instanceof AgendaInboundError) {
+        console.warn("[agenda-inbound] rejected", {
+          publicConnectionId: getSingleParam(req.params.publicConnectionId),
+          status: error.status,
+          code: error.code,
+        });
+        if (error.status === 429) res.setHeader("Retry-After", "60");
+        res.status(error.status).json({ error: error.message, code: error.code, details: error.details ?? null });
+        return;
+      }
+      throw error;
+    }
+  }),
 );
 app.use("/webhook/login", express.urlencoded({ extended: false }));
 app.use("/webhook/image", (req, res, next) => {
@@ -632,7 +686,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Idempotency-Key, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256, x-collection-timestamp, x-collection-signature",
+    "Content-Type, Authorization, Idempotency-Key, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256, x-collection-timestamp, x-collection-signature, x-agenda-timestamp, x-agenda-signature",
   );
   res.setHeader(
     "Access-Control-Allow-Methods",
@@ -1061,6 +1115,280 @@ function requireCollectionAdmin(req: AuthenticatedRequest) {
   }
   return context;
 }
+
+function requireAgendaAdmin(req: AuthenticatedRequest) {
+  const context = req.authContext!;
+  if (context.role !== "ADMIN") {
+    throw new HttpError(403, "Apenas administradores podem configurar a Agenda Universal");
+  }
+  return context;
+}
+
+function asAgendaHttpError(error: unknown) {
+  if (error instanceof AgendaAdminError) {
+    return new HttpError(error.status, error.message, { code: error.code });
+  }
+  return error;
+}
+
+async function agendaAdminCall<T>(operation: () => Promise<T>) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw asAgendaHttpError(error);
+  }
+}
+
+function parseAgendaConnectionInput(body: unknown, partial = false) {
+  const input = asRecord(body);
+  const result: Record<string, unknown> = {};
+  const assign = (name: string) => {
+    if (name in input) result[name] = input[name];
+  };
+  for (const name of ["name", "outboundUrl", "scopeMode", "unitIds", "assignmentIds", "defaultTimezone"]) {
+    assign(name);
+  }
+  if (!partial) {
+    for (const required of ["name", "outboundUrl", "scopeMode"]) {
+      if (!(required in result)) throw new HttpError(400, `${required} e obrigatorio`);
+    }
+  } else if (Object.keys(result).length === 0) {
+    throw new HttpError(400, "Nenhum campo de conexao informado");
+  }
+  return result;
+}
+
+const agendaAdminBase = "/api/admin/integrations/agenda/v1/connections";
+
+app.get(
+  `${agendaAdminBase}/scope-options`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    res.json({ success: true, ...(await agendaAdminCall(() => agendaConnectionService.getScopeOptions(context.acesId))) });
+  }),
+);
+
+app.get(
+  agendaAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const connections = await agendaAdminCall(() => agendaConnectionService.listConnections(context.acesId));
+    res.json({ success: true, connections });
+  }),
+);
+
+app.post(
+  agendaAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const result = await agendaAdminCall(() => agendaConnectionService.createConnection(
+      context.acesId,
+      context.crmUserId,
+      parseAgendaConnectionInput(req.body) as Parameters<typeof agendaConnectionService.createConnection>[2],
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+    res.status(201).json({ success: true, ...result, displayedOnce: true });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const connection = await agendaAdminCall(() => agendaConnectionService.getConnection(
+      context.acesId,
+      getSingleParam(req.params.id),
+    ));
+    if (!connection) throw new HttpError(404, "Conexao de agenda nao encontrada");
+    res.json({ success: true, connection });
+  }),
+);
+
+app.patch(
+  `${agendaAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const connection = await agendaAdminCall(() => agendaConnectionService.updateConnection(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+      parseAgendaConnectionInput(req.body, true),
+    ));
+    res.json({ success: true, connection });
+  }),
+);
+
+app.post(
+  `${agendaAdminBase}/:id/credentials/:direction/rotate`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const direction = getSingleParam(req.params.direction);
+    const secret = await agendaAdminCall(() => agendaConnectionService.rotateCredential(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+      direction as "inbound" | "outbound",
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
+    res.json({ success: true, direction, secret, displayedOnce: true, previousSecretValidForHours: 24 });
+  }),
+);
+
+app.post(
+  `${agendaAdminBase}/:id/test`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const test = await agendaAdminCall(() => agendaConnectionService.queueTest(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+    ));
+    res.status(202).json({ success: true, test });
+  }),
+);
+
+for (const operation of ["activate", "pause", "resume"] as const) {
+  app.post(
+    `${agendaAdminBase}/:id/${operation}`,
+    authMiddleware,
+    asyncHandler(async (req: AuthenticatedRequest, res) => {
+      const context = requireAgendaAdmin(req);
+      const result = await agendaAdminCall(() => agendaConnectionService.operate(
+        context.acesId,
+        context.crmUserId,
+        getSingleParam(req.params.id),
+        operation,
+      ));
+      res.json({ success: true, ...result });
+    }),
+  );
+}
+
+app.delete(
+  `${agendaAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const result = await agendaAdminCall(() => agendaConnectionService.operate(
+      context.acesId,
+      context.crmUserId,
+      getSingleParam(req.params.id),
+      "disable",
+    ));
+    res.json({ success: true, ...result });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/deliveries`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const deliveries = await agendaAdminCall(() => agendaConnectionService.listDeliveries(
+      context.acesId,
+      getSingleParam(req.params.id),
+      {
+        limit: Number(req.query.limit ?? 100),
+        eventType: typeof req.query.eventType === "string" ? req.query.eventType : undefined,
+        outcome: typeof req.query.outcome === "string" ? req.query.outcome : undefined,
+        from: typeof req.query.from === "string" ? req.query.from : undefined,
+        to: typeof req.query.to === "string" ? req.query.to : undefined,
+        before: typeof req.query.before === "string" ? req.query.before : undefined,
+      },
+    ));
+    res.json({ success: true, deliveries });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/dead-letters`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const deadLetters = await agendaAdminCall(() => agendaConnectionService.listDeadLetters(
+      context.acesId,
+      getSingleParam(req.params.id),
+      Number(req.query.limit ?? 100),
+    ));
+    res.json({ success: true, deadLetters });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/metrics`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const metrics = await agendaAdminCall(() => agendaConnectionService.getMetrics(
+      context.acesId,
+      getSingleParam(req.params.id),
+    ));
+    res.json({ success: true, metrics });
+  }),
+);
+
+app.post(
+  `${agendaAdminBase}/:id/resync`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const result = await agendaAdminCall(() => agendaConnectionService.startResync(
+      context.acesId, context.crmUserId, getSingleParam(req.params.id), asRecord(req.body).reason,
+    ));
+    res.status(202).json({ success: true, ...result });
+  }),
+);
+
+app.get(
+  `${agendaAdminBase}/:id/audit`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const audit = await agendaAdminCall(() => agendaConnectionService.listAudit(
+      context.acesId, getSingleParam(req.params.id), Number(req.query.limit ?? 100),
+      typeof req.query.before === "string" ? req.query.before : undefined,
+    ));
+    res.json({ success: true, audit });
+  }),
+);
+
+for (const resolution of ["retry", "skip"] as const) {
+  app.post(
+    `${agendaAdminBase}/:id/dead-letters/:outboxId/${resolution}`,
+    authMiddleware,
+    asyncHandler(async (req: AuthenticatedRequest, res) => {
+      const context = requireAgendaAdmin(req);
+      const result = await agendaAdminCall(() => agendaConnectionService.resolveDeadLetter(
+        context.acesId, context.crmUserId, getSingleParam(req.params.id),
+        getSingleParam(req.params.outboxId), resolution, asRecord(req.body).reason,
+      ));
+      res.json({ success: true, ...result });
+    }),
+  );
+}
+
+app.post(
+  `${agendaAdminBase}/:id/appointments/:appointmentId/correct-status`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireAgendaAdmin(req);
+    const body = asRecord(req.body);
+    const result = await agendaAdminCall(() => agendaConnectionService.correctAppointmentStatus(
+      context.acesId, context.crmUserId, getSingleParam(req.params.id),
+      getSingleParam(req.params.appointmentId), body.status, body.reason,
+    ));
+    res.json({ success: true, ...result });
+  }),
+);
 
 app.get(
   "/api/collections/sources",
@@ -3362,6 +3690,22 @@ app.get(
   }),
 );
 
+app.get(
+  "/api/chat/lead-interaction-modes",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const rawLeadIds = asString(req.query.leadIds);
+    const leadIds = rawLeadIds
+      ? rawLeadIds.split(",").map((leadId) => leadId.trim()).filter(Boolean)
+      : [];
+
+    res.json({
+      success: true,
+      modes: await manager.listLeadInteractionModes(req.authContext!, leadIds),
+    });
+  }),
+);
+
 app.put(
   "/api/chat/leads/:leadId/ai-state",
   authMiddleware,
@@ -3984,8 +4328,9 @@ app.post(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
+    const context = requireRbBillingAdmin(req.authContext!);
     const result = await rbBillingWorker.runNowForAgent(
-      req.authContext!.acesId,
+      context.acesId,
       agentId,
     );
     res.status(202).json({ success: true, result });

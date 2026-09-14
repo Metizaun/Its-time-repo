@@ -1,0 +1,71 @@
+services:
+  studio:
+    mem_limit: 384m
+    networks:
+      default: {}
+      lukas_net: {}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "lukas_net"
+      traefik.http.services.supabase-studio.loadbalancer.server.port: "3000"
+      traefik.http.routers.supabase-studio.entrypoints: "websecure"
+      traefik.http.routers.supabase-studio.rule: "Host(`supabase.itstime.pro`)"
+      traefik.http.routers.supabase-studio.service: "supabase-studio"
+      traefik.http.routers.supabase-studio.middlewares: "supabase-studio-auth@file"
+      traefik.http.routers.supabase-studio.tls: "true"
+      traefik.http.routers.supabase-studio.tls.certresolver: "letsencryptresolver"
+
+  api-gw:
+    mem_limit: 192m
+    ports: !reset []
+    networks:
+      default: {}
+      lukas_net: {}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "lukas_net"
+      traefik.http.services.supabase-gateway.loadbalancer.server.port: "8000"
+      traefik.http.routers.supabase-api.entrypoints: "websecure"
+      traefik.http.routers.supabase-api.rule: "Host(`supa.itstime.pro`) && (PathPrefix(`/auth/v1`) || PathPrefix(`/rest/v1`) || PathPrefix(`/storage/v1`) || PathPrefix(`/realtime/v1`) || PathPrefix(`/functions/v1`) || PathPrefix(`/graphql/v1`))"
+      traefik.http.routers.supabase-api.service: "supabase-gateway"
+      traefik.http.routers.supabase-api.tls: "true"
+      traefik.http.routers.supabase-api.tls.certresolver: "letsencryptresolver"
+
+  auth:
+    mem_limit: 320m
+
+  rest:
+    mem_limit: 192m
+
+  realtime:
+    mem_limit: 384m
+
+  storage:
+    mem_limit: 384m
+    environment:
+      STORAGE_BACKEND: file
+      GLOBAL_S3_BUCKET: stub
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+
+  imgproxy:
+    mem_limit: 192m
+
+  meta:
+    mem_limit: 192m
+
+  functions:
+    mem_limit: 512m
+    environment:
+      VERIFY_JWT: "false"
+
+  db:
+    mem_limit: 2048m
+
+  supavisor:
+    mem_limit: 256m
+    ports: !reset []
+
+networks:
+  lukas_net:
+    external: true
+    name: lukas_net

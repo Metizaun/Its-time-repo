@@ -7,7 +7,7 @@ Cenario atual:
 - VPS principal: `187.127.49.20` (`srv1903602`, Docker Swarm manager)
 - Portainer atual: stack `portainer-new`, imagem Portainer CE `2.29.2`
 - Host configurado no Traefik para o Portainer: `https://port-new.itstime.pro`
-- Supabase continua gerenciado externamente
+- Supabase de producao e self-hosted em `https://supa.itstime.pro`, operado em stack separada
 - Evolution continua externa em `http://72.60.251.89:64970`
 
 Este guia segue o stack real da VPS. Nao usa `Nginx` nem `PM2`.
@@ -36,7 +36,8 @@ Arquivos de migracao relevantes para o backend atual:
 
 Importante:
 - o deploy da VPS nao aplica migrations do Supabase
-- o banco do Supabase e externo ao Docker Swarm
+- o banco self-hosted fica fora da stack `itstime-api` e nao e alterado pelo deploy do backend
+- migrations de producao usam `--db-url` para o Postgres self-hosted; nunca `--linked`
 - o script de deploy agora valida o schema esperado antes de publicar a stack
 - se a validacao falhar, primeiro aplique as migrations pendentes no Supabase e so depois rode o deploy novamente
 - se faltar a migration `20260423113000`, o backend pode pausar a IA por falso `human_webhook` e perder o reparo de echo
@@ -92,6 +93,13 @@ AUTOMATION_WORKER_POLL_MS=300000
 AUTOMATION_WORKER_BATCH_SIZE=50
 RB_BILLING_WORKER_ENABLED=true
 RB_BILLING_WORKER_POLL_MS=60000
+RB_WEBHOOK_JWT_SECRET=...
+RB_API_BASE_URL=https://app.registrobase.com.br:32077
+COLLECTION_SECRETS_ENCRYPTION_KEY=...
+COLLECTION_SECRETS_ENCRYPTION_KEY_VERSION=v1
+AGENDA_SECRETS_ENCRYPTION_KEY=...
+AGENDA_SECRETS_ENCRYPTION_KEY_VERSION=v1
+AGENDA_WORKER_REPLICAS=1
 ```
 
 Observacoes:
@@ -126,7 +134,7 @@ Se o projeto ja esta em `/opt/chat-query` e o `.env.local` ja existe:
 
 ```bash
 cd /opt/chat-query
-bash scripts/setup-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 bash scripts/setup-backend-vps.sh
 ```
 
 Esse comando faz:
@@ -140,13 +148,12 @@ Esse comando faz:
 - tenta validar `https://api.itstime.pro/health`
 
 Se o schema estiver atrasado, o deploy vai parar antes de publicar a stack. Nesse caso:
-1. abra o SQL Editor do Supabase
-2. aplique obrigatoriamente a migration `supabase/migrations/20260423113000_fix_automation_progress_and_ai_echo_freeze.sql`
-2. aplique, nesta ordem:
-   - `20260418090000_add_automation_logic_engine_v2.sql`
-   - `20260420110000_add_manual_ai_override_to_lead_state.sql`
-   - `20260420130000_add_humanized_automation_dispatch.sql`
-3. rode novamente `bash scripts/setup-backend-vps.sh`
+1. confirme que `SELFHOST_DB_URL` aponta para o Postgres privado do self-hosted;
+2. execute `supabase db push --db-url "$SELFHOST_DB_URL" --dry-run --skip-vault`;
+3. revise o delta e aplique com `supabase db push --db-url "$SELFHOST_DB_URL" --yes --skip-vault`;
+4. rode novamente `GIT_BRANCH=release/2026-09-14 bash scripts/setup-backend-vps.sh`.
+
+Nunca use `--linked` para este ambiente e nunca exponha a porta do Postgres publicamente.
 
 ## 6. Se o nome da rede do Traefik mudar
 
@@ -154,14 +161,14 @@ Se a rede na sua VPS nao for `lukas_net`, rode assim:
 
 ```bash
 cd /opt/chat-query
-TRAEFIK_NETWORK=nome-da-sua-rede bash scripts/setup-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 TRAEFIK_NETWORK=nome-da-sua-rede bash scripts/setup-backend-vps.sh
 ```
 
 Se o nome do cert resolver nao for `letsencryptresolver`, rode assim:
 
 ```bash
 cd /opt/chat-query
-TRAEFIK_CERT_RESOLVER=nome-do-resolver bash scripts/setup-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 TRAEFIK_CERT_RESOLVER=nome-do-resolver bash scripts/setup-backend-vps.sh
 ```
 
 ## 7. Se quiser manter uma `REDIS_URL` diferente so no container
@@ -172,7 +179,7 @@ Exemplo:
 
 ```bash
 cd /opt/chat-query
-REDIS_URL_FOR_CONTAINER=redis://evolution_redis:6379 bash scripts/setup-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 REDIS_URL_FOR_CONTAINER=redis://evolution_redis:6379 bash scripts/setup-backend-vps.sh
 ```
 
 ## 8. Proximos deploys
@@ -181,11 +188,11 @@ Depois da primeira subida, os deploys seguintes ficam:
 
 ```bash
 cd /opt/chat-query
-bash scripts/deploy-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 bash scripts/deploy-backend-vps.sh
 ```
 
 O script:
-- faz `git pull` da `main` quando o repo tem `.git`
+- exige `GIT_BRANCH` e faz `git pull --ff-only` da release informada quando o repo tem `.git`
 - rebuilda a imagem com uma tag nova
 - valida o schema do Supabase dentro da imagem gerada
 - reaplica a stack no Swarm
@@ -205,6 +212,8 @@ Para conferir o deploy:
 ```bash
 docker service ls
 docker service ps itstime-api_api
+docker service ps itstime-api_collection-worker
+docker service ps itstime-api_agenda-worker
 docker service logs -f itstime-api_api
 curl https://api.itstime.pro/health
 ```
@@ -222,8 +231,8 @@ Resposta esperada:
 
 - `app.itstime.pro` abre normalmente
 - `api.itstime.pro` aponta para a VPS
-- `bash scripts/setup-backend-vps.sh` executa sem erro
-- `docker service ls` mostra `itstime-api_api`
+- `GIT_BRANCH=release/2026-09-14 bash scripts/setup-backend-vps.sh` executa sem erro
+- `docker service ls` mostra API, `collection-worker` e `agenda-worker` com as replicas esperadas
 - `https://api.itstime.pro/health` responde
 - `CORS_ORIGINS=https://app.itstime.pro`
 - `WEBHOOK_PUBLIC_BASE_URL=https://api.itstime.pro`
@@ -272,19 +281,19 @@ Com o seu stack atual, o fluxo ficou:
 
 ```bash
 cd /opt/chat-query
-bash scripts/setup-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 bash scripts/setup-backend-vps.sh
 ```
 
 Se precisar informar um Redis Docker especifico:
 
 ```bash
 cd /opt/chat-query
-REDIS_URL_FOR_CONTAINER=redis://evolution_redis:6379 bash scripts/setup-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 REDIS_URL_FOR_CONTAINER=redis://evolution_redis:6379 bash scripts/setup-backend-vps.sh
 ```
 
 Depois, nos proximos deploys:
 
 ```bash
 cd /opt/chat-query
-bash scripts/deploy-backend-vps.sh
+GIT_BRANCH=release/2026-09-14 bash scripts/deploy-backend-vps.sh
 ```

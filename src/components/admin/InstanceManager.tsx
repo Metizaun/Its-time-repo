@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRight,
   Cable,
+  CalendarSync,
   Check,
   Copy,
   Database,
@@ -106,11 +107,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { ConnectionCard, type ConnectionStatus } from "@/components/connections/ConnectionCard";
+import { AgendaConnectionsPanel, type AgendaPanelSummary } from "@/components/admin/AgendaConnectionsPanel";
+import { listAgendaConnections } from "@/services/agendaService";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
 type ExternalConnectionType = "selection" | "webhook" | "gupshup" | "instagram" | "rb";
-type ConnectionProvider = "whatsapp-free" | "whatsapp-official" | "gupshup" | "instagram" | "registro-base";
+type ConnectionProvider = "whatsapp-free" | "whatsapp-official" | "gupshup" | "instagram" | "registro-base" | "agenda";
 
 function setupStatusLabel(setupStatus: AdminInstanceSetupStatus) {
   switch (setupStatus) {
@@ -192,6 +195,7 @@ export function InstanceManager({
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
   const [createConnectionMode, setCreateConnectionMode] = useState<InstanceConnectionMode | null>(null);
   const [connectionPanel, setConnectionPanel] = useState<ConnectionProvider | null>(null);
+  const [agendaSummary, setAgendaSummary] = useState<AgendaPanelSummary>({ active: 0, pending: 0, errors: 0, total: 0 });
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [currentSetupStatus, setCurrentSetupStatus] = useState<AdminInstanceSetupStatus | null>(null);
@@ -213,6 +217,19 @@ export function InstanceManager({
   const [deleteLeadAction, setDeleteLeadAction] = useState<DeleteLeadAction>("transfer");
   const [deleteTransferTarget, setDeleteTransferTarget] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("panel") === "agenda") setConnectionPanel("agenda");
+  }, []);
+
+  useEffect(() => {
+    void listAgendaConnections().then((items) => setAgendaSummary({
+      total: items.length,
+      active: items.filter((item) => item.status === "active").length,
+      pending: items.filter((item) => item.status === "draft" || item.status === "syncing").length,
+      errors: items.filter((item) => item.status === "error" || Number(item.metrics?.dead_letter_count ?? 0) > 0).length,
+    })).catch(() => undefined);
+  }, []);
 
   // Guarda o ultimo status/setupStatus verificado pelo polling do QR code,
   // para so recarregar a lista completa quando algo de fato mudar (evita
@@ -1065,7 +1082,9 @@ export function InstanceManager({
         ? "Gupshup"
         : connectionPanel === "instagram"
           ? "Instagram"
-          : "Registro Base";
+          : connectionPanel === "agenda"
+            ? "Agenda Universal"
+            : "Registro Base";
   const panelDescription = connectionPanel === "whatsapp-free"
     ? "Instâncias Evolution conectadas à operação."
     : connectionPanel === "whatsapp-official"
@@ -1074,7 +1093,9 @@ export function InstanceManager({
         ? "Canais WhatsApp administrados pela Gupshup."
         : connectionPanel === "instagram"
           ? "Contas profissionais e saúde dos tokens."
-          : "Conexões e empresas vinculadas ao Registro Base.";
+          : connectionPanel === "agenda"
+            ? "Sincronize agendas com parceiros de forma segura."
+            : "Conexões e empresas vinculadas ao Registro Base.";
   const openProviderPanel = (provider: ConnectionProvider) => setConnectionPanel(provider);
   const closeProviderPanel = () => setConnectionPanel(null);
   const getCatalogStatus = (configured: boolean, pending = false, error = false): ConnectionStatus => {
@@ -1100,17 +1121,17 @@ export function InstanceManager({
         <div className="connections-summary-grid" aria-label="Resumo das conexões">
           <div className="connections-summary-card">
             <span className="connections-summary-card__label">Ativas</span>
-            <strong>{activeInstanceCount + metaConnectionCount + gupshupConnectionCount + instagramConnectionCount + rbConnectionCount}</strong>
+            <strong>{activeInstanceCount + metaConnectionCount + gupshupConnectionCount + instagramConnectionCount + rbConnectionCount + agendaSummary.active}</strong>
             <span className="connections-summary-card__dot connections-summary-card__dot--success" aria-hidden="true" />
           </div>
           <div className="connections-summary-card">
             <span className="connections-summary-card__label">Pendentes</span>
-            <strong>{pendingInstanceCount}</strong>
+            <strong>{pendingInstanceCount + agendaSummary.pending}</strong>
             <span className="connections-summary-card__dot connections-summary-card__dot--warning" aria-hidden="true" />
           </div>
           <div className="connections-summary-card">
             <span className="connections-summary-card__label">Com erro</span>
-            <strong>{errorInstanceCount}</strong>
+            <strong>{errorInstanceCount + agendaSummary.errors}</strong>
             <span className="connections-summary-card__dot connections-summary-card__dot--error" aria-hidden="true" />
           </div>
         </div>
@@ -1226,6 +1247,15 @@ export function InstanceManager({
                 actionLabel={billingStatus === "not_configured" ? "Configurar" : "Gerenciar"}
                 onAction={onOpenBilling ?? (() => { window.location.href = "/cobranca"; })}
               />
+              <ConnectionCard
+                title="Agenda Universal"
+                description="Agendamentos integrados com parceiros"
+                icon={CalendarSync}
+                status={getCatalogStatus(agendaSummary.total > 0 && agendaSummary.active > 0, agendaSummary.pending > 0, agendaSummary.errors > 0)}
+                statusLabel={agendaSummary.errors > 0 ? "Requer atenção" : agendaSummary.total > 0 ? `${agendaSummary.total} configurada${agendaSummary.total === 1 ? "" : "s"}` : "Não configurada"}
+                actionLabel={catalogActionLabel(agendaSummary.total > 0)}
+                onAction={() => openProviderPanel("agenda")}
+              />
             </div>
           </section>
         </div>
@@ -1254,7 +1284,9 @@ export function InstanceManager({
           </SheetHeader>
 
           <div className="mt-6 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-            {connectionPanel === "registro-base" ? (
+            {connectionPanel === "agenda" ? (
+              <AgendaConnectionsPanel onSummaryChange={setAgendaSummary} />
+            ) : connectionPanel === "registro-base" ? (
               <div className="space-y-3">
                 {rbConnections.length === 0 ? (
                   <div className="connection-panel-empty">

@@ -1055,6 +1055,12 @@ export function startAutomationWorker() {
   const chatAttachmentsCleanupBatchSize = Number(
     process.env.CHAT_ATTACHMENTS_CLEANUP_BATCH_SIZE ?? 100
   );
+  const forwardingIntegrityIntervalRaw = Number(
+    process.env.FORWARDING_INTEGRITY_INTERVAL_MS ?? 3600000
+  );
+  const forwardingIntegrityIntervalMs = Number.isFinite(forwardingIntegrityIntervalRaw)
+    ? Math.max(60000, forwardingIntegrityIntervalRaw)
+    : 3600000;
   const calendarFollowupEnabled = process.env.CALENDAR_FOLLOWUP_ENABLED === "true";
   const calendarFollowupDryRun = process.env.CALENDAR_FOLLOWUP_DRY_RUN === "true";
   const calendarFollowupBatchSizeRaw = Number(process.env.CALENDAR_FOLLOWUP_BATCH_SIZE ?? 25);
@@ -1099,6 +1105,18 @@ export function startAutomationWorker() {
     db: { schema: "collections" },
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  async function reconcileForwardingIntegrity() {
+    const { data, error } = await agentsSupabase.rpc(
+      "reconcile_forwarding_destination_sellers",
+      { p_aces_id: null },
+    );
+    if (error) throw error;
+    const removed = Number(data ?? 0);
+    if (removed > 0) {
+      console.warn("[automation-worker] Vínculos inválidos de encaminhamento removidos:", { removed });
+    }
+  }
 
   const whatsAppProviders = createWhatsAppProviderRegistry({
     supabaseUrl,
@@ -2368,6 +2386,12 @@ export function startAutomationWorker() {
     });
   }, chatAttachmentsCleanupIntervalMs);
 
+  const forwardingIntegrityTimer = setInterval(() => {
+    reconcileForwardingIntegrity().catch((error) => {
+      console.error("[automation-worker] Erro na reconciliação de encaminhamento:", error);
+    });
+  }, forwardingIntegrityIntervalMs);
+
   const biProjectionTimer = biProjectionEnabled
     ? setInterval(() => {
         processBiProjection().catch((error) => {
@@ -2396,6 +2420,10 @@ export function startAutomationWorker() {
     console.error("[automation-worker] Erro na limpeza inicial de anexos do chat:", error);
   });
 
+  reconcileForwardingIntegrity().catch((error) => {
+    console.error("[automation-worker] Erro na reconciliação inicial de encaminhamento:", error);
+  });
+
   if (biProjectionEnabled) {
     processBiProjection().catch((error) => {
       console.error("[automation-worker] Erro na projecao inicial do BI:", error);
@@ -2403,7 +2431,7 @@ export function startAutomationWorker() {
   }
 
   console.log(
-    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes; limpeza de anexos a cada ${chatAttachmentsCleanupIntervalMs}ms; follow-up calendario ${
+    `[automation-worker] Rodando a cada ${pollMs}ms com lote maximo de ${batchSize} execucoes; limpeza de anexos a cada ${chatAttachmentsCleanupIntervalMs}ms; integridade de encaminhamento a cada ${forwardingIntegrityIntervalMs}ms; follow-up calendario ${
       calendarFollowupEnabled
         ? `ativo com lote ${calendarFollowupBatchSize}${calendarFollowupDryRun ? " em dry-run" : ""}`
         : "desativado"
@@ -2420,6 +2448,7 @@ export function startAutomationWorker() {
     processDueAgentFollowups,
     processBiProjection,
     cleanupExpiredChatAttachments,
+    reconcileForwardingIntegrity,
     stop() {
       clearInterval(timer);
       if (calendarFollowupTimer) {
@@ -2429,6 +2458,7 @@ export function startAutomationWorker() {
         clearInterval(agentFollowupTimer);
       }
       clearInterval(chatCleanupTimer);
+      clearInterval(forwardingIntegrityTimer);
       if (biProjectionTimer) {
         clearInterval(biProjectionTimer);
       }
