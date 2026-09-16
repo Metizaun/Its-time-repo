@@ -2,6 +2,9 @@ import type { WhatsAppProviderName } from "./whatsapp-provider.js";
 
 export type MessagingProviderName = WhatsAppProviderName | "instagram";
 
+/** Every channel a stored message can arrive from. */
+export type InboundProviderName = MessagingProviderName | "website";
+
 export type MessagingChannelType = "whatsapp" | "instagram";
 
 export type MessagingCapability = "manual_only" | "full" | "disabled";

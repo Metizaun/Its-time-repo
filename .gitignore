@@ -82,6 +82,7 @@ exemples/
 !/Project/IA/tests/agenda-resync-worker.test.ts
 !/Project/IA/tests/agenda-company-address.test.ts
 !/Project/IA/tests/rb-billing-authorization.test.ts
+!/Project/IA/tests/website-widget.test.ts
 /Project/IA/fixtures/
 /Project/IA/scripts/recover-*
 /Project/IA/evolution-template-backfill.ts

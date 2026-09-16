@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Bot, CalendarPlus, CheckCheck, Info } from "lucide-react";
+import { ArrowLeft, Bot, CalendarPlus, CheckCheck, Info, MessageCircle } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,12 @@ type ChatAiControl = {
   onToggle: (enabled: boolean) => Promise<unknown> | void;
 };
 
+type ChatWebsiteSession = {
+  live: boolean;
+  busy: boolean;
+  onHandoff: () => void;
+};
+
 interface ChatHeaderProps {
   leadName: string;
   channelLabel?: string | null;
@@ -26,6 +32,7 @@ interface ChatHeaderProps {
   showFinalizeButton?: boolean;
   onFinalize?: () => void;
   aiControl?: ChatAiControl | null;
+  websiteSession?: ChatWebsiteSession | null;
 }
 
 const AI_TOGGLE_ANIMATION_MS = 240;
@@ -69,6 +76,7 @@ export function ChatHeader({
   showFinalizeButton = false,
   onFinalize,
   aiControl,
+  websiteSession,
 }: ChatHeaderProps) {
   const initial = leadName.charAt(0).toUpperCase();
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
@@ -139,9 +147,11 @@ export function ChatHeader({
         </div>
         <div className="min-w-0">
           <h2 className="truncate text-base font-bold leading-tight text-foreground">{leadName}</h2>
-          {channelLabel && (
+          {(channelLabel || websiteSession?.live) && (
             <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-              {channelLabel}
+              {websiteSession?.live
+                ? ["Site", channelLabel].filter(Boolean).join(" · ")
+                : channelLabel}
             </span>
           )}
         </div>
@@ -157,6 +167,20 @@ export function ChatHeader({
           >
             <CalendarPlus className="h-[18px] w-[18px]" />
           </button>
+        )}
+
+        {websiteSession?.live && (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Chamar o contato no WhatsApp"
+            onClick={websiteSession.onHandoff}
+            disabled={websiteSession.busy}
+            className="text-xs"
+          >
+            <MessageCircle className="h-4 w-4" />
+            Chamar no WhatsApp
+          </Button>
         )}
 
         {showFinalizeButton && onFinalize && (

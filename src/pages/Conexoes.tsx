@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { InstanceManager } from "@/components/admin/InstanceManager";
 import { LeadWebhookConnections } from "@/components/connections/LeadWebhookConnections";
+import { WebsiteWidgetConnections } from "@/components/connections/WebsiteWidgetConnections";
 import type { ConnectionStatus } from "@/components/connections/ConnectionCard";
 import { getCollectionConfiguration, listCollectionSources } from "@/services/collectionsService";
 
@@ -61,6 +62,7 @@ export default function Conexoes() {
           : "/cobranca")}
       />
       <LeadWebhookConnections />
+      <WebsiteWidgetConnections />
     </div>
   );
 }
