@@ -13,6 +13,7 @@ import {
   Workflow,
   Bot,
   ShieldCheck,
+  Play,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -213,6 +214,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
             {isAdmin && <NavItem path="/conexoes" icon={Webhook} name="Conexões" />}
             {isAdmin && <NavItem path="/admin" icon={Settings} name="Admin" />}
             {isStaff && <NavItem path="/superadmin" icon={ShieldCheck} name="Superadmin" />}
+            {isStaff && <NavItem path="/simulador-agentes" icon={Play} name="Simulador" />}
           </ul>
         </nav>
 

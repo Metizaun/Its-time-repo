@@ -469,6 +469,115 @@ export class InternalChatService {
     return { success: true, messageId: String(data) };
   }
 
+  /**
+   * Delivers a compact simulator evaluation to the designated internal recipient.
+   * The simulator transcript never reaches this method or the database.
+   */
+  async sendSimulatorReport(context: InternalChatContext, input: {
+    recipientEmail: string;
+    content: string;
+    clientMessageId: string;
+  }) {
+    ensureActive(context);
+    const recipientEmail = String(input.recipientEmail ?? "").trim().toLowerCase();
+    const content = String(input.content ?? "").trim();
+    const clientMessageId = String(input.clientMessageId ?? "");
+    if (!recipientEmail || !recipientEmail.includes("@")) throw new HttpError(400, "Destinatario do relatorio invalido");
+    if (!content) throw new HttpError(400, "Resumo do relatorio e obrigatorio");
+    if (content.length > 10_000) throw new HttpError(400, "Resumo do relatorio excede o limite permitido");
+    if (!isUuid(clientMessageId)) throw new HttpError(400, "clientMessageId invalido");
+
+    const { data: recipient, error: recipientError } = await this.serviceClient
+      .from("users")
+      .select("id, email")
+      .eq("aces_id", context.acesId)
+      .ilike("email", recipientEmail)
+      .maybeSingle();
+    if (recipientError) throwQueryError("Nao foi possivel localizar o destinatario do relatorio", recipientError);
+    if (!recipient) throw new HttpError(422, "O destinatario do relatorio nao pertence a esta conta interna");
+
+    const recipientId = String(recipient.id);
+    if (recipientId === context.crmUserId) {
+      throw new HttpError(422, "O relatorio precisa ser enviado por outro integrante do suporte");
+    }
+    const directKey = `${context.acesId}:${[context.crmUserId, recipientId].sort().join(":")}`;
+    const { data: existingConversation, error: existingConversationError } = await this.serviceClient
+      .from("internal_conversations")
+      .select("id")
+      .eq("aces_id", context.acesId)
+      .eq("kind", "direct")
+      .eq("direct_key", directKey)
+      .maybeSingle();
+    if (existingConversationError) throwQueryError("Nao foi possivel localizar a conversa do relatorio", existingConversationError);
+
+    let conversationId = existingConversation ? String(existingConversation.id) : "";
+    if (!conversationId) {
+      const { data: createdConversation, error: createConversationError } = await this.serviceClient
+        .from("internal_conversations")
+        .insert({
+          aces_id: context.acesId,
+          kind: "direct",
+          created_by: context.crmUserId,
+          direct_key: directKey,
+        })
+        .select("id")
+        .single();
+      if (createConversationError) {
+        // A concurrent submission can have created the same direct conversation.
+        if (String((createConversationError as { code?: string }).code ?? "") !== "23505") {
+          throwQueryError("Nao foi possivel criar a conversa do relatorio", createConversationError);
+        }
+        const { data: concurrentConversation, error: concurrentError } = await this.serviceClient
+          .from("internal_conversations")
+          .select("id")
+          .eq("aces_id", context.acesId)
+          .eq("kind", "direct")
+          .eq("direct_key", directKey)
+          .single();
+        if (concurrentError || !concurrentConversation) {
+          throwQueryError("Nao foi possivel recuperar a conversa do relatorio", concurrentError ?? createConversationError);
+        }
+        conversationId = String(concurrentConversation.id);
+      } else {
+        conversationId = String(createdConversation.id);
+        const memberIds = [...new Set([context.crmUserId, recipientId])];
+        const { error: membersError } = await this.serviceClient
+          .from("internal_conversation_members")
+          .insert(memberIds.map((userId) => ({
+            conversation_id: conversationId,
+            user_id: userId,
+            aces_id: context.acesId,
+            is_admin: userId === context.crmUserId,
+          })));
+        if (membersError) throwQueryError("Nao foi possivel configurar os participantes do relatorio", membersError);
+      }
+    }
+
+    const { data: existingMessage, error: existingMessageError } = await this.serviceClient
+      .from("internal_messages")
+      .select("id")
+      .eq("conversation_id", conversationId)
+      .eq("author_id", context.crmUserId)
+      .eq("client_message_id", clientMessageId)
+      .maybeSingle();
+    if (existingMessageError) throwQueryError("Nao foi possivel validar o envio do relatorio", existingMessageError);
+    if (existingMessage) return { success: true, conversationId, messageId: String(existingMessage.id) };
+
+    const { data: message, error: messageError } = await this.serviceClient
+      .from("internal_messages")
+      .insert({
+        aces_id: context.acesId,
+        conversation_id: conversationId,
+        author_id: context.crmUserId,
+        content,
+        client_message_id: clientMessageId,
+      })
+      .select("id")
+      .single();
+    if (messageError) throwQueryError("Nao foi possivel enviar o relatorio", messageError);
+    return { success: true, conversationId, messageId: String(message.id) };
+  }
+
   private async assertAttachmentUploaded(
     context: InternalChatContext,
     conversationId: string,
