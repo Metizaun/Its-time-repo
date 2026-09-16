@@ -39,6 +39,7 @@ import {
   type CreateGupshupTemplateInput,
 } from "./gupshup-template-service.js";
 import { InternalChatService } from "./internal-chat-service.js";
+import { AgentSimulatorService } from "./agent-simulator-service.js";
 import { createCollectionApiRuntime } from "./collections/collection-api.js";
 import { CollectionValidationError } from "./collections/domain.js";
 import { CollectionOnboardingError } from "./collections/collection-onboarding-service.js";
@@ -522,6 +523,18 @@ const internalChatService = new InternalChatService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
+// Isolated runtime: never dispatches WhatsApp/Instagram or persists simulator turns.
+const agentSimulatorService = new AgentSimulatorService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  openaiApiKey: process.env.OPENAI_API_KEY,
+  openaiModel: process.env.AGENT_SIMULATOR_OPENAI_MODEL,
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  geminiFallbackModel: process.env.AGENT_SIMULATOR_GEMINI_MODEL,
+  supportReportRecipientEmail: process.env.AGENT_SIMULATOR_REPORT_RECIPIENT_EMAIL ?? "mattsyk1@gmail.com",
+  internalChatService,
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -4971,6 +4984,76 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     res.json({ isStaff: await manager.isAdminStaff(req.authContext!.authUserId) });
+  }),
+);
+
+// Agent simulator: restricted to Its Time support staff and deliberately separate
+// from production message dispatch. Only a final evaluation summary is persisted.
+app.get(
+  "/api/agent-simulator/accounts",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (_req, res) => {
+    res.json({ accounts: await agentSimulatorService.listAccounts() });
+  }),
+);
+
+app.get(
+  "/api/agent-simulator/accounts/:acesId/agents",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    res.json({ agents: await agentSimulatorService.listAgents(acesId) });
+  }),
+);
+
+app.get(
+  "/api/agent-simulator/accounts/:acesId/agents/:agentId",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    res.json(await agentSimulatorService.getAgentConfig(acesId, getSingleParam(req.params.agentId)));
+  }),
+);
+
+app.post(
+  "/api/agent-simulator/accounts/:acesId/agents/:agentId/turns",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    const input = asRecord(req.body);
+    res.json(await agentSimulatorService.simulateTurn({
+      acesId,
+      agentId: getSingleParam(req.params.agentId),
+      scenarioKey: typeof input.scenarioKey === "string" ? input.scenarioKey : null,
+      leadContext: asRecord(input.leadContext),
+      messages: Array.isArray(input.messages) ? input.messages as Array<{ role: "lead" | "agent"; content: string }> : [],
+      attachments: Array.isArray(input.attachments)
+        ? input.attachments as Array<{ kind: "image" | "audio"; fileName: string; mimeType: string; size: number }>
+        : [],
+    }));
+  }),
+);
+
+app.post(
+  "/api/agent-simulator/reports",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const input = asRecord(req.body);
+    res.json(await agentSimulatorService.sendReport(req.authContext!, {
+      clientReportId: String(input.clientReportId ?? ""),
+      accountName: String(input.accountName ?? ""),
+      targetAcesId: adminNumber(input.targetAcesId, "targetAcesId", { min: 1, integer: true }),
+      agentName: String(input.agentName ?? ""),
+      tests: Array.isArray(input.tests)
+        ? input.tests as Array<{ kind: "scenario" | "tool"; name: string; status: "passed" | "failed"; note?: string }>
+        : [],
+      generalNote: typeof input.generalNote === "string" ? input.generalNote : "",
+    }));
   }),
 );
 
