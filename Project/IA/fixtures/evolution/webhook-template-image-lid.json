@@ -1,0 +1,60 @@
+{
+  "event": "messages.upsert",
+  "instance": "comercial_droculos",
+  "data": {
+    "key": {
+      "remoteJid": "987654321012345@lid",
+      "remoteJidAlt": "5562999990000@s.whatsapp.net",
+      "fromMe": true,
+      "id": "TEMPLATE-IMAGE-LID-001"
+    },
+    "pushName": null,
+    "messageType": "templateMessage",
+    "messageTimestamp": 1786903200,
+    "message": {
+      "templateMessage": {
+        "templateId": "campanha_exame_2026",
+        "hydratedTemplate": {
+          "hydratedTitleText": "Exame de vista",
+          "hydratedContentText": "Olá, Daniel! Temos uma condição especial para o seu próximo exame.",
+          "hydratedFooterText": "Ótica Exemplo",
+          "imageMessage": {
+            "url": "https://mmg.whatsapp.net/example/image.enc",
+            "mimetype": "image/jpeg",
+            "fileName": "campanha-exame.jpg",
+            "jpegThumbnail": "/9j/",
+            "mediaKey": "segredo-removido-do-resumo",
+            "fileEncSha256": "hash-removido-do-resumo",
+            "contextInfo": {
+              "ctwaClid": "CTWA-ANON-001",
+              "externalAdReply": {
+                "title": "Campanha de exame",
+                "sourceUrl": "https://example.com/campanha"
+              }
+            }
+          },
+          "hydratedButtons": [
+            {
+              "urlButton": {
+                "displayText": "Agendar exame",
+                "url": "https://example.com/agendar"
+              }
+            },
+            {
+              "quickReplyButton": {
+                "displayText": "Quero saber mais",
+                "id": "quero_saber_mais"
+              }
+            },
+            {
+              "callButton": {
+                "displayText": "Ligar para a ótica",
+                "phoneNumber": "+5562999991111"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
