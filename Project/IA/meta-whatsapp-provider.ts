@@ -90,7 +90,7 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
             language: {
               code: input.languageCode,
             },
-            components: buildTemplateComponents(input.parameters),
+            components: buildTemplateComponents(input.bodyParameters, input.headerMedia),
           },
         },
         {
@@ -199,20 +199,27 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
   }
 }
 
-function buildTemplateComponents(parameters: string[]) {
-  if (parameters.length === 0) {
-    return [];
+function buildTemplateComponents(
+  parameters: string[],
+  headerMedia?: { kind: "image"; url: string },
+) {
+  const components: Array<Record<string, unknown>> = [];
+  if (headerMedia) {
+    components.push({
+      type: "header",
+      parameters: [{ type: "image", image: { link: headerMedia.url } }],
+    });
   }
-
-  return [
-    {
+  if (parameters.length > 0) {
+    components.push({
       type: "body",
       parameters: parameters.map((text) => ({
         type: "text",
         text,
       })),
-    },
-  ];
+    });
+  }
+  return components;
 }
 
 function buildMockResult(kind: "text" | "template" | "audio", instanceName: string, to: string): SendResult {

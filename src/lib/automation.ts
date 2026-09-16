@@ -8,14 +8,26 @@ export type AutomationAnchorEvent =
   | "last_inbound"
   | "event_start_time"
   | "event_end_time"
-  | "event_status_changed_at";
+  | "event_status_changed_at"
+  | "collection_eligible_at"
+  | "lead_webhook_received_at";
 export type AutomationReentryMode = "restart_on_match" | "ignore_if_active" | "allow_parallel";
 export type AutomationMessageDirection = "inbound" | "outbound";
 export type AutomationConditionVisibility = "user" | "internal";
 export type AutomationTimeUnit = "minute" | "hour" | "day";
 export type AutomationStepContentMode = "text" | "media";
 export type AutomationStepMediaKind = "image" | "video" | "document";
-export type AutomationJourneyEntrySource = "conditions" | "rb" | "collection" | "calendar_event";
+export type AutomationJourneyEntrySource = "conditions" | "rb" | "collection" | "calendar_event" | "lead_webhook";
+export type AutomationGenerationMode = "fixed" | "ai";
+export type AutomationMediaSource = "none" | "stored_asset" | "webhook";
+export type AutomationTemplateBindingSource =
+  | "ai" | "fixed" | "lead.name" | "lead.city" | "lead.notes"
+  | "lead.source" | "lead.tags" | "webhook.media.caption";
+export interface AutomationTemplateVariableBinding {
+  position: number;
+  source: AutomationTemplateBindingSource;
+  value?: string;
+}
 export type AutomationTriggerEventStatus =
   | "scheduled"
   | "confirmed"
@@ -77,6 +89,7 @@ export interface AutomationJourney {
   daily_dispatch_weekends_enabled: boolean;
   daily_dispatch_time: string | null;
   entry_source: AutomationJourneyEntrySource;
+  lead_webhook_connection_id: string | null;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -99,6 +112,16 @@ export interface AutomationStep {
   media_asset_id: string | null;
   media_kind: AutomationStepMediaKind | null;
   media_caption: string | null;
+  generation_mode: AutomationGenerationMode;
+  ai_instruction: string | null;
+  ai_output_max_chars: number;
+  media_source: AutomationMediaSource;
+  template_variable_bindings: AutomationTemplateVariableBinding[];
+  template_provider: "meta" | "gupshup" | null;
+  template_status: string | null;
+  template_requested_category: "UTILITY" | "MARKETING" | null;
+  template_provider_category: "UTILITY" | "MARKETING" | "AUTHENTICATION" | "UNKNOWN" | null;
+  template_category_acknowledged_at: string | null;
   gupshup_template_id: string | null;
   gupshup_template_name: string | null;
   gupshup_template_language: string | null;

@@ -2,12 +2,22 @@ openapi: 3.1.0
 info:
   title: Its Time Agenda Universal
   version: 1.0.0
-  description: Contrato público e independente de parceiro para sincronização de agenda.
+  description: |
+    Contrato público e independente de parceiro para sincronização de agenda.
+
+    A integração é bidirecional e baseada em webhooks. O Its Time é a autoridade
+    para agendamentos, unidades, profissionais, disponibilidade e pacientes. O
+    parceiro recebe esses eventos e reporta somente o resultado final do
+    atendimento por meio de `appointment.status_reported`.
   license:
     name: Proprietary
     identifier: LicenseRef-Proprietary
+  contact:
+    name: Its Time Developer Relations
+    url: https://itstime.pro/dev/documentacao/agenda
 servers:
   - url: https://api.itstime.pro
+    description: Produção
 security:
   - agendaTimestamp: []
     agendaSignature: []
@@ -20,6 +30,9 @@ paths:
       description: |
         Aceita `appointment.status_reported`. Eventos desconhecidos são registrados
         para idempotência e ignorados com HTTP 200.
+
+        Assine o corpo com o `inboundSecret` da conexão. O `Idempotency-Key` deve
+        ser byte a byte igual ao `eventId` do JSON.
       parameters:
         - name: publicConnectionId
           in: path
@@ -36,6 +49,22 @@ paths:
           application/json:
             schema:
               $ref: "./agenda-universal-v1.schema.json#/$defs/InboundRequest"
+            examples:
+              appointmentStatusReported:
+                summary: Atendimento concluído
+                value:
+                  schemaVersion: "1.0"
+                  eventId: 4b1d2d8a-5bd2-4f4c-9a9e-26a9a0e2d001
+                  eventType: appointment.status_reported
+                  occurredAt: "2026-09-15T18:00:00Z"
+                  resource:
+                    appointmentId: 6f0f3d0f-9db5-4f35-a6e8-0a0c4d0e1001
+                    status: done
+                    reason: null
+                    reportedAt: "2026-09-15T18:00:00Z"
+                    baseResourceVersion: 7
+                    metadata:
+                      source: reception
       responses:
         "200":
           description: Evento desconhecido ignorado ou recibo já concluído.
@@ -43,12 +72,30 @@ paths:
             application/json:
               schema:
                 $ref: "./agenda-universal-v1.schema.json#/$defs/Receipt"
+              example:
+                accepted: false
+                duplicate: false
+                ignored: true
+                eventId: 4b1d2d8a-5bd2-4f4c-9a9e-26a9a0e2d001
         "202":
           description: Evento aceito ou duplicado de processamento idempotente.
           content:
             application/json:
               schema:
                 $ref: "./agenda-universal-v1.schema.json#/$defs/Receipt"
+              examples:
+                accepted:
+                  value:
+                    accepted: true
+                    duplicate: false
+                    eventId: 4b1d2d8a-5bd2-4f4c-9a9e-26a9a0e2d001
+                    resourceVersion: 8
+                duplicate:
+                  value:
+                    accepted: true
+                    duplicate: true
+                    eventId: 4b1d2d8a-5bd2-4f4c-9a9e-26a9a0e2d001
+                    resourceVersion: 8
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -75,6 +122,9 @@ webhooks:
       description: |
         A URL é configurada por conexão. O consumidor deve ignorar `eventType`
         e campos desconhecidos. `Idempotency-Key` é idêntico a `eventId`.
+
+        Verifique a assinatura com o `outboundSecret` da conexão e responda
+        rapidamente com qualquer status 2xx depois de persistir o evento.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/AgendaTimestamp"
@@ -85,6 +135,38 @@ webhooks:
           application/json:
             schema:
               $ref: "./agenda-universal-v1.schema.json#/$defs/OutboundEnvelope"
+            examples:
+              appointmentCreated:
+                summary: Novo agendamento
+                value:
+                  schemaVersion: "1.0"
+                  eventId: 9c0c3d11-1e3e-4a18-8c19-02ab7c4d2001
+                  eventType: appointment.created
+                  occurredAt: "2026-09-15T15:00:00Z"
+                  resourceVersion: 1
+                  resource:
+                    id: 6f0f3d0f-9db5-4f35-a6e8-0a0c4d0e1001
+                    status: scheduled
+                    startTime: "2026-09-20T14:00:00Z"
+                    endTime: "2026-09-20T14:30:00Z"
+                    timezone: America/Sao_Paulo
+                    durationMinutes: 30
+                    unitId: 7de2e00c-0b1e-4f3a-9c2b-01c8b6d30001
+                    locationName: Unidade Centro
+                    professionalId: 8de2e00c-0b1e-4f3a-9c2b-01c8b6d30001
+                    assignmentId: 9de2e00c-0b1e-4f3a-9c2b-01c8b6d30001
+                    patientId: 0de2e00c-0b1e-4f3a-9c2b-01c8b6d30001
+                    service:
+                      id: 1de2e00c-0b1e-4f3a-9c2b-01c8b6d30001
+                      name: Consulta
+                      durationMinutes: 30
+                      price: "123.45"
+                      currency: BRL
+                    origin: api
+                    notes: null
+                    cancelReason: null
+                    metadata: {}
+                    updatedAt: "2026-09-15T15:00:00Z"
       responses:
         "200":
           description: Evento aceito ou evento desconhecido ignorado.

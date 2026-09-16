@@ -852,10 +852,20 @@
   }
 
   .sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
     font-size: var(--text-xl);
     font-weight: var(--font-extrabold);
     letter-spacing: var(--tracking-tight);
     color: var(--color-gray-900);
+  }
+
+  .sidebar-brand__mark {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+    object-fit: contain;
   }
 
   .sidebar-subtitle {
@@ -1082,6 +1092,12 @@
     border-color: var(--border-focus);
     box-shadow: var(--shadow-focus);
     outline: none;
+  }
+
+  /* Edge renderiza um "olho" nativo instável em type=password; escondido em favor do toggle proprio do PasswordInput. */
+  .password-input-field::-ms-reveal,
+  .password-input-field::-ms-clear {
+    display: none;
   }
 
   .select-trigger {

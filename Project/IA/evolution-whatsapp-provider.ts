@@ -50,7 +50,7 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
       acesId: input.acesId,
       instanceName: input.instanceName,
       to: input.to,
-      text: input.parameters.length > 0 ? input.parameters.join(" ") : input.templateName,
+      text: input.bodyParameters.length > 0 ? input.bodyParameters.join(" ") : input.templateName,
       sourceType: input.sourceType,
     });
   }

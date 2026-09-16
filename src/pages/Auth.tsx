@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,19 +22,61 @@ const signupSchema = loginSchema.extend({
   path: ["confirmPassword"]
 });
 
+const forgotPasswordSchema = z.object({
+  email: z.string().email("Email inválido"),
+});
+
 export default function Auth() {
-  const { user, signIn, signUp, loading } = useAuth();
+  const { user, signIn, signUp, requestPasswordReset, loading } = useAuth();
   const navigate = useNavigate();
 
+  const [loginView, setLoginView] = useState<"login" | "forgot">("login");
   const [loginData, setLoginData] = useState({ email: "", password: "" });
-  const [signupData, setSignupData] = useState({ 
-    name: "", 
-    email: "", 
-    password: "", 
-    confirmPassword: "" 
+  const [signupData, setSignupData] = useState({
+    name: "",
+    email: "",
+    password: "",
+    confirmPassword: ""
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotError, setForgotError] = useState<string | null>(null);
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+
+  const openForgotPassword = () => {
+    setLoginView("forgot");
+    setForgotError(null);
+    setForgotSent(false);
+  };
+
+  const backToLogin = () => {
+    setLoginView("login");
+    setForgotEmail("");
+    setForgotError(null);
+    setForgotSent(false);
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError(null);
+
+    const parsed = forgotPasswordSchema.safeParse({ email: forgotEmail });
+    if (!parsed.success) {
+      setForgotError(parsed.error.errors[0]?.message ?? "Email inválido");
+      return;
+    }
+
+    setForgotSubmitting(true);
+    const { error } = await requestPasswordReset(forgotEmail);
+    setForgotSubmitting(false);
+
+    if (!error) {
+      setForgotSent(true);
+    }
+  };
 
   useEffect(() => {
     if (user && !loading) {
@@ -117,43 +160,89 @@ export default function Auth() {
           </TabsList>
 
           <TabsContent value="login">
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <Label htmlFor="login-email">Email</Label>
-                <Input
-                  id="login-email"
-                  type="email"
-                  value={loginData.email}
-                  onChange={(e) => setLoginData({ ...loginData, email: e.target.value })}
-                  className={errors.email ? "border-destructive" : ""}
-                />
-                {errors.email && (
-                  <p className="text-sm text-destructive mt-1">{errors.email}</p>
-                )}
-              </div>
+            {loginView === "login" ? (
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <Label htmlFor="login-email">Email</Label>
+                  <Input
+                    id="login-email"
+                    type="email"
+                    value={loginData.email}
+                    onChange={(e) => setLoginData({ ...loginData, email: e.target.value })}
+                    className={errors.email ? "border-destructive" : ""}
+                  />
+                  {errors.email && (
+                    <p className="text-sm text-destructive mt-1">{errors.email}</p>
+                  )}
+                </div>
 
-              <div>
-                <Label htmlFor="login-password">Senha</Label>
-                <Input
-                  id="login-password"
-                  type="password"
-                  value={loginData.password}
-                  onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
-                  className={errors.password ? "border-destructive" : ""}
-                />
-                {errors.password && (
-                  <p className="text-sm text-destructive mt-1">{errors.password}</p>
-                )}
-              </div>
+                <div>
+                  <Label htmlFor="login-password">Senha</Label>
+                  <PasswordInput
+                    id="login-password"
+                    value={loginData.password}
+                    onChange={(e) => setLoginData({ ...loginData, password: e.target.value })}
+                    className={errors.password ? "border-destructive" : ""}
+                  />
+                  {errors.password && (
+                    <p className="text-sm text-destructive mt-1">{errors.password}</p>
+                  )}
+                </div>
 
-              <Button 
-                type="submit" 
-                className="w-full" 
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? "Entrando..." : "Entrar"}
-              </Button>
-            </form>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={openForgotPassword}
+                    className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                  >
+                    Esqueceu a senha?
+                  </button>
+                </div>
+
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Entrando..." : "Entrar"}
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div>
+                  <Label htmlFor="forgot-email">Email</Label>
+                  <Input
+                    id="forgot-email"
+                    type="email"
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className={forgotError ? "border-destructive" : ""}
+                    disabled={forgotSent}
+                  />
+                  {forgotError && (
+                    <p className="text-sm text-destructive mt-1">{forgotError}</p>
+                  )}
+                </div>
+
+                {forgotSent ? (
+                  <p className="text-sm text-muted-foreground">
+                    Se este email estiver cadastrado, enviamos um link para redefinir a senha.
+                  </p>
+                ) : (
+                  <Button type="submit" className="w-full" disabled={forgotSubmitting}>
+                    {forgotSubmitting ? "Enviando..." : "Enviar link de redefinição"}
+                  </Button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={backToLogin}
+                  className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Voltar para o login
+                </button>
+              </form>
+            )}
           </TabsContent>
 
           <TabsContent value="signup">
@@ -187,9 +276,8 @@ export default function Auth() {
 
               <div>
                 <Label htmlFor="signup-password">Senha</Label>
-                <Input
+                <PasswordInput
                   id="signup-password"
-                  type="password"
                   value={signupData.password}
                   onChange={(e) => setSignupData({ ...signupData, password: e.target.value })}
                   className={errors.password ? "border-destructive" : ""}
@@ -201,9 +289,8 @@ export default function Auth() {
 
               <div>
                 <Label htmlFor="signup-confirm">Confirmar Senha</Label>
-                <Input
+                <PasswordInput
                   id="signup-confirm"
-                  type="password"
                   value={signupData.confirmPassword}
                   onChange={(e) => setSignupData({ ...signupData, confirmPassword: e.target.value })}
                   className={errors.confirmPassword ? "border-destructive" : ""}

@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { registerOutboundEcho } from "./outbound-echo-registry.js";
 import { buildChatSendPolicy } from "./chat-send-policy.js";
 import { GupshupTemplateService } from "./gupshup-template-service.js";
+import { MetaTemplateService } from "./meta-template-service.js";
 import {
   type SendResult,
   type WhatsAppProvider,
@@ -12,6 +13,12 @@ import {
   WhatsAppProviderError,
 } from "./whatsapp-provider.js";
 import { createWhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
+import { AutomationAiMessageService } from "./automation-ai-message-service.js";
+import {
+  revalidatePublicImage,
+  PublicImageInspectionError,
+  type PublicImageSnapshot,
+} from "./integrations/public-image-inspector.js";
 
 type ClaimedExecution = {
   execution_id: string;
@@ -504,6 +511,25 @@ async function buildOutboundHistoryContent(
   renderedMessage: string,
   crmClient: ReturnType<typeof createClient>
 ) {
+  if (providerName === "meta" && execution.gupshup_template_name?.trim() && execution.instance_name) {
+    const metaClient = createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
+      db: { schema: "meta" },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: channel, error: channelError } = await metaClient.from("whatsapp_channels")
+      .select("id").eq("instance_name", execution.instance_name).single();
+    if (channelError) throw channelError;
+    const { data: template, error: templateError } = await metaClient.from("whatsapp_templates")
+      .select("components_json").eq("channel_id", channel.id)
+      .eq("name", execution.gupshup_template_name.trim())
+      .eq("language", execution.gupshup_template_language || "pt_BR").single();
+    if (templateError) throw templateError;
+    const components = Array.isArray(template.components_json) ? template.components_json : [];
+    const body = components.find((component) => isRecord(component)
+      && String(component.type ?? "").toUpperCase() === "BODY");
+    const bodyText = isRecord(body) && typeof body.text === "string" ? body.text : "";
+    if (bodyText) return applyGupshupTemplateParameters(bodyText, renderExecutionTemplateParameters(execution));
+  }
   if (
     providerName === "gupshup" &&
     (execution.gupshup_template_id?.trim() || execution.gupshup_template_name?.trim())
@@ -801,6 +827,19 @@ function classifyExecutionFailure(error: unknown) {
     });
   }
 
+  if (typeof error === "object" && error !== null && "kind" in error) {
+    const candidate = error as { kind?: unknown; errorCode?: unknown; message?: unknown };
+    if (candidate.kind === "transient" || candidate.kind === "permanent") {
+      return new AutomationDispatchError(
+        typeof candidate.message === "string" ? candidate.message : "Falha na automacao",
+        {
+          kind: candidate.kind,
+          errorCode: typeof candidate.errorCode === "string" ? candidate.errorCode : null,
+        },
+      );
+    }
+  }
+
   const message = extractErrorMessage(error);
   const normalizedMessage = normalizeTextForComparison(message);
   const kind =
@@ -891,9 +930,10 @@ async function sendWhatsAppMessage(
             acesId: execution.aces_id,
             instanceName: execution.instance_name,
             to: execution.phone,
+            templateId: execution.gupshup_template_id ?? undefined,
             templateName: templateName || "",
             languageCode: execution.gupshup_template_language || "pt_BR",
-            parameters: renderExecutionTemplateParameters(execution),
+            bodyParameters: renderExecutionTemplateParameters(execution),
             sourceType: "automation",
           })
         : await provider.sendText({
@@ -974,12 +1014,6 @@ async function sendWhatsAppMedia(
   execution: ClaimedExecution,
   caption: string
 ): Promise<WhatsAppSendResult> {
-  if (!provider.sendMedia) {
-    throw new AutomationDispatchError(`Provider ${providerName} sem suporte a midia`, {
-      kind: "permanent",
-    });
-  }
-
   if (!execution.instance_name || !execution.phone) {
     throw new AutomationDispatchError("Instancia ou telefone ausente para envio de midia", {
       kind: "permanent",
@@ -993,7 +1027,23 @@ async function sendWhatsAppMedia(
   }
 
   try {
-    const response = await provider.sendMedia({
+    const templateName = providerName === "meta"
+      ? execution.gupshup_template_name
+      : execution.gupshup_template_id || execution.gupshup_template_name;
+    const response = (providerName === "meta" || providerName === "gupshup") && templateName
+      ? await provider.sendTemplate({
+          acesId: execution.aces_id,
+          instanceName: execution.instance_name,
+          to: execution.phone,
+          templateId: execution.gupshup_template_id ?? undefined,
+          templateName,
+          languageCode: execution.gupshup_template_language || "pt_BR",
+          bodyParameters: renderExecutionTemplateParameters(execution),
+          headerMedia: { kind: "image", url: execution.media_source_url },
+          sourceType: "automation",
+        })
+      : provider.sendMedia
+        ? await provider.sendMedia({
       acesId: execution.aces_id,
       instanceName: execution.instance_name,
       to: execution.phone,
@@ -1022,7 +1072,8 @@ async function sendWhatsAppMedia(
       templateParameters:
         providerName === "gupshup" ? renderExecutionTemplateParameters(execution) : [],
       sourceType: "automation",
-    });
+    })
+        : (() => { throw new AutomationDispatchError(`Provider ${providerName} sem suporte a midia`, { kind: "permanent" }); })();
 
     return {
       providerMessageId: response.providerMessageId,
@@ -1110,6 +1161,125 @@ export function startAutomationWorker() {
     db: { schema: "collections" },
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  const metaSupabase = createClient(supabaseUrl, serviceRoleKey, {
+    db: { schema: "meta" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const gupshupSupabase = createClient(supabaseUrl, serviceRoleKey, {
+    db: { schema: "gupshup" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const metaTemplates = new MetaTemplateService({
+    supabaseUrl,
+    supabaseServiceRoleKey: serviceRoleKey,
+    providerMode: process.env.META_PROVIDER_MODE?.trim().toLowerCase() === "live" ? "live" : "mock",
+    graphApiVersion: process.env.META_GRAPH_API_VERSION ?? "v20.0",
+    fixturePath: process.env.META_TEMPLATES_FIXTURE_PATH,
+    resolveSecret: (secretRef) => process.env[secretRef] ?? null,
+  });
+
+  const biSupabase = createClient(supabaseUrl, serviceRoleKey, {
+    db: { schema: "bi" },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const automationAiMessages = new AutomationAiMessageService(
+    { crm: supabase, agents: agentsSupabase, bi: biSupabase },
+    {
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      geminiApiKey: process.env.GEMINI_API_KEY,
+      openaiModel: process.env.AUTOMATION_OPENAI_MODEL,
+      geminiModels: process.env.AUTOMATION_GEMINI_MODELS?.split(","),
+    },
+  );
+
+  async function blockInvalidTemplate(execution: ClaimedExecution, status: string) {
+    const { data: detail } = await supabase.from("automation_executions")
+      .select("step_id,funnel_id").eq("id", execution.execution_id).eq("aces_id", execution.aces_id).single();
+    if (detail?.step_id) await supabase.from("automation_steps").update({ is_active: false }).eq("id", detail.step_id);
+    if (detail?.funnel_id) await supabase.from("automation_funnels").update({ is_active: false }).eq("id", detail.funnel_id);
+    await supabase.from("notifications").upsert({
+      aces_id: execution.aces_id,
+      category: "notice",
+      event_type: "automation_template_blocked",
+      title: "Automacao pausada por template",
+      description: `O template da automacao esta ${status.toLowerCase()} e precisa ser revisado.`,
+      action_path: "/automacao",
+      idempotency_key: `automation-template:${detail?.step_id ?? execution.execution_id}:${status}`,
+    }, { onConflict: "idempotency_key", ignoreDuplicates: true });
+  }
+
+  async function assertCurrentTemplateApproved(
+    providerName: WhatsAppProviderName,
+    execution: ClaimedExecution,
+  ) {
+    if (providerName !== "meta" && providerName !== "gupshup") return;
+    const templateId = execution.gupshup_template_id?.trim() || "";
+    const templateName = execution.gupshup_template_name?.trim() || "";
+    if (!templateId && !templateName) return;
+    let status = "UNKNOWN";
+    let providerCategory: string | null = null;
+    const { data: executionDetail, error: detailError } = await supabase
+      .from("automation_executions").select("step_id").eq("id", execution.execution_id).eq("aces_id", execution.aces_id).single();
+    if (detailError) throw detailError;
+    try {
+      if (providerName === "meta") {
+        await metaTemplates.syncTemplatesForInstance(execution.instance_name as string);
+        const { data: channel, error: channelError } = await metaSupabase
+          .from("whatsapp_channels").select("id").eq("instance_name", execution.instance_name).single();
+        if (channelError) throw channelError;
+        const { data: template, error: templateError } = await metaSupabase
+          .from("whatsapp_templates").select("status,category,requested_category")
+          .eq("channel_id", channel.id).eq("name", templateName).eq("language", execution.gupshup_template_language || "pt_BR").single();
+        if (templateError) throw templateError;
+        status = String(template.status ?? "UNKNOWN").toUpperCase();
+        providerCategory = typeof template.category === "string" ? template.category.toUpperCase() : null;
+      } else {
+        const { data: channel, error: channelError } = await gupshupSupabase
+          .from("channel").select("app_id,api_key").eq("instance_name", execution.instance_name).eq("status", "active").single();
+        if (channelError) throw channelError;
+        const service = new GupshupTemplateService({ apiKey: channel.api_key, appId: channel.app_id });
+        const template = (templateId ? await service.getTemplateById(templateId) : null)
+          ?? (await service.listTemplates()).find((item) => item.name === templateName);
+        status = String(template?.status ?? "REMOVED").toUpperCase();
+        providerCategory = template?.category?.toUpperCase() ?? null;
+      }
+    } catch (error) {
+      throw new AutomationDispatchError(`Nao foi possivel consultar o status atual do template: ${extractErrorMessage(error)}`, {
+        kind: "transient",
+        errorCode: "TEMPLATE_STATUS_LOOKUP_FAILED",
+      });
+    }
+    if (executionDetail.step_id && providerCategory) {
+      const { data: step, error: stepError } = await supabase.from("automation_steps")
+        .select("template_requested_category,template_provider_category,template_category_acknowledged_at")
+        .eq("id", executionDetail.step_id).single();
+      if (stepError) throw stepError;
+      if (step.template_provider_category !== providerCategory) {
+        await supabase.from("automation_steps").update({
+          template_provider_category: providerCategory,
+          template_category_acknowledged_at: null,
+          template_category_acknowledged_by: null,
+        }).eq("id", executionDetail.step_id);
+        step.template_category_acknowledged_at = null;
+      }
+      if (step.template_requested_category && step.template_requested_category !== providerCategory
+        && !step.template_category_acknowledged_at) {
+        await blockInvalidTemplate(execution, "RECLASSIFIED");
+        throw new AutomationDispatchError("Template reclassificado sem nova confirmacao", {
+          kind: "permanent",
+          errorCode: "TEMPLATE_CATEGORY_CONFIRMATION_REQUIRED",
+        });
+      }
+    }
+    if (status !== "APPROVED") {
+      await blockInvalidTemplate(execution, status);
+      throw new AutomationDispatchError(`Template oficial ${status.toLowerCase()}`, {
+        kind: "permanent",
+        errorCode: "TEMPLATE_NOT_APPROVED",
+      });
+    }
+  }
 
   async function reconcileForwardingIntegrity() {
     const { data, error } = await agentsSupabase.rpc(
@@ -1615,7 +1785,7 @@ export function startAutomationWorker() {
         to: followup.lead_phone,
         templateName: agentFollowupMetaTemplateName,
         languageCode: agentFollowupMetaTemplateLanguage,
-        parameters: [renderedMessage],
+        bodyParameters: [renderedMessage],
         sourceType: "ai",
       });
     }
@@ -1744,6 +1914,18 @@ export function startAutomationWorker() {
     if (error) {
       throw error;
     }
+  }
+
+  async function cancelExecution(executionId: string, reason: string) {
+    const { error } = await supabase.from("automation_executions").update({
+      status: "cancelled",
+      cancelled_at: new Date().toISOString(),
+      completed_reason: reason,
+      last_error: reason,
+      claimed_by: null,
+      updated_at: new Date().toISOString(),
+    }).eq("id", executionId).eq("status", "processing");
+    if (error) throw error;
   }
 
   function formatCollectionMoney(value: string | number | null | undefined) {
@@ -1988,11 +2170,84 @@ export function startAutomationWorker() {
               });
             }
 
+            const generation = await automationAiMessages.prepare({
+              executionId: execution.execution_id,
+              acesId: execution.aces_id,
+              leadId: execution.lead_id,
+              instanceName: execution.instance_name,
+            });
+            if (generation.generatedText) {
+              execution.template = generation.generatedText;
+              execution.media_caption = generation.generatedText;
+            }
+            if (generation.bindings.length > 0) {
+              const parameters = generation.bindings
+                .map((binding, index) => {
+                  const row = isRecord(binding) ? binding : {};
+                  const position = Number(row.position ?? index + 1);
+                  const source = typeof row.source === "string" ? row.source : "fixed";
+                  const value = source === "ai"
+                    ? generation.generatedText ?? ""
+                    : source === "fixed"
+                      ? String(row.value ?? "")
+                      : generation.bindingValues[source] ?? "";
+                  return { position, value };
+                })
+                .sort((a, b) => a.position - b.position);
+              const valid = parameters.every((item, index) => item.position === index + 1 && item.value.trim());
+              if (!valid || new Set(parameters.map((item) => item.position)).size !== parameters.length) {
+                throw new AutomationDispatchError("Bindings do template estao incompletos", {
+                  kind: "permanent",
+                  errorCode: "AUTOMATION_TEMPLATE_BINDINGS_INVALID",
+                });
+              }
+              execution.gupshup_template_params = parameters.map((item) => item.value);
+            }
+            if (generation.mediaSource === "webhook") {
+              if (!generation.mediaSnapshot) {
+                throw new AutomationDispatchError("Evento nao possui a imagem exigida pelo passo", {
+                  kind: "permanent",
+                  errorCode: "AUTOMATION_WEBHOOK_MEDIA_MISSING",
+                });
+              }
+              try {
+                const verified = await revalidatePublicImage(generation.mediaSnapshot as PublicImageSnapshot);
+                execution.content_mode = "media";
+                execution.media_kind = "image";
+                execution.media_source_url = verified.finalUrl;
+                execution.media_mime_type = verified.mimeType;
+                execution.media_file_name = verified.fileName;
+              } catch (error) {
+                if (error instanceof PublicImageInspectionError) {
+                  throw new AutomationDispatchError(error.message, {
+                    kind: error.kind,
+                    errorCode: `WEBHOOK_MEDIA_${error.code.toUpperCase()}`,
+                  });
+                }
+                throw error;
+              }
+            }
+
             const contentMode = execution.content_mode === "media" ? "media" : "text";
             renderedMessage =
               contentMode === "media"
                 ? buildMediaHistoryContent(execution, renderExecutionCaption(execution))
                 : renderExecutionMessage(execution);
+            const providerName = await whatsAppProviders.resolveInstanceProvider(
+              execution.aces_id,
+              execution.instance_name
+            );
+            const provider = whatsAppProviders.getProvider(providerName);
+            await assertCurrentTemplateApproved(providerName, execution);
+            await assertAutomationConversationWindow(supabase, providerName, execution);
+            if (
+              (providerName === "meta" || providerName === "gupshup")
+              && (execution.gupshup_template_id?.trim() || execution.gupshup_template_name?.trim())
+            ) {
+              renderedMessage = await buildOutboundHistoryContent(
+                execution, providerName, renderedMessage, supabase as any,
+              );
+            }
             const dispatchPlan = await planHumanizedDispatch(
               execution.execution_id,
               renderedMessage.length
@@ -2008,12 +2263,6 @@ export function startAutomationWorker() {
             }
 
             const sentAt = new Date().toISOString();
-            const providerName = await whatsAppProviders.resolveInstanceProvider(
-              execution.aces_id,
-              execution.instance_name
-            );
-            const provider = whatsAppProviders.getProvider(providerName);
-            await assertAutomationConversationWindow(supabase, providerName, execution);
 
             const reservation = await reserveCollectionDispatch(execution.execution_id);
             if (reservation.collection && reservation.reserved === false) {
@@ -2041,12 +2290,7 @@ export function startAutomationWorker() {
                     renderedMessage
                   );
 
-            const historyContent = await buildOutboundHistoryContent(
-              execution,
-              providerName,
-              renderedMessage,
-              supabase as any
-            );
+            const historyContent = renderedMessage;
             await registerAutomationOutboundEcho(execution, historyContent, sentAt);
             await saveOutboundMessage(execution, historyContent, sentAt, sendResult, providerName);
             try {
@@ -2074,6 +2318,10 @@ export function startAutomationWorker() {
             );
 
             try {
+              if (failure.errorCode === "AUTOMATION_WEBHOOK_MEDIA_MISSING") {
+                await cancelExecution(execution.execution_id, failure.message);
+                continue;
+              }
               if (failure.kind === "transient") {
                 const messageLength = renderedMessage?.length ?? execution.template?.length ?? 0;
                 const dispatchPlan = await planHumanizedDispatch(execution.execution_id, messageLength);

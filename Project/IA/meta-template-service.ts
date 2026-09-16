@@ -67,12 +67,27 @@ export class MetaTemplateService {
         ? await this.loadMockTemplates()
         : await this.fetchGraphTemplates(channel);
 
+    const { data: existingTemplates, error: existingError } = await this.metaClient
+      .from("whatsapp_templates")
+      .select("name,language,requested_category")
+      .eq("channel_id", channel.id);
+    if (existingError) throw existingError;
+    const requestedByTemplate = new Map(
+      (existingTemplates ?? []).map((template) => [
+        `${template.name}:${template.language}`,
+        template.requested_category,
+      ]),
+    );
+
     const rows = templates.map((template) => ({
       channel_id: channel.id,
       meta_template_id: template.id ?? null,
       name: normalizeTemplateName(template.name),
       language: template.language ?? "pt_BR",
       category: template.category ?? "UNKNOWN",
+      requested_category: requestedByTemplate.get(
+        `${normalizeTemplateName(template.name)}:${template.language ?? "pt_BR"}`,
+      ) ?? template.category ?? null,
       status: template.status ?? "UNKNOWN",
       components_json: template.components ?? [],
       variables_json: extractTemplateVariables(template.components ?? []),
@@ -119,20 +134,24 @@ export class MetaTemplateService {
     if (!Array.isArray(input.components) || input.components.length === 0) {
       throw new Error("O template Meta precisa de ao menos um componente");
     }
+    const requestedCategory = (input.category ?? "UTILITY").trim().toUpperCase();
+    if (requestedCategory !== "UTILITY" && requestedCategory !== "MARKETING") {
+      throw new Error("Categoria do template deve ser UTILITY ou MARKETING");
+    }
 
     const template: MetaTemplatePayload = this.config.providerMode === "mock"
       ? {
           id: `mock_${name}_${Date.now()}`,
           name,
           language: input.language ?? "pt_BR",
-          category: input.category ?? "UTILITY",
+          category: requestedCategory,
           status: "PENDING",
           components: input.components,
         }
       : await this.createGraphTemplate(channel, {
           name,
           language: input.language ?? "pt_BR",
-          category: input.category ?? "UTILITY",
+          category: requestedCategory,
           components: input.components,
         });
 
@@ -144,6 +163,7 @@ export class MetaTemplateService {
         name,
         language: template.language ?? "pt_BR",
         category: template.category ?? "UTILITY",
+        requested_category: requestedCategory,
         status: template.status ?? "PENDING",
         components_json: template.components ?? input.components,
         variables_json: extractTemplateVariables(template.components ?? input.components),

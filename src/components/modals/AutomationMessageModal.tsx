@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Clock3, Plus, Save, Trash2, Workflow } from "lucide-react";
 import { toast } from "sonner";
 
@@ -12,6 +13,10 @@ import {
   sortStepsForDisplay,
 } from "@/components/automation/automation-utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -68,6 +73,7 @@ import {
   type AutomationStepContentMode,
   type AutomationStepMediaKind,
   type AutomationStepRbMessageKind,
+  type AutomationTemplateVariableBinding,
   type AutomationTagOption,
   type AutomationTimeUnit,
 } from "@/lib/automation";
@@ -82,6 +88,7 @@ import {
 } from "@/services/automationMediaService";
 import type { GupshupTemplate } from "@/services/gupshupTemplateService";
 import type { PipelineStage } from "@/types";
+import { listLeadWebhookConnections, updateLeadWebhookConnection } from "@/services/leadWebhookService";
 
 type StepTimingMode = "now" | "after";
 type GupshupMessageMode = "template" | "followup";
@@ -164,6 +171,7 @@ type JourneyFormState = {
   reentry_mode: "restart_on_match" | "ignore_if_active" | "allow_parallel";
   reply_target_stage_id: string;
   builder_version: number;
+  lead_webhook_connection_id: string;
 };
 
 type StepFormState = {
@@ -188,6 +196,14 @@ type StepFormState = {
   is_active: boolean;
   step_rule: AutomationRuleNode;
   step_rule_enabled: boolean;
+  generation_mode: "fixed" | "ai";
+  ai_instruction: string;
+  ai_output_max_chars: number;
+  media_source: "none" | "stored_asset" | "webhook";
+  template_provider: "meta" | "gupshup" | null;
+  template_status: string | null;
+  template_requested_category: "UTILITY" | "MARKETING" | null;
+  template_provider_category: "UTILITY" | "MARKETING" | "AUTHENTICATION" | "UNKNOWN" | null;
 };
 
 function inferRecipeIdFromJourney(
@@ -239,6 +255,14 @@ function createInitialStepForm(
     is_active: true,
     step_rule: createRuleGroup("all", []),
     step_rule_enabled: false,
+    generation_mode: "fixed",
+    ai_instruction: "",
+    ai_output_max_chars: 1024,
+    media_source: "none",
+    template_provider: null,
+    template_status: null,
+    template_requested_category: null,
+    template_provider_category: null,
   };
 }
 
@@ -247,6 +271,22 @@ function parseTemplateParams(value: string) {
     .split(/\r?\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+const TEMPLATE_BINDING_SOURCES = new Set([
+  "lead.name", "lead.city", "lead.notes", "lead.source", "lead.tags", "webhook.media.caption",
+]);
+
+function buildAiTemplateBindings(parametersText: string): AutomationTemplateVariableBinding[] {
+  const parameters = parseTemplateParams(parametersText);
+  if (parameters.length === 0) return [{ position: 1, source: "ai" }];
+  return parameters.map((parameter, index) => {
+    if (index === 0) return { position: 1, source: "ai" };
+    if (TEMPLATE_BINDING_SOURCES.has(parameter)) {
+      return { position: index + 1, source: parameter as AutomationTemplateVariableBinding["source"] };
+    }
+    return { position: index + 1, source: "fixed", value: parameter };
+  });
 }
 
 function formatTemplateParams(value: unknown) {
@@ -442,6 +482,7 @@ function buildInitialJourneyForm(params: {
 
   if (!params.journey) {
     const startsOnCalendar = params.preselectedEntrySource === "calendar_event";
+    const startsOnWebhook = params.preselectedEntrySource === "lead_webhook";
 
     return {
       id: null,
@@ -449,7 +490,7 @@ function buildInitialJourneyForm(params: {
       trigger_stage_id: defaultStageId,
       trigger_event_status: "done",
       instance_name: params.preselectedInstanceName || "",
-      is_active: true,
+      is_active: false,
       humanized_dispatch_enabled: false,
       dispatch_limit_per_hour: 40,
       humanized_dispatch_window_start: "08:00",
@@ -457,14 +498,15 @@ function buildInitialJourneyForm(params: {
       daily_dispatch_enabled: false,
       daily_dispatch_weekends_enabled: false,
       daily_dispatch_time: "08:00",
-      entry_source: startsOnCalendar ? "calendar_event" : "conditions",
-      entry_rule: startsOnCalendar
+      entry_source: params.preselectedEntrySource,
+      lead_webhook_connection_id: "",
+      entry_rule: startsOnCalendar || startsOnWebhook
         ? createEmptyRuleGroup()
         : createDefaultEntryRule(defaultStageId, params.preselectedInstanceName),
-      exit_rule: startsOnCalendar
+      exit_rule: startsOnCalendar || startsOnWebhook
         ? createEmptyRuleGroup()
         : createDefaultExitRule(),
-      anchor_event: startsOnCalendar ? "event_end_time" : "stage_entered_at",
+      anchor_event: startsOnCalendar ? "event_end_time" : startsOnWebhook ? "lead_webhook_received_at" : "stage_entered_at",
       reentry_mode: "restart_on_match",
       reply_target_stage_id: atendimentoStageId,
       builder_version: 2,
@@ -493,6 +535,7 @@ function buildInitialJourneyForm(params: {
       params.journey.daily_dispatch_weekends_enabled ?? false,
     daily_dispatch_time: toHHMM(params.journey.daily_dispatch_time, "08:00"),
     entry_source: params.journey.entry_source ?? "conditions",
+    lead_webhook_connection_id: params.journey.lead_webhook_connection_id ?? "",
     entry_rule:
       params.journey.entry_source === "calendar_event"
         ? normalizeRuleNode(params.journey.entry_rule, createEmptyRuleGroup())
@@ -558,11 +601,21 @@ function buildStepPayload(
   return {
     label: buildStepLabel(stepForm, anchorEvent, entrySource),
     delay_minutes: delayMinutes,
-    content_mode: stepForm.content_mode,
-    message_template: isMedia ? null : stepForm.message_template.trim(),
-    media_asset_id: isMedia ? stepForm.media_asset_id : null,
-    media_kind: isMedia ? stepForm.media_kind : null,
-    media_caption: isMedia ? stepForm.media_caption.trim() || null : null,
+    content_mode: stepForm.media_source === "webhook" ? "media" : stepForm.content_mode,
+    message_template: stepForm.generation_mode === "ai" || isMedia ? null : stepForm.message_template.trim(),
+    media_asset_id: isMedia && stepForm.media_source !== "webhook" ? stepForm.media_asset_id : null,
+    media_kind: stepForm.media_source === "webhook" ? "image" : isMedia ? stepForm.media_kind : null,
+    media_caption: stepForm.generation_mode === "fixed" && isMedia ? stepForm.media_caption.trim() || null : null,
+    generation_mode: stepForm.generation_mode,
+    ai_instruction: stepForm.generation_mode === "ai" ? stepForm.ai_instruction.trim() : null,
+    ai_output_max_chars: stepForm.ai_output_max_chars,
+    media_source: stepForm.media_source === "webhook" ? "webhook" : isMedia ? "stored_asset" : "none",
+    template_variable_bindings: stepForm.generation_mode === "ai" && useGupshupTemplate
+      ? buildAiTemplateBindings(stepForm.gupshup_template_params_text) : [],
+    template_provider: useGupshupTemplate ? stepForm.template_provider : null,
+    template_status: useGupshupTemplate ? stepForm.template_status : null,
+    template_requested_category: useGupshupTemplate ? stepForm.template_requested_category : null,
+    template_provider_category: useGupshupTemplate ? stepForm.template_provider_category : null,
     gupshup_template_id: useGupshupTemplate
       ? stepForm.gupshup_template_id.trim() || null
       : null,
@@ -588,8 +641,9 @@ function buildStepPayload(
 }
 
 function hasStepContent(stepForm: StepFormState) {
+  if (stepForm.generation_mode === "ai") return stepForm.ai_instruction.trim().length > 0;
   if (stepForm.content_mode === "media") {
-    return stepForm.media_asset_id.trim().length > 0;
+    return stepForm.media_source === "webhook" || stepForm.media_asset_id.trim().length > 0;
   }
 
   return stepForm.message_template.trim().length > 0;
@@ -797,6 +851,9 @@ function getStepContentError(
   pendingMediaFile: File | null,
   entrySource: AutomationJourneyEntrySource,
 ) {
+  if (stepForm.generation_mode === "ai" && !stepForm.ai_instruction.trim()) {
+    return "Descreva o contexto e a intencao da mensagem";
+  }
   if (stepForm.content_mode === "text") {
     if (!stepForm.message_template.trim()) {
       return "Escreva a mensagem automatica";
@@ -812,7 +869,7 @@ function getStepContentError(
     return "Selecione um template Gupshup aprovado";
   }
 
-  if (!stepForm.media_asset_id.trim() && !pendingMediaFile) {
+  if (!stepForm.media_asset_id.trim() && !pendingMediaFile && stepForm.media_source !== "webhook") {
     if (stepForm.content_mode === "media") {
       return "Selecione a midia da automacao";
     }
@@ -998,6 +1055,8 @@ function AutomationMessageEditorDialog({
   mediaAssetsLoading,
   pendingMediaFile,
   onPendingMediaFileChange,
+  webhookMediaAccepted,
+  onWebhookMediaConsentRequired,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1022,6 +1081,8 @@ function AutomationMessageEditorDialog({
   mediaAssetsLoading: boolean;
   pendingMediaFile: File | null;
   onPendingMediaFileChange: (file: File | null) => void;
+  webhookMediaAccepted: boolean;
+  onWebhookMediaConsentRequired: () => void;
 }) {
   const selectedMediaAsset = useMemo(
     () => mediaAssets.find((asset) => asset.id === stepForm.media_asset_id) ?? null,
@@ -1105,6 +1166,11 @@ function AutomationMessageEditorDialog({
 
   const handleTemplateChange = (template: GupshupTemplate) => {
     const templateType = template.templateType.trim().toUpperCase();
+    const templateParameterIndexes = Array.from(template.body.matchAll(/\{\{\s*(\d+)\s*\}\}/g))
+      .map((match) => Number(match[1]));
+    const templateParameterCount = templateParameterIndexes.length
+      ? Math.max(...templateParameterIndexes)
+      : 0;
     const nextMediaKind: AutomationStepMediaKind | null =
       templateType === "IMAGE"
         ? "image"
@@ -1132,7 +1198,16 @@ function AutomationMessageEditorDialog({
       gupshup_template_id: template.id || template.name,
       gupshup_template_name: template.name,
       gupshup_template_language: template.language || "pt_BR",
-      gupshup_template_params_text: "",
+      gupshup_template_params_text: previous.generation_mode === "ai" && templateParameterCount > 0
+        ? Array.from({ length: templateParameterCount }, (_, index) => index === 0 ? "ai" : "").join("\n")
+        : "",
+      template_provider: "gupshup",
+      template_status: template.status,
+      template_requested_category:
+        template.category === "UTILITY" || template.category === "MARKETING" ? template.category : null,
+      template_provider_category:
+        template.category === "UTILITY" || template.category === "MARKETING" || template.category === "AUTHENTICATION"
+          ? template.category : "UNKNOWN",
     }));
   };
 
@@ -1232,7 +1307,112 @@ function AutomationMessageEditorDialog({
             </div>
           </div>
 
-          {!isGupshupInstance ? (
+          <div className="space-y-3">
+            <Label>Como escrever a mensagem</Label>
+            <Tabs
+              value={stepForm.generation_mode}
+              onValueChange={(value) => onStepFormChange((previous) => ({
+                ...previous,
+                generation_mode: value === "ai" ? "ai" : "fixed",
+              }))}
+            >
+              <TabsList className="grid h-10 w-full max-w-md grid-cols-2 bg-[var(--color-surface-2)] p-1">
+                <TabsTrigger value="fixed">Texto fixo</TabsTrigger>
+                <TabsTrigger value="ai">Inteligencia artificial</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+
+          {stepForm.generation_mode === "ai" ? (
+            <div className="space-y-5 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--color-surface-1)] p-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="step-ai-instruction">Contexto e intencao</Label>
+                  <span className="text-xs tabular-nums text-[var(--color-gray-500)]">
+                    {stepForm.ai_instruction.length}/350
+                  </span>
+                </div>
+                <Textarea
+                  id="step-ai-instruction"
+                  rows={5}
+                  maxLength={350}
+                  value={stepForm.ai_instruction}
+                  onChange={(event) => onStepFormChange((previous) => ({ ...previous, ai_instruction: event.target.value }))}
+                  placeholder="Ex.: retome o contato com tom consultivo e convide o lead a responder."
+                  className="min-h-[140px] resize-none"
+                />
+                <p className="text-xs text-[var(--color-gray-500)]">
+                  O texto sera criado no momento do disparo usando agente, lead, perfil e conversa. O preview e apenas uma simulacao.
+                </p>
+              </div>
+              {isGupshupInstance ? (
+                <div className="space-y-2 border-t border-[var(--border-default)] pt-5">
+                  <GupshupTemplatePanel
+                    instanceName={instanceName}
+                    selectedTemplateId={stepForm.gupshup_template_id}
+                    selectedTemplateName={stepForm.gupshup_template_name}
+                    parametersText={stepForm.gupshup_template_params_text}
+                    onTemplateChange={handleTemplateChange}
+                    onParametersTextChange={(parametersText) =>
+                      onStepFormChange((previous) => ({
+                        ...previous,
+                        gupshup_template_params_text: parametersText,
+                      }))
+                    }
+                  />
+                  <p className="text-xs text-[var(--color-gray-500)]">
+                    A primeira variavel recebe o texto da IA. Nas demais, use lead.name, lead.city,
+                    lead.notes, lead.source, lead.tags, webhook.media.caption ou um valor fixo.
+                  </p>
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <Label>Midia</Label>
+                <Tabs
+                  value={stepForm.media_source}
+                  onValueChange={(value) => {
+                    if (value === "webhook" && !webhookMediaAccepted) {
+                      onWebhookMediaConsentRequired();
+                      return;
+                    }
+                    onStepFormChange((previous) => ({
+                      ...previous,
+                      media_source: value as StepFormState["media_source"],
+                      content_mode: value === "none" ? "text" : "media",
+                      media_kind: value === "webhook" ? "image" : previous.media_kind,
+                    }));
+                  }}
+                >
+                  <TabsList className={cn(
+                    "grid h-10 w-full bg-[var(--color-surface-2)] p-1",
+                    entrySource === "lead_webhook" ? "grid-cols-3" : "grid-cols-2",
+                  )}>
+                    <TabsTrigger value="none">Sem midia</TabsTrigger>
+                    <TabsTrigger value="stored_asset">Arquivo salvo</TabsTrigger>
+                    {entrySource === "lead_webhook" ? <TabsTrigger value="webhook">Imagem do webhook</TabsTrigger> : null}
+                  </TabsList>
+                </Tabs>
+              </div>
+              {stepForm.media_source === "stored_asset" ? (
+                <AutomationMediaEditor
+                  stepForm={stepForm}
+                  instanceName={instanceName}
+                  mediaAssets={mediaAssets}
+                  mediaAssetsLoading={mediaAssetsLoading}
+                  pendingMediaFile={pendingMediaFile}
+                  allowedKinds={["image", "document"]}
+                  showCaption={false}
+                  onStepFormChange={onStepFormChange}
+                  onPendingMediaFileChange={onPendingMediaFileChange}
+                />
+              ) : null}
+              <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-2)] p-3 text-sm text-[var(--color-gray-600)]">
+                Simulacao: a IA criara uma mensagem personalizada respeitando o limite de {stepForm.ai_output_max_chars} caracteres.
+              </div>
+            </div>
+          ) : null}
+
+          {stepForm.generation_mode === "fixed" && !isGupshupInstance ? (
             <div className="space-y-2">
               <Label>Tipo de disparo</Label>
               <Tabs
@@ -1252,7 +1432,7 @@ function AutomationMessageEditorDialog({
             </div>
           ) : null}
 
-          {!isGupshupInstance ? (
+          {stepForm.generation_mode === "fixed" ? (!isGupshupInstance ? (
             stepForm.content_mode === "text" || isRbJourney ? (
             isRbJourney ? (
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -1589,7 +1769,7 @@ function AutomationMessageEditorDialog({
                 </TabsContent>
               ) : null}
             </Tabs>
-          )}
+          )) : null}
 
           <div className="border-t border-[var(--border-default)]">
             <div className="flex items-center justify-between gap-4 py-4">
@@ -1790,7 +1970,24 @@ export function AutomationMessageModal({
   const [selectedPreviewLeadId, setSelectedPreviewLeadId] = useState("");
   const [activeTab, setActiveTab] = useState("entry");
   const [pendingMediaFile, setPendingMediaFile] = useState<File | null>(null);
+  const [mediaConsentOpen, setMediaConsentOpen] = useState(false);
+  const [updatingMediaConsent, setUpdatingMediaConsent] = useState(false);
   const initializedJourneyKeyRef = useRef("");
+
+  const connectionsQuery = useQuery({
+    queryKey: ["lead-webhook-connections"],
+    queryFn: listLeadWebhookConnections,
+    enabled: open,
+  });
+  const webhookConnections = useMemo(
+    () => (connectionsQuery.data ?? []).filter(
+      (connection) => connection.instanceName === journeyForm.instance_name && connection.status === "active",
+    ),
+    [connectionsQuery.data, journeyForm.instance_name],
+  );
+  const selectedWebhookConnection = webhookConnections.find(
+    (connection) => connection.id === journeyForm.lead_webhook_connection_id,
+  ) ?? null;
 
   const orderedSteps = useMemo(() => sortStepsForDisplay(steps), [steps]);
   const isGupshupInstance = instances.some(
@@ -1887,6 +2084,14 @@ export function AutomationMessageModal({
       initialStepForm.message_template = firstStep.message_template ?? "";
       initialStepForm.media_asset_id = firstStep.media_asset_id ?? "";
       initialStepForm.media_kind = firstStep.media_kind ?? "image";
+      initialStepForm.generation_mode = firstStep.generation_mode ?? "fixed";
+      initialStepForm.ai_instruction = firstStep.ai_instruction ?? "";
+      initialStepForm.ai_output_max_chars = firstStep.ai_output_max_chars ?? 1024;
+      initialStepForm.media_source = firstStep.media_source ?? (firstStep.content_mode === "media" ? "stored_asset" : "none");
+      initialStepForm.template_provider = firstStep.template_provider ?? null;
+      initialStepForm.template_status = firstStep.template_status ?? null;
+      initialStepForm.template_requested_category = firstStep.template_requested_category ?? null;
+      initialStepForm.template_provider_category = firstStep.template_provider_category ?? null;
       initialStepForm.media_caption = firstStep.media_caption ?? "";
       initialStepForm.gupshup_mode =
         firstStep.gupshup_template_id || firstStep.gupshup_template_name
@@ -2046,23 +2251,27 @@ export function AutomationMessageModal({
           previous.entry_rule,
           value,
         );
+        nextState.lead_webhook_connection_id = "";
       }
 
       // Cada origem tem o seu proprio conjunto de referencias de tempo.
       if (field === "entry_source") {
         const goingToCalendar = value === "calendar_event";
+        const goingToWebhook = value === "lead_webhook";
         const isCalendarAnchor = CALENDAR_ANCHOR_EVENTS.has(
           previous.anchor_event,
         );
 
-        if (goingToCalendar) {
+        if (goingToCalendar || goingToWebhook) {
           nextState.entry_rule = createEmptyRuleGroup();
           nextState.exit_rule = createEmptyRuleGroup();
-
-          if (!isCalendarAnchor) {
+          nextState.lead_webhook_connection_id = "";
+          if (goingToWebhook) {
+            nextState.anchor_event = "lead_webhook_received_at";
+          } else if (!isCalendarAnchor) {
             nextState.anchor_event = "event_end_time";
           }
-        } else if (isCalendarAnchor) {
+        } else if (isCalendarAnchor || previous.anchor_event === "lead_webhook_received_at") {
           nextState.anchor_event = "stage_entered_at";
           nextState.entry_rule = createDefaultEntryRule(
             previous.trigger_stage_id,
@@ -2083,8 +2292,9 @@ export function AutomationMessageModal({
     }
 
     const isCalendarEntry = journeyForm.entry_source === "calendar_event";
+    const isWebhookEntry = journeyForm.entry_source === "lead_webhook";
 
-    if (!isCalendarEntry && !journeyForm.trigger_stage_id) {
+    if (!isCalendarEntry && !isWebhookEntry && !journeyForm.trigger_stage_id) {
       toast.error("Selecione a etapa do pipeline");
       return;
     }
@@ -2096,6 +2306,11 @@ export function AutomationMessageModal({
 
     if (!journeyForm.instance_name) {
       toast.error("Selecione a instancia de envio");
+      return;
+    }
+
+    if (isWebhookEntry && !journeyForm.lead_webhook_connection_id) {
+      toast.error("Selecione a conexao de lead webhook");
       return;
     }
 
@@ -2125,7 +2340,7 @@ export function AutomationMessageModal({
 
       const payload: AutomationJourneyPayload = {
         name: journeyForm.name.trim(),
-        trigger_stage_id: isCalendarEntry ? null : journeyForm.trigger_stage_id,
+        trigger_stage_id: isCalendarEntry || isWebhookEntry ? null : journeyForm.trigger_stage_id,
         trigger_event_status: isCalendarEntry
           ? journeyForm.trigger_event_status
           : null,
@@ -2152,7 +2367,8 @@ export function AutomationMessageModal({
             ? normalizeTimeForDb(journeyForm.daily_dispatch_time)
             : null,
         entry_source: journeyForm.entry_source,
-        entry_rule: isCalendarEntry
+        lead_webhook_connection_id: isWebhookEntry ? journeyForm.lead_webhook_connection_id : null,
+        entry_rule: isCalendarEntry || isWebhookEntry
           ? createEmptyRuleGroup()
           : normalizeRuleNode(
               journeyForm.entry_source === "rb"
@@ -2169,7 +2385,7 @@ export function AutomationMessageModal({
                 journeyForm.instance_name,
               ),
             ),
-        exit_rule: isCalendarEntry
+        exit_rule: isCalendarEntry || isWebhookEntry
           ? createEmptyRuleGroup()
           : normalizeRuleNode(journeyForm.exit_rule, createDefaultExitRule()),
         anchor_event: journeyForm.anchor_event,
@@ -2380,6 +2596,14 @@ export function AutomationMessageModal({
       media_asset_id: step.media_asset_id ?? "",
       media_kind: step.media_kind ?? "image",
       media_caption: step.media_caption ?? "",
+      generation_mode: step.generation_mode ?? "fixed",
+      ai_instruction: step.ai_instruction ?? "",
+      ai_output_max_chars: step.ai_output_max_chars ?? 1024,
+      media_source: step.media_source ?? (step.content_mode === "media" ? "stored_asset" : "none"),
+      template_provider: step.template_provider ?? null,
+      template_status: step.template_status ?? null,
+      template_requested_category: step.template_requested_category ?? null,
+      template_provider_category: step.template_provider_category ?? null,
       gupshup_mode:
         step.gupshup_template_id || step.gupshup_template_name
           ? "template"
@@ -2643,6 +2867,11 @@ export function AutomationMessageModal({
                           label: "Agenda",
                           disabled: false,
                         },
+                        {
+                          value: "lead_webhook",
+                          label: "Lead webhook",
+                          disabled: false,
+                        },
                       ].map((option) => {
                         const selected =
                           journeyForm.entry_source === option.value;
@@ -2734,6 +2963,29 @@ export function AutomationMessageModal({
                           </SelectContent>
                         </Select>
                       </div>
+                    </div>
+                  ) : null}
+
+                  {journeyForm.entry_source === "lead_webhook" ? (
+                    <div className="space-y-2">
+                      <Label className="text-[var(--color-gray-600)]">Conexao de entrada</Label>
+                      <Select
+                        value={journeyForm.lead_webhook_connection_id}
+                        onValueChange={(value) => handleJourneyFieldChange("lead_webhook_connection_id", value)}
+                        disabled={!journeyForm.instance_name || connectionsQuery.isLoading}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={connectionsQuery.isLoading ? "Carregando conexoes..." : "Selecione a conexao"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {webhookConnections.map((connection) => (
+                            <SelectItem key={connection.id} value={connection.id}>{connection.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-[var(--color-gray-500)]">
+                        A instancia da jornada continua definindo agente, provedor e remetente.
+                      </p>
                     </div>
                   ) : null}
 
@@ -3237,6 +3489,8 @@ export function AutomationMessageModal({
                   mediaAssetsLoading={mediaAssetsLoading}
                   pendingMediaFile={pendingMediaFile}
                   onPendingMediaFileChange={setPendingMediaFile}
+                  webhookMediaAccepted={selectedWebhookConnection?.acceptMedia === true}
+                  onWebhookMediaConsentRequired={() => setMediaConsentOpen(true)}
                 />
               </TabsContent>
 
@@ -3298,6 +3552,50 @@ export function AutomationMessageModal({
             Fechar
           </Button>
         </DialogFooter>
+        <AlertDialog open={mediaConsentOpen} onOpenChange={setMediaConsentOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Ativar recebimento de midia?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Esta conexao ainda nao aceita imagens. A URL sera validada na entrada e novamente antes do envio.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="flex-wrap">
+              <AlertDialogCancel disabled={updatingMediaConsent}>Cancelar</AlertDialogCancel>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={updatingMediaConsent}
+                onClick={() => {
+                  handleStepFormChange((previous) => ({ ...previous, media_source: "none", content_mode: "text" }));
+                  setMediaConsentOpen(false);
+                }}
+              >
+                Continuar sem midia
+              </Button>
+              <AlertDialogAction
+                disabled={updatingMediaConsent || !selectedWebhookConnection}
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (!selectedWebhookConnection) return;
+                  setUpdatingMediaConsent(true);
+                  void updateLeadWebhookConnection(selectedWebhookConnection.id, { acceptMedia: true })
+                    .then(async () => {
+                      await connectionsQuery.refetch();
+                      handleStepFormChange((previous) => ({
+                        ...previous, media_source: "webhook", content_mode: "media", media_kind: "image",
+                      }));
+                      setMediaConsentOpen(false);
+                    })
+                    .catch((error) => toast.error("Nao foi possivel ativar midia", { description: getErrorDescription(error) }))
+                    .finally(() => setUpdatingMediaConsent(false));
+                }}
+              >
+                {updatingMediaConsent ? "Ativando..." : "Ativar recebimento de midia"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

@@ -16,6 +16,8 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signUp: (email: string, password: string, name: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<{ error: any }>;
+  updatePassword: (newPassword: string) => Promise<{ error: any }>;
   isPendingApproval: boolean;
 }
 
@@ -169,6 +171,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error };
   };
 
+  const requestPasswordReset = async (email: string) => {
+    const redirectUrl = `${window.location.origin}/auth/reset-password`;
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
+    if (error) toast.error("Erro ao solicitar redefinição", { description: error.message });
+    return { error };
+  };
+
+  const updatePassword = async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) toast.error("Erro ao redefinir senha", { description: error.message });
+    else toast.success("Senha redefinida com sucesso!");
+    return { error };
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
     claimsRefreshAttemptRef.current = null;
@@ -183,7 +199,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, session, userRole, acesId, profileName, loading, signIn, signUp, signOut, isPendingApproval }}
+      value={{
+        user,
+        session,
+        userRole,
+        acesId,
+        profileName,
+        loading,
+        signIn,
+        signUp,
+        signOut,
+        requestPasswordReset,
+        updatePassword,
+        isPendingApproval,
+      }}
     >
       {children}
     </AuthContext.Provider>

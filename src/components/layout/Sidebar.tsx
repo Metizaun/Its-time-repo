@@ -181,7 +181,17 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
       >
         <div className="sidebar-header">
           <div>
-            <h1 className="sidebar-brand">Crm Its time</h1>
+            <h1 className="sidebar-brand">
+              <img
+                src="/assets/brand/its-time-mark-transparent-clean.png"
+                alt=""
+                aria-hidden="true"
+                className="sidebar-brand__mark"
+                width={40}
+                height={40}
+              />
+              <span>Crm Its time</span>
+            </h1>
             <p className="sidebar-subtitle">Gestao de Leads</p>
           </div>
 

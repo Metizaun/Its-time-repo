@@ -14,9 +14,11 @@ export type SendTemplateInput = {
   acesId: number;
   instanceName: string;
   to: string;
+  templateId?: string;
   templateName: string;
   languageCode: string;
-  parameters: string[];
+  bodyParameters: string[];
+  headerMedia?: { kind: "image"; url: string };
   sourceType: WhatsAppSourceType;
 };
 

@@ -113,6 +113,44 @@ test("envia texto Meta pelo phone_number_id do tenant e persiste o wamid retorna
   }
 });
 
+test("converte contrato neutro em componentes body e header da Meta", async () => {
+  const originalPost = axios.post;
+  let sentBody: any = null;
+  axios.post = (async (_url: string, body: unknown) => {
+    sentBody = body;
+    return { data: { messages: [{ id: "wamid.test" }] } };
+  }) as typeof axios.post;
+  try {
+    const provider = new MetaWhatsAppProvider({
+      mode: "live",
+      graphApiVersion: "v20.0",
+      resolveChannel: async (instanceName) => ({
+        instanceName,
+        phoneNumberId: "123",
+        accessTokenSecretRef: "META_TEST_TOKEN",
+      }),
+      resolveSecret: async () => "token",
+    });
+    await provider.sendTemplate({
+      acesId: 1,
+      instanceName: "meta-demo",
+      to: "11999999999",
+      templateId: "provider-id",
+      templateName: "retomada",
+      languageCode: "pt_BR",
+      bodyParameters: ["Mensagem criada pela IA"],
+      headerMedia: { kind: "image", url: "https://cdn.example.com/image.png" },
+      sourceType: "automation",
+    });
+    assert.deepEqual(sentBody.template.components, [
+      { type: "header", parameters: [{ type: "image", image: { link: "https://cdn.example.com/image.png" } }] },
+      { type: "body", parameters: [{ type: "text", text: "Mensagem criada pela IA" }] },
+    ]);
+  } finally {
+    axios.post = originalPost;
+  }
+});
+
 test("exige tenant para qualquer envio Meta", async () => {
   let resolveCalls = 0;
   const provider = new MetaWhatsAppProvider({
