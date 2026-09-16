@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   ArrowUpRight,
-  CalendarCheck,
-  Image,
-  Route,
-  Send,
+  Cable,
+  CalendarDays,
+  Headphones,
+  MessageCircle,
+  Receipt,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  CURRENT_RELEASE_VERSION,
-  isCurrentReleasePublished,
-} from "@/lib/releaseSchedule";
 import {
   Dialog,
   DialogContent,
@@ -21,69 +16,90 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const CURRENT_VERSION = CURRENT_RELEASE_VERSION;
-const STORAGE_KEY = `its-time-seen-update-${CURRENT_VERSION.replace(".", "")}`;
+const CURRENT_VERSION = "v2.7.0";
+const RELEASE_PUBLISH_AT = Date.parse("2026-09-15T00:00:00-03:00");
+const RELEASE_URL = "https://itstime.pro/updates";
+const STORAGE_KEY = `its-time-seen-update-${CURRENT_VERSION.split(".").join("")}`;
 
 const HIGHLIGHTS = [
   [
     {
-      icon: <Send className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
-      title: "Instagram conectado ao CRM",
-      text: "Conecte sua conta profissional, receba conversas no lead e responda sem sair do fluxo comercial.",
+      icon: <MessageCircle className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
+      title: "Chat interno",
+      text: "Conversas diretas, grupos, menções, anexos e mensagens não lidas dentro do CRM.",
     },
     {
-      icon: <Image className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
-      title: "Texto, imagem e áudio",
-      text: "Envie mensagens multimídia pelo canal certo, com suporte para os formatos usados no atendimento.",
+      icon: <Receipt className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
+      title: "Cobrança independente",
+      text: "Integração RB, webhooks e importações CSV ou XLSX em uma operação mais previsível.",
     },
     {
-      icon: <ShieldCheck className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
-      title: "Histórico de conversas protegido",
-      text: "Mídias e mensagens ficam registradas no lead com conexão segura e renovação de token.",
+      icon: <CalendarDays className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
+      title: "Sincronização de agenda",
+      text: "Uma nova base para conectar agendas e sincronizar dados em duas direções.",
     },
   ],
   [
     {
-      icon: <Route className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
-      title: "Roteamento por empresa e instância",
-      text: "Cada operação continua isolada, sem misturar números, canais ou históricos entre empresas.",
+      icon: <Cable className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
+      title: "Central de conexões",
+      text: "Canais, fontes financeiras e parceiros de agenda agora fazem parte do mesmo mapa operacional.",
     },
     {
-      icon: <CalendarCheck className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
-      title: "Agenda e encaminhamento mais claros",
-      text: "Handoff e agendamento seguem o contexto correto do lead e da unidade de atendimento.",
+      icon: <Headphones className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
+      title: "Atendimento mais consistente",
+      text: "Melhorias em áudios, templates, provedores de mensagens e classificação comercial.",
     },
     {
-      icon: <Sparkles className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
-      title: "Chat mais consistente",
-      text: "Ajustes em mídias, botões, localizador de lojas e atualizações em tempo real deixam a operação mais estável.",
+      icon: <ShieldCheck className="h-5 w-5 text-[var(--color-primary-500)]" aria-hidden="true" />,
+      title: "Segurança e continuidade",
+      text: "Isolamento por empresa, auditoria, proteção de credenciais e backups verificáveis.",
     },
   ],
 ] as const;
 
 export function UpdatesModal() {
-  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(0);
 
   useEffect(() => {
-    if (!isCurrentReleasePublished()) return;
+    let timer: number | undefined;
 
-    const seen = localStorage.getItem(STORAGE_KEY);
-    if (seen !== CURRENT_VERSION) {
-      setPage(0);
-      setOpen(true);
-    }
+    const syncRelease = () => {
+      const now = Date.now();
+      if (now < RELEASE_PUBLISH_AT) {
+        timer = window.setTimeout(
+          syncRelease,
+          Math.min(RELEASE_PUBLISH_AT - now, 60_000),
+        );
+        return;
+      }
+
+      let seen: string | null = null;
+      try {
+        seen = localStorage.getItem(STORAGE_KEY);
+      } catch {
+        // Mantém o anúncio disponível quando o armazenamento do navegador estiver bloqueado.
+      }
+      if (seen !== CURRENT_VERSION) {
+        setPage(0);
+        setOpen(true);
+      }
+    };
+
+    syncRelease();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
 
   function dismiss() {
-    localStorage.setItem(STORAGE_KEY, CURRENT_VERSION);
+    try {
+      localStorage.setItem(STORAGE_KEY, CURRENT_VERSION);
+    } catch {
+      // O fechamento continua funcionando mesmo sem acesso ao armazenamento local.
+    }
     setOpen(false);
-  }
-
-  function goToUpdates() {
-    dismiss();
-    navigate("/updates");
   }
 
   return (
@@ -121,13 +137,13 @@ export function UpdatesModal() {
             <DialogHeader className="space-y-1">
               <DialogTitle className="text-lg font-extrabold leading-snug text-[var(--color-gray-900)]">
                 {page === 0
-                  ? "Conversas que chegam mais perto."
-                  : "Uma operação mais conectada."}
+                  ? "Três fluxos. Uma operação mais coordenada."
+                  : "Mais recursos. Menos complexidade."}
               </DialogTitle>
               <p className="text-xs font-normal leading-relaxed text-[var(--color-gray-500)]">
                 {page === 0
-                  ? "Instagram + Its Time CRM"
-                  : "Tudo o que evoluiu no atendimento nas últimas semanas."}
+                  ? "Conversa, cobrança e agenda avançam sob a mesma lógica operacional."
+                  : "Conexões, atendimento e segurança sustentam a nova entrega."}
               </p>
             </DialogHeader>
           </div>
@@ -177,12 +193,14 @@ export function UpdatesModal() {
                 Agora não
               </Button>
               <Button
+                asChild
                 size="sm"
-                onClick={goToUpdates}
                 className="w-full gap-1.5 bg-[var(--color-primary-500)] text-xs font-mono font-bold text-white shadow-primary hover:bg-[var(--color-primary-600)] sm:w-auto"
               >
-                Ver atualizações
-                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+                <a href={RELEASE_URL} target="_blank" rel="noreferrer" onClick={dismiss}>
+                  Ver atualização completa
+                  <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
               </Button>
             </div>
           )}

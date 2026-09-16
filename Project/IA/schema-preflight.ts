@@ -59,6 +59,10 @@ const INTELLIGENT_COMPANY_DIRECTORY_MIGRATION =
   "supabase/migrations/20260821154844_intelligent_company_directory_v2.sql";
 const LEAD_FIRST_TOUCH_ATTRIBUTION_MIGRATION =
   "supabase/migrations/20260817205108_add_lead_first_touch_attribution.sql";
+const LEAD_WEBHOOK_MIGRATION =
+  "supabase/migrations/20260915173816_lead_webhook_connections.sql";
+const AUTOMATION_AI_WEBHOOK_MIGRATION =
+  "supabase/migrations/20260915190000_automation_ai_webhook_messages.sql";
 const COLLECTIONS_CORE_MIGRATION =
   "supabase/migrations/20260903205231_collections_core_v1.sql";
 const COLLECTIONS_HARDENING_MIGRATION =
@@ -250,6 +254,36 @@ async function validateSelectedColumns(
 ) {
   const { error } = await serviceClient.from(table).select(columns.join(",")).limit(1);
   return error ? buildSchemaFailure(label, migration, error) : null;
+}
+
+async function validateLeadWebhookRpc(serviceClient: SupabaseClient<any, any, any>) {
+  const { error } = await serviceClient.rpc("rpc_ingest_lead_webhook", {
+    p_public_id: "schema-preflight",
+    p_idempotency_key: "schema-preflight",
+    p_payload_hash: "0".repeat(64),
+    p_name: "Schema preflight",
+    p_contact_phone: "5511999999999",
+    p_email: null,
+    p_observation: null,
+    p_tags: [],
+  });
+  if (error) {
+    const normalized = normalizePostgrestError(error);
+    if (normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message)) {
+      return buildSchemaFailure("RPC de recebimento de leads por webhook", LEAD_WEBHOOK_MIGRATION, error);
+    }
+  }
+  const { error: finalizeError } = await serviceClient.rpc("rpc_finalize_lead_webhook_receipt", {
+    p_public_id: "schema-preflight",
+    p_idempotency_key: "schema-preflight",
+    p_payload_hash: "0".repeat(64),
+    p_media_snapshot: null,
+  });
+  if (!finalizeError) return null;
+  const normalized = normalizePostgrestError(finalizeError);
+  return normalized.code === "PGRST202" || /schema cache|function .* does not exist/i.test(normalized.message)
+    ? buildSchemaFailure("RPC de finalizacao do webhook e automacao", AUTOMATION_AI_WEBHOOK_MIGRATION, finalizeError)
+    : null;
 }
 
 async function validateInternalTeamChatRpcs(
@@ -1674,6 +1708,28 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateSelectedColumns(
       serviceClient,
+      "lead_webhook_connections",
+      ["id", "public_id", "aces_id", "name", "agent_id", "default_stage_id", "status", "accept_media"],
+      "crm.lead_webhook_connections",
+      LEAD_WEBHOOK_MIGRATION,
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "lead_webhook_credentials",
+      ["connection_id", "aces_id", "ciphertext", "iv", "auth_tag", "key_version", "previous_valid_until"],
+      "crm.lead_webhook_credentials",
+      LEAD_WEBHOOK_MIGRATION,
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "lead_webhook_receipts",
+      ["id", "connection_id", "aces_id", "idempotency_key", "payload_hash", "lead_id", "agent_id", "response", "media_snapshot"],
+      "crm.lead_webhook_receipts",
+      LEAD_WEBHOOK_MIGRATION,
+    ),
+    validateLeadWebhookRpc(serviceClient),
+    validateSelectedColumns(
+      serviceClient,
       "pipelines",
       ["id", "ai_reply_enabled", "ai_classification_enabled", "classification_auto_apply_threshold"],
       "crm.pipelines (controles independentes de IA)",
@@ -1985,9 +2041,9 @@ export async function assertRuntimeSchemaCompatibility(
     validateSelectedColumns(
       serviceClient,
       "automation_funnels",
-      ["id", "entry_source"],
+      ["id", "entry_source", "lead_webhook_connection_id"],
       "crm.automation_funnels.entry_source",
-      RB_BILLING_REFACTOR_MIGRATION
+      AUTOMATION_AI_WEBHOOK_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,
@@ -1995,6 +2051,20 @@ export async function assertRuntimeSchemaCompatibility(
       ["id", "rb_message_kind", "rb_days_offset", "rb_payment_type_ids"],
       "crm.automation_steps (RB message config)",
       RB_BILLING_REFACTOR_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_steps",
+      ["id", "generation_mode", "ai_instruction", "ai_output_max_chars", "media_source", "template_variable_bindings", "template_requested_category", "template_provider_category"],
+      "crm.automation_steps (mensagens por IA e bindings)",
+      AUTOMATION_AI_WEBHOOK_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "automation_executions",
+      ["id", "source_webhook_receipt_id", "generation_mode_snapshot", "agent_id_snapshot", "ai_generated_text", "ai_provider", "ai_model", "ai_usage_event_id", "ai_generated_at"],
+      "crm.automation_executions (snapshots de IA e webhook)",
+      AUTOMATION_AI_WEBHOOK_MIGRATION
     ),
     validateSelectedColumns(
       serviceClient,

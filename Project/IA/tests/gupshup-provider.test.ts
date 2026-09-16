@@ -30,7 +30,8 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
       to: "(11) 98888-7777",
       templateName: "template-id",
       languageCode: "pt_BR",
-      parameters: ["Lucas"],
+      bodyParameters: ["Lucas"],
+      headerMedia: { kind: "image", url: "https://example.com/header.png" },
       sourceType: "automation",
     });
     await provider.sendMedia({
@@ -103,7 +104,10 @@ test("usa endpoints e campos atuais da API WhatsApp Gupshup", async () => {
 
     assert.equal(calls[1]?.url, "https://api.gupshup.io/wa/api/v1/template/msg");
     const templateBody = new URLSearchParams(calls[1]?.body);
-    assert.equal(templateBody.get("message"), null);
+    assert.deepEqual(JSON.parse(templateBody.get("message") ?? "{}"), {
+      type: "image",
+      image: { link: "https://example.com/header.png" },
+    });
     assert.deepEqual(JSON.parse(templateBody.get("template") ?? "{}"), {
       id: "template-id",
       params: ["Lucas"],

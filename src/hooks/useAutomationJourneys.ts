@@ -14,6 +14,9 @@ import {
   type AutomationStep,
   type AutomationStepContentMode,
   type AutomationStepMediaKind,
+  type AutomationGenerationMode,
+  type AutomationMediaSource,
+  type AutomationTemplateVariableBinding,
   type AutomationStepRbMessageKind,
   type AutomationTriggerEventStatus,
 } from "@/lib/automation";
@@ -35,6 +38,7 @@ export interface AutomationJourneyPayload {
   daily_dispatch_weekends_enabled: boolean;
   daily_dispatch_time: string | null;
   entry_source: AutomationJourneyEntrySource;
+  lead_webhook_connection_id?: string | null;
   entry_rule: AutomationRuleNode;
   exit_rule: AutomationRuleNode;
   anchor_event: AutomationAnchorEvent;
@@ -51,6 +55,15 @@ export interface AutomationStepPayload {
   media_asset_id: string | null;
   media_kind: AutomationStepMediaKind | null;
   media_caption: string | null;
+  generation_mode?: AutomationGenerationMode;
+  ai_instruction?: string | null;
+  ai_output_max_chars?: number;
+  media_source?: AutomationMediaSource;
+  template_variable_bindings?: AutomationTemplateVariableBinding[];
+  template_provider?: "meta" | "gupshup" | null;
+  template_status?: string | null;
+  template_requested_category?: "UTILITY" | "MARKETING" | null;
+  template_provider_category?: "UTILITY" | "MARKETING" | "AUTHENTICATION" | "UNKNOWN" | null;
   gupshup_template_id: string | null;
   gupshup_template_name: string | null;
   gupshup_template_language: string | null;
@@ -83,11 +96,12 @@ function normalizeJourney(row: Record<string, unknown>) {
     daily_dispatch_weekends_enabled: Boolean(row.daily_dispatch_weekends_enabled),
     daily_dispatch_time: typeof row.daily_dispatch_time === "string" ? row.daily_dispatch_time : null,
     entry_source:
-      row.entry_source === "rb" || row.entry_source === "collection" || row.entry_source === "calendar_event"
+      row.entry_source === "rb" || row.entry_source === "collection" || row.entry_source === "calendar_event" || row.entry_source === "lead_webhook"
         ? row.entry_source
         : "conditions",
     trigger_stage_id: (row.trigger_stage_id as string | null) ?? null,
     trigger_event_status: (row.trigger_event_status as AutomationTriggerEventStatus | null) ?? null,
+    lead_webhook_connection_id: typeof row.lead_webhook_connection_id === "string" ? row.lead_webhook_connection_id : null,
     anchor_event: (row.anchor_event as AutomationAnchorEvent | null) ?? "stage_entered_at",
     reentry_mode: (row.reentry_mode as AutomationReentryMode | null) ?? "restart_on_match",
     reply_target_stage_id: (row.reply_target_stage_id as string | null) ?? null,
@@ -119,6 +133,21 @@ function normalizeStep(row: Record<string, unknown>) {
     media_asset_id: typeof row.media_asset_id === "string" ? row.media_asset_id : null,
     media_kind: mediaKind,
     media_caption: typeof row.media_caption === "string" ? row.media_caption : null,
+    generation_mode: row.generation_mode === "ai" ? "ai" : "fixed",
+    ai_instruction: typeof row.ai_instruction === "string" ? row.ai_instruction : null,
+    ai_output_max_chars: Number(row.ai_output_max_chars ?? 1024),
+    media_source: row.media_source === "webhook" ? "webhook" : row.media_source === "stored_asset" ? "stored_asset" : "none",
+    template_variable_bindings: Array.isArray(row.template_variable_bindings)
+      ? row.template_variable_bindings as AutomationTemplateVariableBinding[] : [],
+    template_provider: row.template_provider === "meta" || row.template_provider === "gupshup"
+      ? row.template_provider : null,
+    template_status: typeof row.template_status === "string" ? row.template_status : null,
+    template_requested_category: row.template_requested_category === "UTILITY" || row.template_requested_category === "MARKETING"
+      ? row.template_requested_category : null,
+    template_provider_category:
+      row.template_provider_category === "UTILITY" || row.template_provider_category === "MARKETING"
+      || row.template_provider_category === "AUTHENTICATION" || row.template_provider_category === "UNKNOWN"
+        ? row.template_provider_category : null,
     gupshup_template_id: typeof row.gupshup_template_id === "string" ? row.gupshup_template_id : null,
     gupshup_template_name: typeof row.gupshup_template_name === "string" ? row.gupshup_template_name : null,
     gupshup_template_language:
@@ -169,6 +198,10 @@ async function fetchJourneysAndSteps() {
 }
 
 async function syncJourneyRpc(funnelId: string) {
+  const { data: funnel, error: funnelError } = await supabase
+    .from("automation_funnels").select("entry_source").eq("id", funnelId).single();
+  if (funnelError) throw funnelError;
+  if (funnel.entry_source === "lead_webhook") return { skipped: true, reason: "event_driven" };
   const { data, error } = await supabase.rpc("rpc_sync_automation_funnel_v2", {
     p_funnel_id: funnelId,
   });
@@ -226,6 +259,7 @@ export function useAutomationJourneys(enabled = true) {
         .from("automation_funnels")
         .insert({
           ...payload,
+          is_active: false,
           entry_rule: serializeRuleNode(payload.entry_rule),
           exit_rule: serializeRuleNode(payload.exit_rule),
         })
@@ -242,10 +276,11 @@ export function useAutomationJourneys(enabled = true) {
 
   const updateJourneyMutation = useMutation({
     mutationFn: async (params: { journeyId: string; payload: AutomationJourneyPayload }) => {
+      const { is_active: requestedActive, ...configuration } = params.payload;
       const { data, error } = await supabase
         .from("automation_funnels")
         .update({
-          ...params.payload,
+          ...configuration,
           entry_rule: serializeRuleNode(params.payload.entry_rule),
           exit_rule: serializeRuleNode(params.payload.exit_rule),
         })
@@ -257,7 +292,12 @@ export function useAutomationJourneys(enabled = true) {
         throw error;
       }
 
-      return normalizeJourney(data as Record<string, unknown>);
+      const { data: activated, error: activationError } = await supabase.rpc(
+        "rpc_set_automation_funnel_active",
+        { p_funnel_id: params.journeyId, p_active: requestedActive, p_ack_category_change: false },
+      );
+      if (activationError) throw activationError;
+      return normalizeJourney((activated ?? data) as Record<string, unknown>);
     },
   });
 

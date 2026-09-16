@@ -132,9 +132,9 @@ export class GupshupWhatsAppProvider implements WhatsAppProvider {
 
   async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
     return this.sendTemplateMessage(input.to, {
-      id: input.templateName,
-      params: input.parameters,
-    });
+      id: input.templateId?.trim() || input.templateName,
+      params: input.bodyParameters,
+    }, input.headerMedia ? { type: "image", image: { link: input.headerMedia.url } } : undefined);
   }
 
   private async sendTemplateMessage(

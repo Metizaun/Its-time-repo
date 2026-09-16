@@ -21,6 +21,8 @@ Este Map of Content cobre todas as conexões externas do **Its Time**, incluindo
 - [[Meta API & Gupshup]]: Integração com WhatsApp Business API Oficial e Gupshup provider.
 - [[Motores de IA & Contexto-Memória]]: Prompts do modelo de linguagem, histórico de interações e function calling.
 - [[Eventos Async & Redis Queue]]: Tratamento assíncrono de mensagens e política de retry em falhas.
+- [[Agenda Universal - PRD de Implementação]]: Visão interna do contrato, autoridade da agenda e fluxo de sincronização.
+- [[Agenda Universal - Guia de Integração]]: Guia para sistemas parceiros implementarem os webhooks da Agenda Universal v1.
 
 ---
 *Retornar ao [[📌 MOC - Visão Geral do App]]*

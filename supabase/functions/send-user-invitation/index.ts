@@ -19,6 +19,39 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
   try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const authHeader = req.headers.get("Authorization");
+
+    if (!authHeader) {
+      return new Response(JSON.stringify({ success: false, error: "Usuário não autenticado" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }});
+    }
+
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+
+    if (userError || !user) {
+      return new Response(JSON.stringify({ success: false, error: "Usuário não autenticado" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }});
+    }
+
+    const { data: crmUser, error: crmUserError } = await supabaseAdmin
+      .schema("crm")
+      .from("users")
+      .select("id, aces_id, role")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+
+    if (crmUserError || !crmUser || crmUser.role !== "ADMIN") {
+      return new Response(JSON.stringify({ success: false, error: "Apenas administradores podem enviar convites" }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }});
+    }
+
     // Try to parse JSON safely
     let body: any = null;
     const ct = req.headers.get("content-type") ?? "";
@@ -40,18 +73,14 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ success: false, error: "Missing email or invitationId", received: { email, invitationId } }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }});
     }
 
-    const supabaseAdmin = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
-
     // Buscar convite
     const { data: invitation, error: invitationError } = await supabaseAdmin
       .schema("crm")
       .from("user_invitations")
       .select("*")
       .eq("id", invitationId)
+      .eq("aces_id", crmUser.aces_id)
+      .eq("invited_by_user_id", crmUser.id)
       .single();
 
     if (invitationError || !invitation) {
@@ -73,7 +102,7 @@ Deno.serve(async (req) => {
 
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
       data: { name: invitation.name, role: invitation.role, aces_id: invitation.aces_id, invitation_id: invitationId },
-      redirectTo: `${Deno.env.get("SITE_URL") ?? ""}/auth/callback`,
+      redirectTo: `${Deno.env.get("SITE_URL") ?? ""}/auth`,
     });
 
     if (authError) {

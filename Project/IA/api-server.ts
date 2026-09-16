@@ -45,6 +45,7 @@ import { CollectionOnboardingError } from "./collections/collection-onboarding-s
 import { AgendaAdminError, AgendaConnectionService } from "./agenda-sync/connection-service.js";
 import { AgendaInboundError, AgendaInboundService } from "./agenda-sync/inbound-service.js";
 import { requireRbBillingAdmin } from "./rb-billing-authorization.js";
+import { LeadWebhookError, LeadWebhookService } from "./lead-webhook-service.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -583,6 +584,19 @@ const agendaConnectionService = new AgendaConnectionService({
 });
 const agendaInboundService = new AgendaInboundService(agendaConnectionService);
 
+const leadWebhookService = new LeadWebhookService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  publicBaseUrl:
+    process.env.CRM_BACKEND_PUBLIC_URL ??
+    process.env.BACKEND_PUBLIC_URL ??
+    process.env.WEBHOOK_PUBLIC_BASE_URL ??
+    process.env.VITE_CRM_BACKEND_URL ??
+    process.env.CRM_BACKEND_URL,
+  encryptionKey: process.env.LEAD_WEBHOOK_SECRETS_ENCRYPTION_KEY,
+  encryptionKeyVersion: process.env.LEAD_WEBHOOK_SECRETS_ENCRYPTION_KEY_VERSION,
+});
+
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -645,6 +659,49 @@ app.post(
     }
   }),
 );
+app.post(
+  "/api/integrations/leads/v1/connections/:publicConnectionId/events",
+  express.raw({ type: "application/json", limit: "1mb" }),
+  asyncHandler(async (req, res) => {
+    if (!req.is("application/json")) {
+      res.status(415).json({ error: "Content-Type deve ser application/json", code: "unsupported_media_type" });
+      return;
+    }
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "Corpo JSON obrigatorio", code: "invalid_request" });
+      return;
+    }
+
+    try {
+      const result = await leadWebhookService.processWebhook({
+        publicConnectionId: getSingleParam(req.params.publicConnectionId),
+        rawBody: req.body,
+        idempotencyKey: req.header("idempotency-key"),
+        timestamp: req.header("x-leads-timestamp"),
+        signature: req.header("x-leads-signature"),
+      });
+      console.info("[lead-webhook] processed", {
+        publicConnectionId: getSingleParam(req.params.publicConnectionId),
+        status: result.status,
+        duplicate: result.body.duplicate === true,
+        leadId: result.body.lead_id ?? null,
+      });
+      res.status(result.status).json(result.body);
+    } catch (error) {
+      if (error instanceof LeadWebhookError) {
+        console.warn("[lead-webhook] rejected", {
+          publicConnectionId: getSingleParam(req.params.publicConnectionId),
+          status: error.status,
+          code: error.code,
+        });
+        if (error.status === 429) res.setHeader("Retry-After", "60");
+        res.status(error.status).json({ error: error.message, code: error.code });
+        return;
+      }
+      throw error;
+    }
+  }),
+);
 app.use("/webhook/login", express.urlencoded({ extended: false }));
 app.use("/webhook/image", (req, res, next) => {
   const contentLength = Number(req.headers["content-length"] ?? 0);
@@ -686,7 +743,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Idempotency-Key, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256, x-collection-timestamp, x-collection-signature, x-agenda-timestamp, x-agenda-signature",
+    "Content-Type, Authorization, Idempotency-Key, x-webhook-secret, x-evolution-secret, x-gupshup-secret, x-hub-signature-256, x-collection-timestamp, x-collection-signature, x-agenda-timestamp, x-agenda-signature, x-leads-timestamp, x-leads-signature",
   );
   res.setHeader(
     "Access-Control-Allow-Methods",
@@ -1124,6 +1181,25 @@ function requireAgendaAdmin(req: AuthenticatedRequest) {
   return context;
 }
 
+function requireLeadWebhookAdmin(req: AuthenticatedRequest) {
+  const context = req.authContext!;
+  if (context.role !== "ADMIN") {
+    throw new HttpError(403, "Apenas administradores podem configurar a entrada de leads");
+  }
+  return context;
+}
+
+async function leadWebhookAdminCall<T>(operation: () => Promise<T>) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof LeadWebhookError) {
+      throw new HttpError(error.status, error.message, { code: error.code });
+    }
+    throw error;
+  }
+}
+
 function asAgendaHttpError(error: unknown) {
   if (error instanceof AgendaAdminError) {
     return new HttpError(error.status, error.message, { code: error.code });
@@ -1159,6 +1235,65 @@ function parseAgendaConnectionInput(body: unknown, partial = false) {
 }
 
 const agendaAdminBase = "/api/admin/integrations/agenda/v1/connections";
+const leadWebhookAdminBase = "/api/admin/integrations/leads";
+
+app.get(
+  leadWebhookAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireLeadWebhookAdmin(req);
+    const connections = await leadWebhookAdminCall(() => leadWebhookService.listConnections(context.acesId));
+    res.json({ success: true, connections });
+  }),
+);
+
+app.post(
+  leadWebhookAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireLeadWebhookAdmin(req);
+    const result = await leadWebhookAdminCall(() => leadWebhookService.createConnection(
+      context.acesId,
+      context.crmUserId,
+      asRecord(req.body),
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.status(201).json({
+      success: true,
+      connection: result.connection,
+      secret: result.secret,
+      displayedOnce: true,
+    });
+  }),
+);
+
+app.patch(
+  `${leadWebhookAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireLeadWebhookAdmin(req);
+    const connection = await leadWebhookAdminCall(() => leadWebhookService.updateConnection(
+      context.acesId,
+      getSingleParam(req.params.id),
+      asRecord(req.body),
+    ));
+    res.json({ success: true, connection });
+  }),
+);
+
+app.post(
+  `${leadWebhookAdminBase}/:id/rotate-secret`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireLeadWebhookAdmin(req);
+    const result = await leadWebhookAdminCall(() => leadWebhookService.rotateSecret(
+      context.acesId,
+      getSingleParam(req.params.id),
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, secret: result.secret, displayedOnce: true, previousSecretValidForHours: result.previousSecretValidForHours });
+  }),
+);
 
 app.get(
   `${agendaAdminBase}/scope-options`,

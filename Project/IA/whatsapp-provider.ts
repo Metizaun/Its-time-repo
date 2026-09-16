@@ -12,9 +12,11 @@ export type SendTextInput = {
 export type SendTemplateInput = {
   instanceName: string;
   to: string;
+  templateId?: string;
   templateName: string;
   languageCode: string;
-  parameters: string[];
+  bodyParameters: string[];
+  headerMedia?: { kind: "image"; url: string };
   sourceType: WhatsAppSourceType;
 };
 

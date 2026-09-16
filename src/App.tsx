@@ -26,6 +26,7 @@ const Agentes = lazy(() => import("./pages/Agentes"));
 const Conexoes = lazy(() => import("./pages/Conexoes"));
 const Collections = lazy(() => import("./pages/Collections"));
 const Auth = lazy(() => import("./pages/Auth"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const Updates = lazy(() => import("./pages/Updates"));
 const AgendaGuide = lazy(() => import("./pages/AgendaGuide"));
 const LegalDocument = lazy(() => import("./pages/LegalDocument"));
@@ -53,6 +54,7 @@ const App = () => (
               >
                 <Routes>
                   <Route path="/auth" element={<Auth />} />
+                  <Route path="/auth/reset-password" element={<ResetPassword />} />
                   <Route path="/updates" element={<Updates />} />
                   <Route path="/guia-agenda" element={<AgendaGuide />} />
                   <Route path="/guia/empresa-agenda" element={<AgendaGuide />} />
