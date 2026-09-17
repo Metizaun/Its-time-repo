@@ -4219,6 +4219,7 @@ export class AgentManager {
       const subagent = data as AgentRow;
       await this.refreshDerivedAgentState(await this.attachInheritedChannel(subagent, parent));
       await this.ensureCalendarToolBinding(subagent.id, subagent.aces_id);
+      await this.ensureStoreLocatorToolBinding(subagent.id, subagent.aces_id);
       return subagent;
     }
 
@@ -4279,6 +4280,7 @@ export class AgentManager {
       }
       await this.syncMissingStageRules(agent);
       await this.syncPlatformToolReadiness(agent.id, agent.aces_id);
+      await this.ensureStoreLocatorToolBinding(agent.id, agent.aces_id);
       return agent;
     }
 
@@ -4319,6 +4321,7 @@ export class AgentManager {
     const agent = data as AgentRow;
     await this.refreshDerivedAgentState(agent);
     await this.ensureCalendarToolBinding(agent.id, agent.aces_id);
+    await this.ensureStoreLocatorToolBinding(agent.id, agent.aces_id);
     return agent;
   }
 
@@ -4405,6 +4408,33 @@ export class AgentManager {
 
     if (error) {
       throw new HttpError(500, "Nao foi possivel preparar a Tool Agenda", error);
+    }
+  }
+
+  private async ensureStoreLocatorToolBinding(agentId: string, acesId: number) {
+    const { error } = await this.agentsClient
+      .from("agent_tools")
+      .upsert(
+        {
+          aces_id: acesId,
+          agent_id: agentId,
+          tool_key: "store_locator",
+          tool_version: 1,
+          is_enabled: false,
+          readiness: "needs_config",
+          config: {
+            candidateLimit: 5,
+            routeCacheMinutes: 30,
+            travelMode: "DRIVE",
+            locationRetentionMonths: 12,
+            allowedCompanyIds: [],
+          },
+        },
+        { onConflict: "agent_id,tool_key", ignoreDuplicates: true },
+      );
+
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel preparar a Tool Busca de filiais", error);
     }
   }
 
@@ -4645,6 +4675,28 @@ export class AgentManager {
       input.config !== undefined
         ? { ...asRecord(current.config), ...input.config }
         : asRecord(current.config);
+    if (toolKey === "store_locator" && input.config !== undefined) {
+      const rawIds = Array.isArray(nextConfig.allowedCompanyIds) ? nextConfig.allowedCompanyIds : [];
+      const ids = rawIds.filter((id): id is string => typeof id === "string");
+      if (ids.length !== rawIds.length || ids.some((id) => !isUuid(id))) {
+        throw new HttpError(422, "allowedCompanyIds deve ser uma lista de UUIDs");
+      }
+      const uniqueIds = [...new Set(ids)];
+      if (uniqueIds.length > 0) {
+        const { count, error: companyCountError } = await this.serviceClient
+          .from("empresas")
+          .select("id", { count: "exact", head: true })
+          .eq("aces_id", context.acesId)
+          .in("id", uniqueIds);
+        if (companyCountError) {
+          throw new HttpError(500, "Nao foi possivel validar as empresas selecionadas", companyCountError);
+        }
+        if (Number(count ?? 0) !== uniqueIds.length) {
+          throw new HttpError(422, "Uma ou mais empresas nao pertencem a esta conta");
+        }
+      }
+      nextConfig.allowedCompanyIds = uniqueIds;
+    }
     if (toolKey === "ai_audio") {
       const voiceId = asString(nextConfig.voiceId);
       if (input.config !== undefined && voiceId) await this.validateElevenLabsVoice(voiceId);
@@ -10944,13 +10996,31 @@ export class AgentManager {
     throw lastError instanceof Error ? lastError : new Error(`Falha persistente ao executar ${label}`);
   }
 
+  private async getStoreLocatorAllowedCompanyIds(agentId: string, acesId: number): Promise<string[]> {
+    const { data, error } = await this.agentsClient
+      .from("agent_tools")
+      .select("config")
+      .eq("agent_id", agentId)
+      .eq("aces_id", acesId)
+      .eq("tool_key", "store_locator")
+      .maybeSingle();
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel validar as empresas permitidas para o agente", error);
+    }
+    const configured = asRecord(data?.config).allowedCompanyIds;
+    if (!Array.isArray(configured)) return [];
+    return configured.filter((id): id is string => typeof id === "string" && isUuid(id));
+  }
+
   private async queryCompanyDirectory(params: {
     acesId: number;
     companyQuery: string;
     serviceQuery: string | null;
     professionalQuery: string | null;
     requireCalendar: boolean;
+    allowedCompanyIds: string[];
   }) {
+    if (params.allowedCompanyIds.length === 0) return [];
     return this.retryAgendaRead("diretorio de empresas", async () => {
       const v2 = await this.serviceClient.rpc("lookup_company_directory_v2", {
         p_query: params.companyQuery,
@@ -10959,6 +11029,7 @@ export class AgentManager {
         p_limit: 4,
         p_aces_id: params.acesId,
         p_require_calendar: params.requireCalendar,
+        p_allowed_company_ids: params.allowedCompanyIds,
       });
       const v2Unavailable = Boolean(
         v2.error
@@ -10979,6 +11050,7 @@ export class AgentManager {
         p_professional_query: params.professionalQuery,
         p_limit: 4,
         p_aces_id: params.acesId,
+        p_allowed_company_ids: params.allowedCompanyIds,
       });
       if (legacy.error) {
         throw buildSupabaseOperationError(legacy.error, "Nao foi possivel consultar as empresas");
@@ -10996,6 +11068,7 @@ export class AgentManager {
     serviceQuery: string | null;
     professionalQuery: string | null;
     requireCalendar: boolean;
+    allowedCompanyIds: string[];
   }) {
     const attempts = buildCompanyLookupAttempts(
       params.companyQuery,
@@ -11013,6 +11086,7 @@ export class AgentManager {
         serviceQuery: attempt.serviceQuery,
         professionalQuery: attempt.professionalQuery,
         requireCalendar: params.requireCalendar,
+        allowedCompanyIds: params.allowedCompanyIds,
       });
       for (const match of matches) {
         const companyId = asString(match.company_id);
@@ -11393,6 +11467,7 @@ export class AgentManager {
     if (params.request.intent === "none") return result("ignored", "Nenhuma acao de agenda identificada.");
 
     try {
+      const allowedCompanyIds = await this.getStoreLocatorAllowedCompanyIds(params.agent.id, params.agent.aces_id);
       const pendingCompanyHypothesis = context.selectedOption?.kind === "company"
         ? context.selectedOption
         : null;
@@ -11416,6 +11491,7 @@ export class AgentManager {
           serviceQuery: context.serviceQuery,
           professionalQuery: context.professionalQuery,
           requireCalendar,
+          allowedCompanyIds,
         });
         await this.enqueueBiEvent({
           acesId: params.agent.aces_id,
@@ -11443,6 +11519,7 @@ export class AgentManager {
             serviceQuery: null,
             professionalQuery: null,
             requireCalendar,
+            allowedCompanyIds,
           });
           const options = availableCompanies.slice(0, 4).map((match, index): AgendaPresentedOption => ({
             reference: String(index + 1),
@@ -11480,6 +11557,12 @@ export class AgentManager {
         company = normalizeAgendaCompany(top);
         context.companyId = String(top.company_id);
         context.companyQuery = asString(top.trade_name) ?? directoryCompanyQuery;
+      } else if (context.companyId && !allowedCompanyIds.includes(context.companyId)) {
+        // Empresa resolvida em um turno anterior deixou de estar na lista permitida do agente
+        // (ex.: configuracao mudou entre conversas) - descarta e deixa o fluxo abaixo reapresentar
+        // apenas empresas validas, em vez de reusar um id de empresa proibida.
+        context.companyId = null;
+        context.companyQuery = null;
       } else if (context.companyId) {
         const companyRow = await this.retryAgendaRead("dados oficiais da empresa", async () => {
           const { data, error } = await this.serviceClient
@@ -11508,6 +11591,7 @@ export class AgentManager {
           serviceQuery: null,
           professionalQuery: null,
           requireCalendar: params.request.intent !== "company_info",
+          allowedCompanyIds,
         });
         if (companies?.length) {
           const options = companies.slice(0, 4).map((item, index): AgendaPresentedOption => ({
