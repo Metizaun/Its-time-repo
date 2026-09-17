@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -67,6 +67,11 @@ type SecretReveal = {
   description: string;
 };
 
+type LeadWebhookConnectionsProps = {
+  mode?: "section" | "panel";
+  createOnMount?: boolean;
+};
+
 const emptyEditor: EditorState = {
   id: null,
   name: "",
@@ -90,7 +95,10 @@ async function copyText(value: string, successMessage: string) {
   }
 }
 
-export function LeadWebhookConnections() {
+export function LeadWebhookConnections({
+  mode = "section",
+  createOnMount = false,
+}: LeadWebhookConnectionsProps) {
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const { agents, loading: agentsLoading } = useAgents();
@@ -101,6 +109,7 @@ export function LeadWebhookConnections() {
   const [busyConnectionId, setBusyConnectionId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [secretReveal, setSecretReveal] = useState<SecretReveal | null>(null);
+  const initialCreateHandled = useRef(false);
 
   const connectionsQuery = useQuery({
     queryKey: ["lead-webhook-connections"],
@@ -133,6 +142,35 @@ export function LeadWebhookConnections() {
     });
     setEditorOpen(true);
   };
+
+  useEffect(() => {
+    if (
+      mode !== "panel" ||
+      !createOnMount ||
+      initialCreateHandled.current ||
+      editorOpen ||
+      connectionsQuery.isLoading ||
+      connectionsQuery.isError ||
+      connectionsQuery.data?.length
+    ) {
+      return;
+    }
+    initialCreateHandled.current = true;
+    setFormError(null);
+    setEditor({
+      ...emptyEditor,
+      agentId: availableAgents.length === 1 ? availableAgents[0].id : "",
+    });
+    setEditorOpen(true);
+  }, [
+    availableAgents,
+    connectionsQuery.data?.length,
+    connectionsQuery.isError,
+    connectionsQuery.isLoading,
+    createOnMount,
+    editorOpen,
+    mode,
+  ]);
 
   const openEdit = (connection: LeadWebhookConnection) => {
     setFormError(null);
@@ -233,7 +271,10 @@ export function LeadWebhookConnections() {
   };
 
   return (
-    <section className="mt-8 space-y-4" aria-labelledby="lead-webhook-title">
+    <section
+      className={mode === "panel" ? "space-y-4" : "mt-8 space-y-4"}
+      aria-labelledby="lead-webhook-title"
+    >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-primary-600)]">

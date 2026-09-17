@@ -652,7 +652,7 @@ BEGIN
           OR (step.generation_mode = 'ai' AND (
             SELECT count(*) FROM jsonb_array_elements(step.template_variable_bindings) binding
             WHERE binding->>'source' = 'ai'
-          )) <> 1
+          )) = 0
         )
     ) THEN RAISE EXCEPTION 'AUTOMATION_TEMPLATE_BINDINGS_INVALID'; END IF;
     IF p_ack_category_change THEN

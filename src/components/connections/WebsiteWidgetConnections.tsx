@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -81,7 +81,13 @@ type InstallReveal = {
   description: string;
 };
 
+type WebsiteWidgetConnectionsProps = {
+  mode?: "section" | "panel";
+  createOnMount?: boolean;
+};
+
 const DEFAULT_COLOR = "#1f6feb";
+const DEFAULT_AVATAR_URL = "/widget-assets/nya-avatar.png";
 
 const emptyEditor: EditorState = {
   id: null,
@@ -91,7 +97,7 @@ const emptyEditor: EditorState = {
   welcomeMessage: "",
   color: DEFAULT_COLOR,
   displayName: "",
-  avatarUrl: "",
+  avatarUrl: DEFAULT_AVATAR_URL,
   footerText: "",
   footerUrl: "",
 };
@@ -123,7 +129,10 @@ async function copyText(value: string, successMessage: string) {
   }
 }
 
-export function WebsiteWidgetConnections() {
+export function WebsiteWidgetConnections({
+  mode = "section",
+  createOnMount = false,
+}: WebsiteWidgetConnectionsProps) {
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const { agents, loading: agentsLoading } = useAgents();
@@ -134,6 +143,7 @@ export function WebsiteWidgetConnections() {
   const [formError, setFormError] = useState<string | null>(null);
   const [installReveal, setInstallReveal] = useState<InstallReveal | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<WebsiteWidgetConnection | null>(null);
+  const initialCreateHandled = useRef(false);
 
   const connectionsQuery = useQuery({
     queryKey: ["website-widget-connections"],
@@ -172,6 +182,35 @@ export function WebsiteWidgetConnections() {
     setEditorOpen(true);
   };
 
+  useEffect(() => {
+    if (
+      mode !== "panel" ||
+      !createOnMount ||
+      initialCreateHandled.current ||
+      editorOpen ||
+      connectionsQuery.isLoading ||
+      connectionsQuery.isError ||
+      connectionsQuery.data?.length
+    ) {
+      return;
+    }
+    initialCreateHandled.current = true;
+    setFormError(null);
+    setEditor({
+      ...emptyEditor,
+      agentId: availableAgents.length === 1 ? availableAgents[0].id : "",
+    });
+    setEditorOpen(true);
+  }, [
+    availableAgents,
+    connectionsQuery.data?.length,
+    connectionsQuery.isError,
+    connectionsQuery.isLoading,
+    createOnMount,
+    editorOpen,
+    mode,
+  ]);
+
   const openEdit = (connection: WebsiteWidgetConnection) => {
     setFormError(null);
     setEditor({
@@ -182,7 +221,7 @@ export function WebsiteWidgetConnections() {
       welcomeMessage: connection.welcomeMessage ?? "",
       color: themeValue(connection, "color", DEFAULT_COLOR),
       displayName: themeValue(connection, "agentName"),
-      avatarUrl: themeValue(connection, "avatarUrl"),
+      avatarUrl: themeValue(connection, "avatarUrl", DEFAULT_AVATAR_URL),
       footerText: themeValue(connection, "footerText"),
       footerUrl: themeValue(connection, "footerUrl"),
     });
@@ -296,7 +335,10 @@ export function WebsiteWidgetConnections() {
   };
 
   return (
-    <section className="mt-8 space-y-4" aria-labelledby="website-widget-title">
+    <section
+      className={mode === "panel" ? "space-y-4" : "mt-8 space-y-4"}
+      aria-labelledby="website-widget-title"
+    >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-primary-600)]">
@@ -637,7 +679,7 @@ export function WebsiteWidgetConnections() {
                       avatarUrl: event.target.value,
                     }))
                   }
-                  placeholder="/widget-assets/agente.png"
+                  placeholder={DEFAULT_AVATAR_URL}
                   disabled={saving}
                 />
               </div>

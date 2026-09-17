@@ -14426,7 +14426,7 @@ export class AgentManager {
           capturedAt: new Date().toISOString(),
         },
         Fonte: "Site",
-        Plataform: "Agente no site",
+        Plataform: "Nya",
         updated_at: new Date().toISOString(),
       })
       .eq("id", lead.id)

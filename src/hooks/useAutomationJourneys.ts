@@ -247,6 +247,10 @@ export function useAutomationJourneys(enabled = true) {
 
   const invalidateAutomationData = async () => {
     await queryClient.invalidateQueries({ queryKey: ["automation"] });
+    await queryClient.refetchQueries({
+      queryKey: ["automation", "journeys"],
+      type: "active",
+    });
   };
 
   const syncJourneyMutation = useMutation({

@@ -32,6 +32,18 @@ export type GupshupTemplateNormalized = {
   templateType: string;
 };
 
+export const LOCAL_GUPSHUP_TEST_TEMPLATES: GupshupTemplateNormalized[] = [
+  {
+    id: "local-test-approved-ai",
+    name: "teste_ia_aprovado",
+    status: "APPROVED",
+    body: "Ola {{1}}, temos uma novidade para voce: {{2}}",
+    language: "pt_BR",
+    category: "UTILITY",
+    templateType: "TEXT",
+  },
+];
+
 export const GUPSHUP_TEMPLATE_TYPES = [
   "TEXT",
   "IMAGE",

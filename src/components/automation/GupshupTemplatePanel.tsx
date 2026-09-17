@@ -16,6 +16,7 @@ import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -47,6 +48,7 @@ type GupshupTemplatePanelProps = {
   selectedTemplateId: string;
   selectedTemplateName: string;
   parametersText: string;
+  generationMode?: "fixed" | "ai";
   mediaEditor?: ReactNode;
   onTemplateChange: (template: GupshupTemplate) => void;
   onParametersTextChange: (parametersText: string) => void;
@@ -129,11 +131,15 @@ function getNumericParameterCount(body: string) {
   return indexes.length ? Math.max(...indexes) : 0;
 }
 
-function parseParameters(value: string) {
-  return value
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function parseParameters(value: string, expectedCount: number) {
+  const values = value
+    ? value.split(/\r?\n|,/).map((item) => item.trim())
+    : [];
+
+  return Array.from(
+    { length: expectedCount },
+    (_, index) => values[index] ?? "",
+  );
 }
 
 function serializeExamples(values: string[]) {
@@ -145,6 +151,7 @@ export function GupshupTemplatePanel({
   selectedTemplateId,
   selectedTemplateName,
   parametersText,
+  generationMode = "fixed",
   mediaEditor,
   onTemplateChange,
   onParametersTextChange,
@@ -192,7 +199,18 @@ export function GupshupTemplatePanel({
   const selectedParameterCount = selectedTemplate
     ? getNumericParameterCount(selectedTemplate.body)
     : 0;
-  const parameterValues = parseParameters(parametersText);
+  const parameterValues = parseParameters(parametersText, selectedParameterCount);
+  const aiParameterIndexes = useMemo(
+    () => new Set(
+      parameterValues.reduce<number[]>((indexes, value, index) => {
+        if (value.trim().toLowerCase() === "ai") {
+          indexes.push(index);
+        }
+        return indexes;
+      }, []),
+    ),
+    [parameterValues],
+  );
 
   const updateCreateForm = (next: Partial<CreateTemplateForm>) => {
     setCreateForm((current) => ({ ...current, ...next }));
@@ -215,6 +233,17 @@ export function GupshupTemplatePanel({
       (_, itemIndex) => parameterValues[itemIndex] ?? "",
     );
     nextValues[index] = value;
+    onParametersTextChange(nextValues.join("\n"));
+  };
+
+  const updateAiParameter = (index: number, checked: boolean) => {
+    const nextValues = Array.from(
+      { length: selectedParameterCount },
+      (_, itemIndex) => parameterValues[itemIndex] ?? "",
+    );
+
+    nextValues[index] = checked ? "ai" : "";
+
     onParametersTextChange(nextValues.join("\n"));
   };
 
@@ -278,9 +307,6 @@ export function GupshupTemplatePanel({
             </Button>
             <div>
               <h3 className="font-semibold text-[var(--color-gray-900)]">Novo template</h3>
-              <p className="mt-1 text-xs text-[var(--color-gray-500)]">
-                Ficará disponível após a aprovação.
-              </p>
             </div>
           </div>
         </div>
@@ -507,6 +533,27 @@ export function GupshupTemplatePanel({
 
       {selectedTemplate && selectedParameterCount > 0 ? (
         <div className="space-y-3">
+          {generationMode === "ai" ? (
+            <div className="space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-2)] p-3">
+              <div>
+                <Label>Variaveis geradas pela IA</Label>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {Array.from({ length: selectedParameterCount }, (_, index) => (
+                  <label
+                    key={index}
+                    className="flex items-center gap-2 rounded-md border border-[var(--border-default)] bg-[var(--color-surface-1)] px-3 py-2 text-sm text-[var(--color-gray-700)]"
+                  >
+                    <Checkbox
+                      checked={aiParameterIndexes.has(index)}
+                      onCheckedChange={(checked) => updateAiParameter(index, checked === true)}
+                    />
+                    Variavel {index + 1}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <Label>Variáveis do envio</Label>
           <div className="grid gap-3 sm:grid-cols-2">
             {Array.from({ length: selectedParameterCount }, (_, index) => (
@@ -519,8 +566,13 @@ export function GupshupTemplatePanel({
                 </Label>
                 <Input
                   id={`gupshup-parameter-${index}`}
-                  value={parameterValues[index] ?? ""}
+                  value={
+                    generationMode === "ai" && aiParameterIndexes.has(index)
+                      ? "Gerada pela IA"
+                      : parameterValues[index] ?? ""
+                  }
                   onChange={(event) => updateParameter(index, event.target.value)}
+                  readOnly={generationMode === "ai" && aiParameterIndexes.has(index)}
                   placeholder={index === 0 ? "{nome}" : "Valor ou variável"}
                 />
               </div>

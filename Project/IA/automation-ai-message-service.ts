@@ -129,6 +129,16 @@ export class AutomationAiMessageService {
     }
 
     try {
+      const aiBindingPositions = base.bindings
+        .filter((binding) =>
+          typeof binding === "object" && binding !== null && (binding as JsonRecord).source === "ai",
+        )
+        .map((binding) => Number((binding as JsonRecord).position))
+        .filter((position) => Number.isInteger(position) && position > 0)
+        .sort((left, right) => left - right);
+      const generationInstruction = aiBindingPositions.length > 0
+        ? `Gere somente o conteudo que sera colocado nas variaveis ${aiBindingPositions.map((position) => `{{${position}}}`).join(", ")} do template. O mesmo conteudo sera aplicado a todas as variaveis marcadas para IA. Nao repita o texto fixo do template nem inclua outras variaveis.`
+        : "Crie uma unica mensagem de WhatsApp.";
       const maxChars = Math.max(1, Math.min(4096, Number(execution.ai_output_max_chars_snapshot ?? 1024)));
       const agentId = String(execution.agent_id_snapshot ?? "");
       const [agentResult, leadResult, tagsResult, stateResult, historyResult, factsResult, answersResult] = await Promise.all([
@@ -160,7 +170,7 @@ export class AutomationAiMessageService {
 
       await requireAiBudget(this.clients.crm, input.acesId);
       const prompt = [
-        "Crie uma unica mensagem de WhatsApp. Responda somente no JSON solicitado.",
+        `${generationInstruction} Responda somente no JSON solicitado.`,
         `Limite absoluto: ${maxChars} caracteres.`,
         "INSTRUCOES CONFIAVEIS DO AGENTE:",
         clipped({ name: agentResult.data.name, personality: agentResult.data.personality_profile, systemPrompt: agentResult.data.system_prompt }),

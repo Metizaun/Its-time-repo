@@ -266,11 +266,12 @@ function createInitialStepForm(
   };
 }
 
+function parseTemplateParamSlots(value: string) {
+  return value ? value.split(/\r?\n|,/).map((item) => item.trim()) : [];
+}
+
 function parseTemplateParams(value: string) {
-  return value
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return parseTemplateParamSlots(value).filter(Boolean);
 }
 
 const TEMPLATE_BINDING_SOURCES = new Set([
@@ -278,10 +279,12 @@ const TEMPLATE_BINDING_SOURCES = new Set([
 ]);
 
 function buildAiTemplateBindings(parametersText: string): AutomationTemplateVariableBinding[] {
-  const parameters = parseTemplateParams(parametersText);
-  if (parameters.length === 0) return [{ position: 1, source: "ai" }];
+  const parameters = parseTemplateParamSlots(parametersText);
+  if (parameters.length === 0) return [];
   return parameters.map((parameter, index) => {
-    if (index === 0) return { position: 1, source: "ai" };
+    if (parameter.toLowerCase() === "ai") {
+      return { position: index + 1, source: "ai" };
+    }
     if (TEMPLATE_BINDING_SOURCES.has(parameter)) {
       return { position: index + 1, source: parameter as AutomationTemplateVariableBinding["source"] };
     }
@@ -323,6 +326,21 @@ function findAtendimentoStageId(stages: PipelineStage[]) {
   return (
     stages.find((stage) => stage.name.trim().toLowerCase() === "atendimento")
       ?.id ?? ""
+  );
+}
+
+function findDefaultTriggerStageId(
+  stages: PipelineStage[],
+  preselectedStageId: string | null,
+) {
+  if (preselectedStageId) {
+    return preselectedStageId;
+  }
+
+  return (
+    stages.find((stage) => stage.name.trim().toLowerCase() === "novo")?.id
+    ?? stages[0]?.id
+    ?? ""
   );
 }
 
@@ -476,8 +494,10 @@ function buildInitialJourneyForm(params: {
   preselectedEntrySource: AutomationJourneyEntrySource;
   preselectedInstanceName: string | null;
 }): JourneyFormState {
-  const defaultStageId =
-    params.preselectedStageId || params.stages[0]?.id || "";
+  const defaultStageId = findDefaultTriggerStageId(
+    params.stages,
+    params.preselectedStageId,
+  );
   const atendimentoStageId = findAtendimentoStageId(params.stages);
 
   if (!params.journey) {
@@ -650,6 +670,10 @@ function hasStepContent(stepForm: StepFormState) {
 }
 
 function getStepFormPreview(stepForm: StepFormState) {
+  if (stepForm.generation_mode === "ai" && stepForm.content_mode === "text") {
+    return "Mensagem gerada pela IA no momento do disparo.";
+  }
+
   if (stepForm.content_mode === "media") {
     return stepForm.media_caption.trim()
       ? getMessagePreview(stepForm.media_caption, 120)
@@ -666,6 +690,10 @@ function getStepFormPreview(stepForm: StepFormState) {
 }
 
 function getAutomationStepPreview(step: AutomationStep) {
+  if (step.generation_mode === "ai" && step.content_mode === "text") {
+    return "Mensagem gerada pela IA no momento do disparo.";
+  }
+
   if (step.content_mode === "media") {
     return step.media_caption?.trim()
       ? getMessagePreview(step.media_caption, 120)
@@ -854,7 +882,7 @@ function getStepContentError(
   if (stepForm.generation_mode === "ai" && !stepForm.ai_instruction.trim()) {
     return "Descreva o contexto e a intencao da mensagem";
   }
-  if (stepForm.content_mode === "text") {
+  if (stepForm.generation_mode !== "ai" && stepForm.content_mode === "text") {
     if (!stepForm.message_template.trim()) {
       return "Escreva a mensagem automatica";
     }
@@ -894,6 +922,32 @@ function getStepContentError(
     !stepForm.gupshup_template_name.trim()
   ) {
     return "Informe o template Gupshup aprovado para este disparo";
+  }
+
+  const usesOfficialTemplate =
+    stepForm.gupshup_mode === "template" &&
+    Boolean(
+      stepForm.gupshup_template_id.trim() || stepForm.gupshup_template_name.trim(),
+    );
+  if (usesOfficialTemplate && stepForm.generation_mode === "ai") {
+    const templateParameters = parseTemplateParamSlots(
+      stepForm.gupshup_template_params_text,
+    );
+    const aiParameters = templateParameters.filter(
+      (parameter) => parameter.toLowerCase() === "ai",
+    );
+
+    if (templateParameters.length === 0) {
+      return "Selecione a variavel do template que sera gerada pela IA";
+    }
+
+    if (templateParameters.some((parameter) => !parameter)) {
+      return "Preencha todas as variaveis do template antes de salvar";
+    }
+
+    if (aiParameters.length === 0) {
+      return "Selecione ao menos uma variavel para ser gerada pela IA";
+    }
   }
 
   if (entrySource === "rb") {
@@ -1199,7 +1253,7 @@ function AutomationMessageEditorDialog({
       gupshup_template_name: template.name,
       gupshup_template_language: template.language || "pt_BR",
       gupshup_template_params_text: previous.generation_mode === "ai" && templateParameterCount > 0
-        ? Array.from({ length: templateParameterCount }, (_, index) => index === 0 ? "ai" : "").join("\n")
+        ? Array.from({ length: templateParameterCount }, () => "").join("\n")
         : "",
       template_provider: "gupshup",
       template_status: template.status,
@@ -1341,9 +1395,6 @@ function AutomationMessageEditorDialog({
                   placeholder="Ex.: retome o contato com tom consultivo e convide o lead a responder."
                   className="min-h-[140px] resize-none"
                 />
-                <p className="text-xs text-[var(--color-gray-500)]">
-                  O texto sera criado no momento do disparo usando agente, lead, perfil e conversa. O preview e apenas uma simulacao.
-                </p>
               </div>
               {isGupshupInstance ? (
                 <div className="space-y-2 border-t border-[var(--border-default)] pt-5">
@@ -1352,6 +1403,7 @@ function AutomationMessageEditorDialog({
                     selectedTemplateId={stepForm.gupshup_template_id}
                     selectedTemplateName={stepForm.gupshup_template_name}
                     parametersText={stepForm.gupshup_template_params_text}
+                    generationMode={stepForm.generation_mode}
                     onTemplateChange={handleTemplateChange}
                     onParametersTextChange={(parametersText) =>
                       onStepFormChange((previous) => ({
@@ -1360,10 +1412,6 @@ function AutomationMessageEditorDialog({
                       }))
                     }
                   />
-                  <p className="text-xs text-[var(--color-gray-500)]">
-                    A primeira variavel recebe o texto da IA. Nas demais, use lead.name, lead.city,
-                    lead.notes, lead.source, lead.tags, webhook.media.caption ou um valor fixo.
-                  </p>
                 </div>
               ) : null}
               <div className="space-y-2">
@@ -1406,9 +1454,6 @@ function AutomationMessageEditorDialog({
                   onPendingMediaFileChange={onPendingMediaFileChange}
                 />
               ) : null}
-              <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-2)] p-3 text-sm text-[var(--color-gray-600)]">
-                Simulacao: a IA criara uma mensagem personalizada respeitando o limite de {stepForm.ai_output_max_chars} caracteres.
-              </div>
             </div>
           ) : null}
 
@@ -1686,6 +1731,7 @@ function AutomationMessageEditorDialog({
                   selectedTemplateId={stepForm.gupshup_template_id}
                   selectedTemplateName={stepForm.gupshup_template_name}
                   parametersText={stepForm.gupshup_template_params_text}
+                  generationMode={stepForm.generation_mode}
                   onTemplateChange={handleTemplateChange}
                   onParametersTextChange={(parametersText) =>
                     onStepFormChange((previous) => ({
@@ -1979,13 +2025,17 @@ export function AutomationMessageModal({
     queryFn: listLeadWebhookConnections,
     enabled: open,
   });
+  const allWebhookConnections = useMemo(
+    () => connectionsQuery.data ?? [],
+    [connectionsQuery.data],
+  );
   const webhookConnections = useMemo(
-    () => (connectionsQuery.data ?? []).filter(
+    () => allWebhookConnections.filter(
       (connection) => connection.instanceName === journeyForm.instance_name && connection.status === "active",
     ),
-    [connectionsQuery.data, journeyForm.instance_name],
+    [allWebhookConnections, journeyForm.instance_name],
   );
-  const selectedWebhookConnection = webhookConnections.find(
+  const selectedWebhookConnection = allWebhookConnections.find(
     (connection) => connection.id === journeyForm.lead_webhook_connection_id,
   ) ?? null;
 
@@ -2538,7 +2588,9 @@ export function AutomationMessageModal({
       setSavingStep(true);
 
       if (!currentJourneyId) {
-        setStepEditorOpen(false);
+        toast.error("Salve a automacao antes de salvar a primeira mensagem", {
+          description: "Use o botao Criar automacao no topo da janela.",
+        });
         return;
       }
 
@@ -2729,24 +2781,40 @@ export function AutomationMessageModal({
 
               {journeyForm.entry_source === "calendar_event" ? null : (
                 <div className="space-y-2">
-                  <Label>Etapa do Funil</Label>
-                  <Select
-                    value={journeyForm.trigger_stage_id}
-                    onValueChange={(value) =>
-                      handleJourneyFieldChange("trigger_stage_id", value)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecione a etapa" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {stages.map((stage) => (
-                        <SelectItem key={stage.id} value={stage.id}>
-                          {stage.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label>
+                    {journeyForm.entry_source === "lead_webhook"
+                      ? "Etapa de entrada do lead"
+                      : "Etapa do Funil"}
+                  </Label>
+                  {journeyForm.entry_source === "lead_webhook" ? (
+                    <div className="flex min-h-10 items-center rounded-md border border-[var(--border-input)] bg-[var(--color-surface-2)] px-3 text-sm text-[var(--color-gray-700)]">
+                      {selectedWebhookConnection?.defaultStageName ??
+                        "Definida pela conexao de entrada"}
+                    </div>
+                  ) : (
+                    <Select
+                      value={journeyForm.trigger_stage_id}
+                      onValueChange={(value) =>
+                        handleJourneyFieldChange("trigger_stage_id", value)
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione a etapa" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {stages.map((stage) => (
+                          <SelectItem key={stage.id} value={stage.id}>
+                            {stage.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {journeyForm.entry_source === "lead_webhook" ? (
+                    <p className="text-xs text-[var(--color-gray-500)]">
+                      O lead e criado nessa etapa pela conexao. A automacao sera exibida nela.
+                    </p>
+                  ) : null}
                 </div>
               )}
 

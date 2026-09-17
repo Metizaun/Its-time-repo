@@ -33,6 +33,9 @@
   var DEFAULT_FOOTER_LOGO = "/widget-assets/itstime-mark.png";
   var DEFAULT_FOOTER_BRAND = "Its Time";
   var DEFAULT_FOOTER_URL = "https://itstime.pro";
+  var DEFAULT_AVATAR_URL = "/widget-assets/nya-avatar.png";
+  var PROACTIVE_MESSAGE = "Oi! Eu sou a Nya. Posso te ajudar?";
+  var PROACTIVE_DELAY_MS = 10000;
 
   var POLL_ACTIVE_MS = 2000;
   var POLL_IDLE_MS = 6000;
@@ -55,6 +58,11 @@
     offline: false,
     pollTimer: null,
     pollBackoff: POLL_ACTIVE_MS,
+    proactiveTimer: null,
+    proactiveElapsedMs: 0,
+    proactiveStartedAt: null,
+    proactiveVisible: false,
+    proactiveDismissed: false,
     config: { welcomeMessage: "Oi! Como posso ajudar?", theme: {} },
   };
 
@@ -207,6 +215,29 @@
     return wrapper;
   }
 
+  function chatIconNode() {
+    var icon = element("span", "chat-icon");
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 3c5 0 9 3.36 9 7.5s-4 7.5-9 7.5c-.9 0-1.77-.11-2.58-.31L5 20l1.2-3.2C4.23 15.45 3 13.1 3 10.5 3 6.36 7 3 12 3z"/></svg>';
+    return icon;
+  }
+
+  function launcherVisual() {
+    var url = assetUrl(state.config.theme.avatarUrl);
+    if (!url) return chatIconNode();
+
+    var wrapper = element("span", "launcher-avatar");
+    var img = document.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.addEventListener("error", function () {
+      if (wrapper.parentNode) wrapper.replaceWith(chatIconNode());
+    });
+    wrapper.appendChild(img);
+    return wrapper;
+  }
+
   function buildFooter() {
     var theme = state.config.theme;
     var label = theme.footerText;
@@ -250,6 +281,107 @@
     return footer;
   }
 
+  function pageIsVisible() {
+    return document.visibilityState !== "hidden";
+  }
+
+  function accountProactiveTime() {
+    if (state.proactiveStartedAt === null) return;
+    state.proactiveElapsedMs += Date.now() - state.proactiveStartedAt;
+    state.proactiveStartedAt = null;
+  }
+
+  function clearProactiveTimer() {
+    if (state.proactiveTimer !== null) {
+      window.clearTimeout(state.proactiveTimer);
+      state.proactiveTimer = null;
+    }
+    accountProactiveTime();
+  }
+
+  function hideProactiveMessage(dismissed) {
+    clearProactiveTimer();
+    if (dismissed) state.proactiveDismissed = true;
+    state.proactiveVisible = false;
+    if (refs.teaser) refs.teaser.hidden = true;
+  }
+
+  function proactiveEligible() {
+    return Boolean(
+      refs.teaser &&
+      !state.open &&
+      !state.started &&
+      !state.proactiveDismissed &&
+      !state.proactiveVisible,
+    );
+  }
+
+  function showProactiveMessage() {
+    if (!proactiveEligible() || !pageIsVisible()) return;
+    state.proactiveVisible = true;
+    refs.teaser.hidden = false;
+  }
+
+  function scheduleProactiveMessage() {
+    clearProactiveTimer();
+    if (!proactiveEligible() || !pageIsVisible()) return;
+
+    var remainingMs = PROACTIVE_DELAY_MS - state.proactiveElapsedMs;
+    if (remainingMs <= 0) {
+      showProactiveMessage();
+      return;
+    }
+
+    state.proactiveStartedAt = Date.now();
+    state.proactiveTimer = window.setTimeout(function () {
+      state.proactiveTimer = null;
+      accountProactiveTime();
+      if (state.proactiveElapsedMs >= PROACTIVE_DELAY_MS) {
+        showProactiveMessage();
+      } else {
+        scheduleProactiveMessage();
+      }
+    }, remainingMs);
+  }
+
+  function handleVisibilityChange() {
+    if (!pageIsVisible()) {
+      clearProactiveTimer();
+      return;
+    }
+    scheduleProactiveMessage();
+  }
+
+  function buildProactiveTeaser() {
+    refs.teaser = element("aside", "teaser");
+    refs.teaser.setAttribute("aria-live", "polite");
+    refs.teaser.hidden = true;
+
+    var action = element("button", "teaser-action");
+    action.type = "button";
+    action.setAttribute("aria-label", "Abrir conversa com Nya");
+    action.appendChild(avatarNode("teaser"));
+    action.appendChild(element("span", "teaser-copy", PROACTIVE_MESSAGE));
+    action.addEventListener("click", function () {
+      hideProactiveMessage(true);
+      if (!state.open) toggle();
+    });
+
+    var close = element("button", "teaser-close");
+    close.type = "button";
+    close.setAttribute("aria-label", "Fechar mensagem da Nya");
+    close.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +
+      '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>';
+    close.addEventListener("click", function () {
+      hideProactiveMessage(true);
+    });
+
+    refs.teaser.appendChild(action);
+    refs.teaser.appendChild(close);
+    root.appendChild(refs.teaser);
+  }
+
   function build() {
     var host = document.createElement("div");
     host.setAttribute("data-itstime-widget", "");
@@ -265,10 +397,11 @@
     refs.launcher = element("button", "launcher");
     refs.launcher.setAttribute("type", "button");
     refs.launcher.setAttribute("aria-label", "Abrir conversa");
-    refs.launcher.innerHTML =
-      '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M12 3c5 0 9 3.36 9 7.5s-4 7.5-9 7.5c-.9 0-1.77-.11-2.58-.31L5 20l1.2-3.2C4.23 15.45 3 13.1 3 10.5 3 6.36 7 3 12 3z"/></svg>';
+    refs.launcher.appendChild(launcherVisual());
     refs.launcher.addEventListener("click", toggle);
     root.appendChild(refs.launcher);
+
+    buildProactiveTeaser();
 
     refs.panel = element("section", "panel");
     refs.panel.setAttribute("role", "dialog");
@@ -535,6 +668,7 @@
   // ------------------------------------------------------------------ control
 
   function toggle() {
+    if (!state.open) hideProactiveMessage(true);
     state.open = !state.open;
     refs.panel.hidden = !state.open;
     refs.launcher.classList.toggle("open", state.open);
@@ -547,14 +681,18 @@
   function start() {
     request("/config")
       .then(function (data) {
+        var theme = data.theme && typeof data.theme === "object" ? data.theme : {};
+        if (!theme.avatarUrl) theme.avatarUrl = DEFAULT_AVATAR_URL;
         state.config = {
           welcomeMessage: data.welcomeMessage || state.config.welcomeMessage,
-          theme: data.theme || {},
+          theme: theme,
         };
         build();
+        document.addEventListener("visibilitychange", handleVisibilityChange);
 
         var stored = loadStored();
         if (stored && stored.sessionToken) {
+          hideProactiveMessage(true);
           state.sessionToken = stored.sessionToken;
           state.cursor = stored.cursor || null;
           state.messages = Array.isArray(stored.messages) ? stored.messages : [];
@@ -563,6 +701,7 @@
           schedulePoll(POLL_ACTIVE_MS);
         } else {
           renderForm(null);
+          scheduleProactiveMessage();
         }
       })
       .catch(function () {
@@ -573,9 +712,23 @@
   var STYLES = [
     ":host{all:initial;}",
     "*{box-sizing:border-box;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;}",
-    ".launcher{position:fixed;right:24px;bottom:24px;width:58px;height:58px;border-radius:50%;border:0;background:var(--iw-accent);color:#fff;cursor:pointer;box-shadow:0 10px 30px rgba(16,24,40,.22);display:flex;align-items:center;justify-content:center;z-index:2147483000;transition:transform .15s ease;}",
+    ".launcher{position:fixed;right:24px;bottom:24px;width:58px;height:58px;padding:0;border-radius:50%;border:0;background:var(--iw-accent);color:#fff;cursor:pointer;box-shadow:0 10px 30px rgba(16,24,40,.22);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:2147483000;transition:transform .15s ease;}",
     ".launcher:hover{transform:translateY(-2px);}",
     ".launcher.open{transform:scale(.9);}",
+    ".launcher:focus-visible,.teaser-action:focus-visible,.teaser-close:focus-visible{outline:2px solid var(--iw-accent);outline-offset:3px;}",
+    ".launcher-avatar{width:48px;height:48px;border:2px solid rgba(255,255,255,.92);border-radius:50%;overflow:hidden;background:#f2f4f7;display:flex;align-items:center;justify-content:center;}",
+    ".launcher-avatar img{width:100%;height:100%;object-fit:cover;display:block;}",
+    ".chat-icon{display:flex;align-items:center;justify-content:center;}",
+    ".teaser[hidden]{display:none;}",
+    ".teaser{position:fixed;right:24px;bottom:94px;width:min(320px,calc(100vw - 32px));display:flex;align-items:center;gap:8px;padding:9px 9px 9px 10px;background:#fff;border:1px solid rgba(16,24,40,.08);border-radius:16px;box-shadow:0 14px 36px rgba(16,24,40,.16);z-index:2147483000;animation:teaser-enter .22s ease-out;}",
+    ".teaser-action{display:flex;align-items:center;gap:10px;min-width:0;flex:1;padding:3px;border:0;border-radius:12px;background:transparent;color:#1d2939;cursor:pointer;text-align:left;}",
+    ".teaser-action:hover{background:#f8fafc;}",
+    ".teaser-copy{min-width:0;font-size:14px;line-height:1.4;font-weight:600;}",
+    ".teaser-close{width:28px;height:28px;flex:none;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:8px;background:transparent;color:#98a2b3;cursor:pointer;}",
+    ".teaser-close:hover{background:#f2f4f7;color:#475467;}",
+    ".avatar-teaser{width:34px;height:34px;font-size:12px;}",
+    "@keyframes teaser-enter{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}",
+    "@media (prefers-reduced-motion:reduce){.launcher,.teaser,.teaser-action,.teaser-close{animation:none!important;transition:none!important;}.launcher:hover{transform:none;}}",
     ".panel[hidden]{display:none;}",
     ".panel{position:fixed;right:24px;bottom:96px;width:380px;max-width:calc(100vw - 32px);height:560px;max-height:calc(100vh - 130px);background:#fff;border:1px solid rgba(16,24,40,.06);border-radius:18px;box-shadow:0 24px 60px rgba(16,24,40,.18);display:flex;flex-direction:column;overflow:hidden;z-index:2147483000;}",
     ".header{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid #eef1f4;background:#fff;}",
@@ -616,7 +769,7 @@
     ".error{margin:0;font-size:13px;color:#d92d20;}",
     ".submit{background:var(--iw-accent);color:#fff;border:0;border-radius:999px;padding:12px 16px;font-size:14px;font-weight:600;cursor:pointer;}",
     ".submit[disabled]{opacity:.65;cursor:default;}",
-    "@media (max-width:440px){.panel{right:10px;left:10px;width:auto;bottom:90px;}}",
+    "@media (max-width:440px){.panel{right:10px;left:10px;width:auto;bottom:90px;}.teaser{right:10px;bottom:80px;width:auto;max-width:calc(100vw - 20px);}}",
   ].join("");
 
   if (document.readyState === "loading") {

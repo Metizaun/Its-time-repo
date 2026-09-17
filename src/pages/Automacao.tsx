@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Filter, Plus, Workflow } from "lucide-react";
 
 import { AutomationBoard } from "@/components/automation/AutomationBoard";
@@ -25,6 +26,7 @@ import { useLeads } from "@/hooks/useLeads";
 import { usePipelines } from "@/hooks/usePipelines";
 import { usePipelineStages } from "@/hooks/usePipelineStages";
 import { listAgentTools } from "@/services/agentToolsService";
+import { listLeadWebhookConnections } from "@/services/leadWebhookService";
 import { type AutomationJourneyEntrySource } from "@/lib/automation";
 
 export default function Automacao() {
@@ -47,6 +49,11 @@ export default function Automacao() {
     updateStep,
     deleteStep,
   } = useAutomationJourneys(automationEnabled);
+  const leadWebhookConnectionsQuery = useQuery({
+    queryKey: ["lead-webhook-connections"],
+    queryFn: listLeadWebhookConnections,
+    enabled: automationEnabled,
+  });
 
   const [instanceFilter, setInstanceFilter] = useState<string>("all");
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
@@ -63,19 +70,41 @@ export default function Automacao() {
   const { stages, loading: loadingStages } = usePipelineStages(effectivePipelineId || null);
   const stageIdsInPipeline = useMemo(() => new Set(stages.map((stage) => stage.id)), [stages]);
 
-  const normalizedStageLookup = useMemo(() => {
-    return new Map(stages.map((stage) => [stage.name.trim().toLowerCase(), stage]));
-  }, [stages]);
+  const webhookStageByConnectionId = useMemo(
+    () => new Map(
+      (leadWebhookConnectionsQuery.data ?? [])
+        .filter((connection) => Boolean(connection.defaultStageId))
+        .map((connection) => [connection.id, connection.defaultStageId as string]),
+    ),
+    [leadWebhookConnectionsQuery.data],
+  );
+
+  const boardJourneys = useMemo(
+    () => journeys.map((journey) => {
+      if (journey.entry_source !== "lead_webhook" || journey.trigger_stage_id) {
+        return journey;
+      }
+
+      const webhookStageId = journey.lead_webhook_connection_id
+        ? webhookStageByConnectionId.get(journey.lead_webhook_connection_id)
+        : null;
+
+      return webhookStageId
+        ? { ...journey, trigger_stage_id: webhookStageId }
+        : journey;
+    }),
+    [journeys, webhookStageByConnectionId],
+  );
 
   const filteredJourneys = useMemo(() => {
-    return journeys.filter((journey) => {
+    return boardJourneys.filter((journey) => {
       const matchesInstance = instanceFilter === "all" || journey.instance_name === instanceFilter;
       const matchesPipeline =
         !effectivePipelineId || !journey.trigger_stage_id || stageIdsInPipeline.has(journey.trigger_stage_id);
 
       return matchesInstance && matchesPipeline;
     });
-  }, [effectivePipelineId, instanceFilter, journeys, stageIdsInPipeline]);
+  }, [boardJourneys, effectivePipelineId, instanceFilter, stageIdsInPipeline]);
 
   const selectedJourney = useMemo(
     () => journeys.find((journey) => journey.id === selectedJourneyId) || null,
@@ -178,7 +207,7 @@ export default function Automacao() {
     setAutomationModalOpen(true);
   };
 
-  const isLoading = loadingPipelines || loadingStages || loadingInstances || loadingJourneys || loadingCatalog;
+  const isLoading = loadingPipelines || loadingStages || loadingInstances || loadingJourneys || loadingCatalog || leadWebhookConnectionsQuery.isLoading;
 
   return (
     <div className="space-y-6">

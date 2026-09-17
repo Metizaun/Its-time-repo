@@ -41,6 +41,11 @@ export function AutomationBoard({
   const calendarJourneys = sortJourneysForBoard(
     journeys.filter((journey) => journey.entry_source === "calendar_event")
   );
+  const otherJourneys = sortJourneysForBoard(
+    journeys.filter(
+      (journey) => !journey.trigger_stage_id && journey.entry_source !== "calendar_event"
+    )
+  );
 
   return (
     <div className="rounded-[28px] border bg-background p-4 shadow-sm">
@@ -70,6 +75,18 @@ export function AutomationBoard({
             onCreate={onCreateCalendar}
             onEdit={onEdit}
           />
+
+          {otherJourneys.length > 0 ? (
+            <AutomationColumn
+              title="Outras automacoes"
+              dotColor="var(--color-primary-500)"
+              emptyLabel="Nenhuma outra automacao ainda."
+              journeys={otherJourneys}
+              stepsByJourney={stepsByJourney}
+              stages={stages}
+              onEdit={onEdit}
+            />
+          ) : null}
         </div>
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
