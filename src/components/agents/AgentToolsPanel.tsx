@@ -219,6 +219,7 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
           {tool.key === "store_locator" && toolFilterKey === tool.key ? (
             <StoreLocatorConfigPanel
               agentId={agentId}
+              tool={tool}
               onClose={closeConfiguration}
               onChanged={() => setReloadKey((value) => value + 1)}
             />

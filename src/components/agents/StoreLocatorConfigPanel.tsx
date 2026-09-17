@@ -6,10 +6,14 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { CompanyMultiSelect } from "@/components/agents/CompanyMultiSelect";
+import { useCompanies } from "@/hooks/useCompanies";
 import {
   deactivateStoreLocatorStore,
   listStoreLocatorStores,
   saveStoreLocatorStore,
+  updateAgentTool,
+  type AgentTool,
   type StoreHours,
   type StoreLocatorStore,
   type StoreLocatorStoreInput,
@@ -17,6 +21,7 @@ import {
 
 type StoreLocatorConfigPanelProps = {
   agentId: string;
+  tool: AgentTool;
   onClose: () => void;
   onChanged: () => void;
 };
@@ -101,7 +106,7 @@ function hoursSummary(hours: StoreHours) {
     .join(" · ");
 }
 
-export function StoreLocatorConfigPanel({ agentId, onClose, onChanged }: StoreLocatorConfigPanelProps) {
+export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: StoreLocatorConfigPanelProps) {
   const [mode, setMode] = useState<"list" | "form">("list");
   const [stores, setStores] = useState<StoreLocatorStore[]>([]);
   const [form, setForm] = useState<StoreFormState>(() => emptyForm());
@@ -110,6 +115,31 @@ export function StoreLocatorConfigPanel({ agentId, onClose, onChanged }: StoreLo
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmDeactivateId, setConfirmDeactivateId] = useState<string | null>(null);
+
+  const { companies, loading: companiesLoading } = useCompanies();
+  const [allowedCompanyIds, setAllowedCompanyIds] = useState<string[]>(
+    () => (Array.isArray(tool.config.allowedCompanyIds) ? (tool.config.allowedCompanyIds as string[]) : []),
+  );
+  const [companiesDirty, setCompaniesDirty] = useState(false);
+  const [savingCompanies, setSavingCompanies] = useState(false);
+
+  async function saveAllowedCompanies() {
+    setSavingCompanies(true);
+    try {
+      await updateAgentTool(agentId, "store_locator", {
+        config: { ...tool.config, allowedCompanyIds },
+      });
+      setCompaniesDirty(false);
+      onChanged();
+      toast.success("Empresas atualizadas");
+    } catch (error) {
+      toast.error("Nao foi possivel salvar as empresas", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSavingCompanies(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -260,7 +290,41 @@ export function StoreLocatorConfigPanel({ agentId, onClose, onChanged }: StoreLo
 
       {mode === "list" ? (
         <div className="pt-4">
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <section
+            className="rounded-[var(--radius-xl)] border border-[var(--border-default)] p-4"
+            aria-label="Empresas visíveis para este agente"
+          >
+            <h3 className="text-sm font-semibold text-[var(--color-gray-900)]">Empresas que este agente pode citar</h3>
+            <p className="mt-1 text-xs text-[var(--color-gray-500)]">
+              Controla quais empresas cadastradas (agenda, preços e dados de contato) este agente pode ver e oferecer.
+              Sem nenhuma selecionada, o agente não enxerga nenhuma empresa.
+            </p>
+            <div className="mt-3 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+              <CompanyMultiSelect
+                companies={companies
+                  .filter((company) => company.isActive)
+                  .map((company) => ({ id: company.id, name: company.name, cnpj: company.cnpj, city: company.city, state: company.state }))}
+                loading={companiesLoading}
+                disabled={savingCompanies}
+                selectedIds={allowedCompanyIds}
+                onChange={(ids) => {
+                  setAllowedCompanyIds(ids);
+                  setCompaniesDirty(true);
+                }}
+              />
+              <button
+                type="button"
+                disabled={!companiesDirty || savingCompanies}
+                onClick={() => void saveAllowedCompanies()}
+                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary-500)] px-4 text-sm font-semibold text-white shadow-sm transition-[background-color,box-shadow] hover:bg-[var(--color-primary-600)] focus-visible:outline-none focus-visible:shadow-focus active:shadow-inset disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingCompanies ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                Salvar empresas
+              </button>
+            </div>
+          </section>
+
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
             <label className="relative min-w-0 flex-1">
               <span className="sr-only">Buscar filial</span>
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-gray-400)]" aria-hidden="true" />
