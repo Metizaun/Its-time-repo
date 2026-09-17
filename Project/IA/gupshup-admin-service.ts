@@ -1,5 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
-import { GupshupTemplateService, type CreateGupshupTemplateInput } from "./gupshup-template-service.js";
+import {
+  GupshupTemplateService,
+  LOCAL_GUPSHUP_TEST_TEMPLATES,
+  type CreateGupshupTemplateInput,
+} from "./gupshup-template-service.js";
 
 export type GupshupAdminServiceConfig = {
   supabaseUrl: string;
@@ -117,6 +121,14 @@ export class GupshupAdminService {
   }
 
   async listTemplates(acesId: number, instanceName: string) {
+    if (isLocalGupshupTemplateTestMode()) {
+      return {
+        instanceName,
+        channel: null,
+        templates: LOCAL_GUPSHUP_TEST_TEMPLATES,
+      };
+    }
+
     const channel = await this.findActiveChannel(acesId, instanceName);
     if (!channel) return { instanceName, channel: null, templates: [] };
     if (!channel.app_id) throw new Error("appId Gupshup nao configurado para esta instancia");
@@ -199,6 +211,11 @@ export class GupshupAdminService {
     if (createError) throw createError;
     return created as CrmInstanceRow;
   }
+}
+
+function isLocalGupshupTemplateTestMode() {
+  return process.env.NODE_ENV !== "production"
+    && process.env.GUPSHUP_TEMPLATE_TEST_MODE?.trim().toLowerCase() === "true";
 }
 
 function normalizeChannel(channel: GupshupChannelRow | null) {

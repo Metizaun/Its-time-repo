@@ -47,7 +47,7 @@ import {
 } from "./gupshup-media-downloader.js";
 import { createWhatsAppProviderRegistry, type WhatsAppProviderRegistry } from "./whatsapp-provider-registry.js";
 import { MessagingChannelResolver } from "./messaging-channel-resolver.js";
-import type { MessagingProviderName, MessagingSource } from "./messaging-channel.js";
+import type { InboundProviderName, MessagingProviderName, MessagingSource } from "./messaging-channel.js";
 import { MessagingDispatcher, type MessagingDispatchResult } from "./messaging-dispatcher.js";
 import { InstagramService, InstagramServiceError } from "./instagram-service.js";
 import {
@@ -59,7 +59,6 @@ import {
   summarizeProviderPayload,
   type SendMediaInput,
   type SendResult,
-  type WhatsAppProviderName,
   WhatsAppProviderError,
 } from "./whatsapp-provider.js";
 import {
@@ -790,7 +789,7 @@ export type ParsedWebhookMessage = {
   messageType: string | null;
   fileName?: string | null;
   unsupportedMediaKind?: "video" | null;
-  provider: WhatsAppProviderName;
+  provider: InboundProviderName;
   raw: JsonRecord;
 };
 
@@ -1127,6 +1126,7 @@ type ServiceConfig = {
   instancePhoneAllowlists?: Record<string, string[]>;
   rbVisagismService?: RbVisagismService;
   instagramService?: InstagramService;
+  hasLiveWebsiteSession?: (acesId: number, leadId: string) => Promise<boolean>;
 };
 
 export class HttpError extends Error {
@@ -7647,7 +7647,7 @@ export class AgentManager {
 
   private async findMessageByProviderMessageId(
     acesId: number,
-    provider: MessagingProviderName,
+    provider: InboundProviderName,
     providerMessageId: string | null
   ) {
     const messageId = providerMessageId?.trim();
@@ -7800,7 +7800,7 @@ export class AgentManager {
     createdBy?: string | null;
     conversationId?: string | null;
     sentAt?: string;
-    provider?: MessagingProviderName | null;
+    provider?: InboundProviderName | null;
     providerMessageId?: string | null;
     providerStatus?: "accepted" | "sent" | "failed" | null;
     providerErrorCode?: string | null;
@@ -8156,7 +8156,7 @@ export class AgentManager {
     acesId: number;
     lead: LeadRow | null;
     instanceName: string;
-    provider: WhatsAppProviderName;
+    provider: InboundProviderName;
   }) {
     const { acesId, lead, instanceName, provider } = params;
     const hasActiveMembership = lead && lead.instancia !== instanceName
@@ -10092,6 +10092,10 @@ export class AgentManager {
       return null;
     }
 
+    if (await this.hasLiveWebsiteSession(params.lead)) {
+      return this.deliverWebsiteReplyBlocks(params, blocks);
+    }
+
     if (params.sourceType === "ai" && params.runId && !params.hasMediaAttachment) {
       const sentAsAudio = await this.trySendAiAudio({
         agent: params.agent,
@@ -10150,6 +10154,56 @@ export class AgentManager {
       if (index < blocks.length - 1) {
         await wait(900);
       }
+    }
+
+    return "text" as const;
+  }
+
+  private async hasLiveWebsiteSession(lead: LeadRow) {
+    if (!this.config.hasLiveWebsiteSession) return false;
+    try {
+      return await this.config.hasLiveWebsiteSession(lead.aces_id, lead.id);
+    } catch (error) {
+      // A lookup failure must not silence the lead: fall back to WhatsApp.
+      console.warn("[website-widget] Falha ao verificar sessao do site:", {
+        leadId: lead.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * The visitor still has the site chat open, so the reply is only persisted and
+   * the widget polling picks it up. Sending to WhatsApp here would push the
+   * answer to a channel the visitor is not looking at.
+   */
+  private async deliverWebsiteReplyBlocks(
+    params: {
+      agent: AgentRow;
+      lead: LeadRow;
+      sourceType: "ai" | "human";
+      createdBy?: string | null;
+    },
+    blocks: string[]
+  ) {
+    const instanceName = params.agent.instance_name || params.lead.instancia;
+
+    for (const [index, block] of blocks.entries()) {
+      await this.saveMessage({
+        leadId: params.lead.id,
+        acesId: params.lead.aces_id,
+        content: block,
+        direction: "outbound",
+        sourceType: params.sourceType,
+        instanceName,
+        createdBy: params.createdBy ?? null,
+        conversationId: `website:${params.sourceType}:${Date.now()}:${index}`,
+        sentAt: new Date().toISOString(),
+        provider: "website",
+        providerStatus: "sent",
+        senderAgentId: params.sourceType === "ai" ? params.agent.id : null,
+      });
     }
 
     return "text" as const;
@@ -14273,6 +14327,188 @@ export class AgentManager {
       }
       throw error;
     }
+  }
+
+  /**
+   * Entry points for the website widget channel. They reuse the same lead,
+   * persistence and buffering used by WhatsApp, so the agent behaves identically
+   * regardless of where the visitor is talking from.
+   */
+  async ensureWebsiteLead(
+    acesId: number,
+    input: { phone: string; name: string; instanceName: string }
+  ) {
+    const lead = await this.findOrCreateLead(
+      acesId,
+      input.phone,
+      input.instanceName,
+      input.name,
+      null,
+      { preferAttendanceStage: true }
+    );
+
+    const { error } = await this.serviceClient
+      .from("leads")
+      .update({
+        first_touch_attribution: {
+          sourceType: "website_widget",
+          capturedAt: new Date().toISOString(),
+        },
+        Fonte: "Site",
+        Plataform: "Nya",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", lead.id)
+      .eq("aces_id", acesId)
+      .is("first_touch_attribution", null);
+    if (error) {
+      throw new HttpError(500, "Nao foi possivel registrar a origem do lead", error);
+    }
+
+    return { leadId: lead.id };
+  }
+
+  async processWebsiteInbound(
+    acesId: number,
+    input: { leadId: string; instanceName: string; content: string }
+  ) {
+    const content = input.content.trim();
+    if (!content) {
+      return { queued: false, inboundMessageId: null, reason: "Mensagem vazia" };
+    }
+
+    const sentAt = new Date().toISOString();
+    const conversationId = `website:${input.leadId}`;
+    const savedMessage = await this.saveMessage({
+      leadId: input.leadId,
+      acesId,
+      content,
+      direction: "inbound",
+      sourceType: "lead",
+      instanceName: input.instanceName,
+      conversationId,
+      sentAt,
+      provider: "website",
+      providerStatus: "accepted",
+    });
+
+    const agent = await this.getAnyAgentByInstance(input.instanceName, acesId);
+    if (!agent) {
+      return {
+        queued: false,
+        inboundMessageId: savedMessage.id,
+        reason: "Mensagem registrada sem agente configurado",
+      };
+    }
+
+    const lead = await this.loadLeadForAgent(agent, input.leadId);
+    const aiState = await this.resolveLeadAiState(
+      lead.id,
+      agent,
+      input.instanceName,
+      lead.interaction_mode
+    );
+    const pipelineReplyEnabled = !aiState.enabled
+      ? true
+      : (await this.getLeadPipelineAiSettings(lead)).replyEnabled;
+
+    if (!aiState.enabled || !pipelineReplyEnabled) {
+      return {
+        queued: false,
+        inboundMessageId: savedMessage.id,
+        reason: !pipelineReplyEnabled
+          ? "Mensagem registrada com respostas da IA desligadas neste pipeline"
+          : "Mensagem registrada com IA desligada para este lead",
+      };
+    }
+
+    await this.upsertLeadState(agent.id, lead.id, {
+      last_inbound_at: sentAt,
+      status: "active",
+    });
+
+    await this.queueBufferedProcessing(agent, lead.id, {
+      instanceName: input.instanceName,
+      fromMe: false,
+      phone: lead.contact_phone,
+      content,
+      messageId: savedMessage.id,
+      conversationId,
+      sentAt,
+      pushName: lead.name,
+      mediaKind: null,
+      mediaMimeType: null,
+      mediaBase64: null,
+      mediaUrl: null,
+      messageType: "conversation",
+      provider: "website",
+      raw: {},
+    });
+
+    return { queued: true, inboundMessageId: savedMessage.id };
+  }
+
+  /**
+   * Re-arms the agent for a visitor message that was already stored. Used when a
+   * reply never arrived (for example the in-memory buffer timer was lost with a
+   * restart) so the retry does not duplicate the message in the conversation.
+   */
+  async requeueWebsiteReply(
+    acesId: number,
+    input: { leadId: string; instanceName: string; content: string; messageId: string | null }
+  ) {
+    const agent = await this.getAnyAgentByInstance(input.instanceName, acesId);
+    if (!agent) return { queued: false, reason: "Instancia sem agente configurado" };
+
+    const lead = await this.loadLeadForAgent(agent, input.leadId);
+    const aiState = await this.resolveLeadAiState(
+      lead.id,
+      agent,
+      input.instanceName,
+      lead.interaction_mode
+    );
+    if (!aiState.enabled) {
+      return { queued: false, reason: "IA desligada para este lead" };
+    }
+
+    await this.queueBufferedProcessing(agent, lead.id, {
+      instanceName: input.instanceName,
+      fromMe: false,
+      phone: lead.contact_phone,
+      content: input.content,
+      messageId: input.messageId,
+      conversationId: `website:${lead.id}`,
+      sentAt: new Date().toISOString(),
+      pushName: lead.name,
+      mediaKind: null,
+      mediaMimeType: null,
+      mediaBase64: null,
+      mediaUrl: null,
+      messageType: "conversation",
+      provider: "website",
+      raw: {},
+    });
+
+    return { queued: true };
+  }
+
+  /** Fallback answer when the agent could not reply, so the visitor is never left waiting. */
+  async saveWebsiteAgentMessage(
+    acesId: number,
+    input: { leadId: string; instanceName: string; content: string }
+  ) {
+    await this.saveMessage({
+      leadId: input.leadId,
+      acesId,
+      content: input.content,
+      direction: "outbound",
+      sourceType: "ai",
+      instanceName: input.instanceName,
+      conversationId: `website:fallback:${Date.now()}`,
+      sentAt: new Date().toISOString(),
+      provider: "website",
+      providerStatus: "sent",
+    });
   }
 
   async createChatAttachmentUploadUrl(context: AuthContext, input: ChatAttachmentUploadUrlInput) {

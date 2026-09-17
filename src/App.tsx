@@ -19,6 +19,7 @@ const Buscar = lazy(() => import("./pages/Buscar"));
 const Automacao = lazy(() => import("./pages/Automacao"));
 const Admin = lazy(() => import("./pages/Admin"));
 const SuperAdmin = lazy(() => import("./pages/SuperAdmin"));
+const AgentSimulator = lazy(() => import("./pages/AgentSimulator"));
 const Chat = lazy(() => import("./pages/Chat"));
 const Calendar = lazy(() => import("./pages/Calendar"));
 const CalendarSettings = lazy(() => import("./pages/CalendarSettings"));
@@ -73,6 +74,7 @@ const App = () => (
                   <Route path="/cobranca" element={<ProtectedRoute><MainLayout><Collections /></MainLayout></ProtectedRoute>} />
                   <Route path="/admin" element={<ProtectedRoute><MainLayout><Admin /></MainLayout></ProtectedRoute>} />
                   <Route path="/superadmin" element={<ProtectedRoute><MainLayout><SuperAdmin /></MainLayout></ProtectedRoute>} />
+                  <Route path="/simulador-agentes" element={<ProtectedRoute><MainLayout><AgentSimulator /></MainLayout></ProtectedRoute>} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
               </Suspense>

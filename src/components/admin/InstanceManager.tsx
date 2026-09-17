@@ -8,6 +8,7 @@ import {
   Copy,
   Database,
   Eraser,
+  Globe,
   Instagram,
   Link2,
   Loader2,
@@ -104,11 +105,15 @@ import { Switch } from "@/components/ui/switch";
 import { ConnectionCard, type ConnectionStatus } from "@/components/connections/ConnectionCard";
 import { AgendaConnectionsPanel, type AgendaPanelSummary } from "@/components/admin/AgendaConnectionsPanel";
 import { listAgendaConnections } from "@/services/agendaService";
+import nyaConnectionIcon from "../../../assets/Icone Nya.png";
+import leadsConnectionIcon from "../../../assets/Icone Leads.png";
+import billingConnectionIcon from "../../../assets/icone cobrança.png";
+import agendaConnectionIcon from "../../../assets/Icone agenda.png";
 
 type ConnectionState = "idle" | "checking" | "disconnected" | "connected" | "error";
 type DeleteLeadAction = "transfer" | "delete";
 type ExternalConnectionType = "selection" | "webhook" | "gupshup" | "instagram" | "rb";
-type ConnectionProvider = "whatsapp-free" | "whatsapp-official" | "gupshup" | "instagram" | "registro-base" | "agenda";
+type ConnectionProvider = "whatsapp-free" | "whatsapp-official" | "gupshup" | "instagram" | "website" | "registro-base" | "agenda";
 
 // WhatsApp Meta remains dormant until the production rollout is explicitly enabled.
 // This public flag keeps its admin surface hidden while the backend stays disabled.
@@ -161,10 +166,27 @@ export function InstanceManager({
   onOpenBilling,
   billingStatus = "not_configured",
   billingStatusLabel = "Não configurada",
+  leadWebhookConnection,
+  websiteWidgetConnection,
 }: {
   onOpenBilling?: () => void;
   billingStatus?: ConnectionStatus;
   billingStatusLabel?: string;
+  leadWebhookConnection?: {
+    status: ConnectionStatus;
+    statusLabel: string;
+    actionLabel: string;
+    onAction: () => void;
+  };
+  websiteWidgetConnection?: {
+    status: ConnectionStatus;
+    statusLabel: string;
+    actionLabel: string;
+    onAction: () => void;
+    instanceNames?: string[];
+    activeCount?: number;
+    loaded?: boolean;
+  };
 } = {}) {
   const [instances, setInstances] = useState<AdminInstance[]>([]);
   const [rbConnections, setRbConnections] = useState<AdminRbConnection[]>([]);
@@ -973,10 +995,16 @@ export function InstanceManager({
     );
   }
 
+  const websiteWidgetInstanceNames = new Set(
+    websiteWidgetConnection?.loaded
+      ? websiteWidgetConnection.instanceNames ?? []
+      : [],
+  );
   const getProviderForInstance = (instance: AdminInstance): ConnectionProvider => {
     if (instance.connectionMode === "instagram" || instagramChannels[instance.instanceName]) return "instagram";
     if (gupshupChannels[instance.instanceName]?.provider === "gupshup") return "gupshup";
     if (metaChannels[instance.instanceName]?.provider === "meta") return "whatsapp-official";
+    if (websiteWidgetInstanceNames.has(instance.instanceName)) return "website";
     return "whatsapp-free";
   };
   const activeInstanceCount = instances.filter((instance) =>
@@ -993,7 +1021,10 @@ export function InstanceManager({
   const gupshupInstances = instances.filter((instance) => getProviderForInstance(instance) === "gupshup");
   const instagramInstances = instances.filter((instance) => getProviderForInstance(instance) === "instagram");
   const hasEvolutionConnection = whatsappFreeInstances.length > 0;
-  const firstInstanceName = officialInstances[0]?.instanceName ?? instances[0]?.instanceName ?? "";
+  const firstInstanceName = officialInstances[0]?.instanceName
+    ?? instances.find((instance) => getProviderForInstance(instance) !== "website")?.instanceName
+    ?? "";
+  const activeWebsiteWidgetCount = websiteWidgetConnection?.activeCount ?? 0;
   const metaConnectionCount = officialInstances.filter((instance) =>
     metaChannels[instance.instanceName]?.channel?.status === "active"
   ).length;
@@ -1058,7 +1089,7 @@ export function InstanceManager({
         <div className="connections-summary-grid" aria-label="Resumo das conexões">
           <div className="connections-summary-card">
             <span className="connections-summary-card__label">Ativas</span>
-            <strong>{activeInstanceCount + metaConnectionCount + gupshupConnectionCount + instagramConnectionCount + rbConnectionCount + agendaSummary.active}</strong>
+            <strong>{activeInstanceCount + metaConnectionCount + gupshupConnectionCount + instagramConnectionCount + activeWebsiteWidgetCount + rbConnectionCount + agendaSummary.active}</strong>
             <span className="connections-summary-card__dot connections-summary-card__dot--success" aria-hidden="true" />
           </div>
           <div className="connections-summary-card">
@@ -1180,7 +1211,7 @@ export function InstanceManager({
                 title="Cobrança"
                 description="Fontes financeiras, ingestões e regras"
                 icon={Webhook}
-                iconSrc="/connection-icons/cobranca.svg"
+                iconSrc={billingConnectionIcon}
                 status={billingStatus}
                 statusLabel={billingStatusLabel}
                 actionLabel={billingStatus === "not_configured" ? "Configurar" : "Gerenciar"}
@@ -1190,11 +1221,36 @@ export function InstanceManager({
                 title="Agenda Universal"
                 description="Agendamentos integrados com parceiros"
                 icon={CalendarSync}
+                iconSrc={agendaConnectionIcon}
                 status={getCatalogStatus(agendaSummary.total > 0 && agendaSummary.active > 0, agendaSummary.pending > 0, agendaSummary.errors > 0)}
                 statusLabel={agendaSummary.errors > 0 ? "Requer atenção" : agendaSummary.total > 0 ? `${agendaSummary.total} configurada${agendaSummary.total === 1 ? "" : "s"}` : "Não configurada"}
                 actionLabel={catalogActionLabel(agendaSummary.total > 0)}
                 onAction={() => openProviderPanel("agenda")}
               />
+              {leadWebhookConnection ? (
+                <ConnectionCard
+                  title="Entrada de leads"
+                  description="Receba leads de outros sistemas por webhook"
+                  icon={Webhook}
+                  iconSrc={leadsConnectionIcon}
+                  status={leadWebhookConnection.status}
+                  statusLabel={leadWebhookConnection.statusLabel}
+                  actionLabel={leadWebhookConnection.actionLabel}
+                  onAction={leadWebhookConnection.onAction}
+                />
+              ) : null}
+              {websiteWidgetConnection ? (
+                <ConnectionCard
+                  title="Nya"
+                  description="Atenda visitantes diretamente no seu site"
+                  icon={Globe}
+                  iconSrc={nyaConnectionIcon}
+                  status={websiteWidgetConnection.status}
+                  statusLabel={websiteWidgetConnection.statusLabel}
+                  actionLabel={websiteWidgetConnection.actionLabel}
+                  onAction={websiteWidgetConnection.onAction}
+                />
+              ) : null}
             </div>
           </section>
         </div>

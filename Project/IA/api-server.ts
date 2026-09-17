@@ -39,6 +39,7 @@ import {
   type CreateGupshupTemplateInput,
 } from "./gupshup-template-service.js";
 import { InternalChatService } from "./internal-chat-service.js";
+import { AgentSimulatorService } from "./agent-simulator-service.js";
 import { createCollectionApiRuntime } from "./collections/collection-api.js";
 import { CollectionValidationError } from "./collections/domain.js";
 import { CollectionOnboardingError } from "./collections/collection-onboarding-service.js";
@@ -46,6 +47,7 @@ import { AgendaAdminError, AgendaConnectionService } from "./agenda-sync/connect
 import { AgendaInboundError, AgendaInboundService } from "./agenda-sync/inbound-service.js";
 import { requireRbBillingAdmin } from "./rb-billing-authorization.js";
 import { LeadWebhookError, LeadWebhookService } from "./lead-webhook-service.js";
+import { WebsiteWidgetError, WebsiteWidgetService } from "./website-widget-service.js";
 
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
@@ -517,12 +519,26 @@ const manager = new AgentManager({
   },
   rbVisagismService,
   instagramService,
+  hasLiveWebsiteSession: async (acesId: number, leadId: string): Promise<boolean> =>
+    Boolean(await websiteWidgetService.getLiveSessionForLead(acesId, leadId)),
 });
 
 const internalChatService = new InternalChatService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || requireEnv("SUPABASE_KEY"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+});
+
+// Isolated runtime: never dispatches WhatsApp/Instagram or persists simulator turns.
+const agentSimulatorService = new AgentSimulatorService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  openaiApiKey: process.env.OPENAI_API_KEY,
+  openaiModel: process.env.AGENT_SIMULATOR_OPENAI_MODEL,
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  geminiFallbackModel: process.env.AGENT_SIMULATOR_GEMINI_MODEL,
+  supportReportRecipientEmail: process.env.AGENT_SIMULATOR_REPORT_RECIPIENT_EMAIL ?? "mattsyk1@gmail.com",
+  internalChatService,
 });
 
 const metaWebhookProcessor = new MetaWebhookProcessor({
@@ -600,6 +616,26 @@ const leadWebhookService = new LeadWebhookService({
   encryptionKeyVersion: process.env.LEAD_WEBHOOK_SECRETS_ENCRYPTION_KEY_VERSION,
 });
 
+const websiteWidgetService: WebsiteWidgetService = new WebsiteWidgetService({
+  supabaseUrl: requireEnv("SUPABASE_URL"),
+  serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  publicBaseUrl:
+    process.env.WEBSITE_WIDGET_PUBLIC_URL ??
+    process.env.APP_PUBLIC_URL ??
+    process.env.VITE_APP_PUBLIC_URL,
+  apiBaseUrl:
+    process.env.CRM_BACKEND_PUBLIC_URL ??
+    process.env.BACKEND_PUBLIC_URL ??
+    process.env.WEBHOOK_PUBLIC_BASE_URL ??
+    process.env.VITE_CRM_BACKEND_URL ??
+    process.env.CRM_BACKEND_URL,
+  agent: {
+    ensureLead: (acesId, input) => manager.ensureWebsiteLead(acesId, input),
+    processInbound: (acesId, input) => manager.processWebsiteInbound(acesId, input),
+    requeueReply: (acesId, input) => manager.requeueWebsiteReply(acesId, input),
+    saveAgentMessage: (acesId, input) => manager.saveWebsiteAgentMessage(acesId, input),
+  },
+});
 const gupshupWebhookProcessor = new GupshupWebhookProcessor({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
@@ -727,6 +763,120 @@ app.use(
         (req as RawBodyRequest).rawBody = Buffer.from(buf);
       }
     },
+  }),
+);
+
+// WEBSITE WIDGET ROUTES (public)
+// Registered before the global CORS allowlist because the widget is embedded on
+// third-party sites whose origins are unknown up front. Authorization is the
+// per-connection domain list checked inside the service; the header is reflected
+// even on rejections so the installer can read the error instead of an opaque
+// CORS failure.
+const websiteWidgetBase = "/api/public/website-widget";
+
+app.use(websiteWidgetBase, (req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Max-Age", "600");
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).send();
+    return;
+  }
+
+  next();
+});
+
+function websiteWidgetContext(req: Request) {
+  return { origin: req.headers.origin ?? null, ip: req.ip ?? null };
+}
+
+async function websiteWidgetCall<T>(operation: () => Promise<T>) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof WebsiteWidgetError) {
+      throw new HttpError(error.status, error.message, { code: error.code });
+    }
+    throw error;
+  }
+}
+
+app.get(
+  `${websiteWidgetBase}/:publicKey/config`,
+  asyncHandler(async (req, res) => {
+    const config = await websiteWidgetCall(() =>
+      websiteWidgetService.getPublicConfig(
+        getSingleParam(req.params.publicKey),
+        websiteWidgetContext(req),
+      ),
+    );
+    res.json({ success: true, ...config });
+  }),
+);
+
+app.post(
+  `${websiteWidgetBase}/:publicKey/sessions`,
+  asyncHandler(async (req, res) => {
+    const session = await websiteWidgetCall(() =>
+      websiteWidgetService.startSession(
+        getSingleParam(req.params.publicKey),
+        websiteWidgetContext(req),
+        asRecord(req.body),
+      ),
+    );
+    res.status(201).json({ success: true, ...session });
+  }),
+);
+
+app.post(
+  `${websiteWidgetBase}/:publicKey/messages`,
+  asyncHandler(async (req, res) => {
+    const result = await websiteWidgetCall(() =>
+      websiteWidgetService.postMessage(
+        getSingleParam(req.params.publicKey),
+        websiteWidgetContext(req),
+        asRecord(req.body),
+      ),
+    );
+    res.status(202).json({ success: true, ...result });
+  }),
+);
+
+app.get(
+  `${websiteWidgetBase}/:publicKey/messages`,
+  asyncHandler(async (req, res) => {
+    const result = await websiteWidgetCall(() =>
+      websiteWidgetService.pollMessages(
+        getSingleParam(req.params.publicKey),
+        websiteWidgetContext(req),
+        {
+          sessionToken: req.query.sessionToken,
+          cursor: req.query.cursor,
+        },
+      ),
+    );
+    res.json({ success: true, ...result });
+  }),
+);
+
+app.post(
+  `${websiteWidgetBase}/:publicKey/end`,
+  asyncHandler(async (req, res) => {
+    const result = await websiteWidgetCall(() =>
+      websiteWidgetService.endSession(
+        getSingleParam(req.params.publicKey),
+        websiteWidgetContext(req),
+        asRecord(req.body),
+      ),
+    );
+    res.json({ success: true, ...result });
   }),
 );
 
@@ -1197,6 +1347,13 @@ function requireLeadWebhookAdmin(req: AuthenticatedRequest) {
   return context;
 }
 
+function requireWebsiteWidgetAdmin(req: AuthenticatedRequest) {
+  const context = req.authContext!;
+  if (context.role !== "ADMIN") {
+    throw new HttpError(403, "Apenas administradores podem configurar o agente no site");
+  }
+  return context;
+}
 async function leadWebhookAdminCall<T>(operation: () => Promise<T>) {
   try {
     return await operation();
@@ -1300,6 +1457,112 @@ app.post(
     ));
     res.setHeader("Cache-Control", "no-store");
     res.json({ success: true, secret: result.secret, displayedOnce: true, previousSecretValidForHours: result.previousSecretValidForHours });
+  }),
+);
+
+// WEBSITE WIDGET ROUTES (admin + chat)
+const websiteWidgetAdminBase = "/api/admin/integrations/website-widget";
+
+app.get(
+  websiteWidgetAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireWebsiteWidgetAdmin(req);
+    const connections = await websiteWidgetCall(() =>
+      websiteWidgetService.listConnections(context.acesId),
+    );
+    res.json({ success: true, connections });
+  }),
+);
+
+app.post(
+  websiteWidgetAdminBase,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireWebsiteWidgetAdmin(req);
+    const result = await websiteWidgetCall(() =>
+      websiteWidgetService.createConnection(
+        context.acesId,
+        context.crmUserId,
+        asRecord(req.body),
+      ),
+    );
+    res.status(201).json({ success: true, connection: result.connection });
+  }),
+);
+
+app.patch(
+  `${websiteWidgetAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireWebsiteWidgetAdmin(req);
+    const connection = await websiteWidgetCall(() =>
+      websiteWidgetService.updateConnection(
+        context.acesId,
+        getSingleParam(req.params.id),
+        asRecord(req.body),
+      ),
+    );
+    res.json({ success: true, connection });
+  }),
+);
+
+app.post(
+  `${websiteWidgetAdminBase}/:id/rotate-key`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireWebsiteWidgetAdmin(req);
+    const connection = await websiteWidgetCall(() =>
+      websiteWidgetService.rotatePublicKey(context.acesId, getSingleParam(req.params.id)),
+    );
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, connection });
+  }),
+);
+
+app.delete(
+  `${websiteWidgetAdminBase}/:id`,
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = requireWebsiteWidgetAdmin(req);
+    const result = await websiteWidgetCall(() =>
+      websiteWidgetService.deleteConnection(context.acesId, getSingleParam(req.params.id)),
+    );
+    res.json({ success: true, ...result });
+  }),
+);
+
+// Available to any operator using the chat, not only administrators: it tells
+// the chat which channel the conversation is on and lets the operator move it
+// to WhatsApp so the reply does not go to a site the visitor already left.
+app.get(
+  "/api/website-widget/leads/:leadId/session",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    const session = await websiteWidgetCall(() =>
+      websiteWidgetService.getLiveSessionForLead(
+        context.acesId,
+        getSingleParam(req.params.leadId),
+      ),
+    );
+    res.json({ success: true, live: Boolean(session) });
+  }),
+);
+
+app.post(
+  "/api/website-widget/leads/:leadId/handoff-whatsapp",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const context = req.authContext!;
+    const result = await websiteWidgetCall(() =>
+      websiteWidgetService.endSessionsForLead(
+        context.acesId,
+        getSingleParam(req.params.leadId),
+        "whatsapp_handoff",
+      ),
+    );
+    res.json({ success: true, ...result });
   }),
 );
 
@@ -4936,6 +5199,76 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     res.json({ isStaff: await manager.isAdminStaff(req.authContext!.authUserId) });
+  }),
+);
+
+// Agent simulator: restricted to Its Time support staff and deliberately separate
+// from production message dispatch. Only a final evaluation summary is persisted.
+app.get(
+  "/api/agent-simulator/accounts",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (_req, res) => {
+    res.json({ accounts: await agentSimulatorService.listAccounts() });
+  }),
+);
+
+app.get(
+  "/api/agent-simulator/accounts/:acesId/agents",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    res.json({ agents: await agentSimulatorService.listAgents(acesId) });
+  }),
+);
+
+app.get(
+  "/api/agent-simulator/accounts/:acesId/agents/:agentId",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    res.json(await agentSimulatorService.getAgentConfig(acesId, getSingleParam(req.params.agentId)));
+  }),
+);
+
+app.post(
+  "/api/agent-simulator/accounts/:acesId/agents/:agentId/turns",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req, res) => {
+    const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
+    const input = asRecord(req.body);
+    res.json(await agentSimulatorService.simulateTurn({
+      acesId,
+      agentId: getSingleParam(req.params.agentId),
+      scenarioKey: typeof input.scenarioKey === "string" ? input.scenarioKey : null,
+      leadContext: asRecord(input.leadContext),
+      messages: Array.isArray(input.messages) ? input.messages as Array<{ role: "lead" | "agent"; content: string }> : [],
+      attachments: Array.isArray(input.attachments)
+        ? input.attachments as Array<{ kind: "image" | "audio"; fileName: string; mimeType: string; size: number }>
+        : [],
+    }));
+  }),
+);
+
+app.post(
+  "/api/agent-simulator/reports",
+  authMiddleware,
+  requireStaff,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const input = asRecord(req.body);
+    res.json(await agentSimulatorService.sendReport(req.authContext!, {
+      clientReportId: String(input.clientReportId ?? ""),
+      accountName: String(input.accountName ?? ""),
+      targetAcesId: adminNumber(input.targetAcesId, "targetAcesId", { min: 1, integer: true }),
+      agentName: String(input.agentName ?? ""),
+      tests: Array.isArray(input.tests)
+        ? input.tests as Array<{ kind: "scenario" | "tool"; name: string; status: "passed" | "failed"; note?: string }>
+        : [],
+      generalNote: typeof input.generalNote === "string" ? input.generalNote : "",
+    }));
   }),
 );
 

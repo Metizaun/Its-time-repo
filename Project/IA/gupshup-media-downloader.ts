@@ -2,6 +2,8 @@ import axios, { type AxiosRequestConfig } from "axios";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
+import type { InboundProviderName } from "./messaging-channel.js";
+
 const GUPSHUP_FILE_MANAGER_HOST = "filemanager.gupshup.io";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 3;
@@ -53,14 +55,12 @@ export type DownloadGupshupMediaInput = {
   timeoutMs?: number;
 };
 
-export function allowsEvolutionMediaFallback(
-  provider: "evolution" | "meta" | "gupshup",
-) {
-  return provider !== "gupshup";
+export function allowsEvolutionMediaFallback(provider: InboundProviderName) {
+  return provider === "evolution" || provider === "meta";
 }
 
 export async function prefetchGupshupInboundMedia<T>(
-  provider: "evolution" | "meta" | "gupshup",
+  provider: InboundProviderName,
   hasMedia: boolean,
   resolve: () => Promise<T | null>,
 ): Promise<T | null | undefined> {

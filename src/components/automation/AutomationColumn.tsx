@@ -13,7 +13,7 @@ interface AutomationColumnProps {
   stages: PipelineStage[];
   journeys: AutomationJourney[];
   stepsByJourney: Record<string, AutomationStep[]>;
-  onCreate: () => void;
+  onCreate?: () => void;
   onEdit: (journeyId: string) => void;
 }
 
@@ -43,9 +43,11 @@ export function AutomationColumn({
           </p>
         </div>
 
-        <Button variant="ghost" size="icon" onClick={onCreate} className="shrink-0 rounded-full">
-          <Plus className="h-4 w-4" />
-        </Button>
+        {onCreate ? (
+          <Button variant="ghost" size="icon" onClick={onCreate} className="shrink-0 rounded-full">
+            <Plus className="h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
 
       <div className="mt-4 flex min-w-0 flex-col gap-3">
@@ -66,14 +68,16 @@ export function AutomationColumn({
         )}
       </div>
 
-      <Button
-        variant="ghost"
-        onClick={onCreate}
-        className="mt-4 w-full justify-start rounded-2xl border border-dashed"
-      >
-        <Plus className="mr-2 h-4 w-4" />
-        Adicionar automacao
-      </Button>
+      {onCreate ? (
+        <Button
+          variant="ghost"
+          onClick={onCreate}
+          className="mt-4 w-full justify-start rounded-2xl border border-dashed"
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Adicionar automacao
+        </Button>
+      ) : null}
     </div>
   );
 }

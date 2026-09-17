@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { ChatHeader } from "@/components/chat/ChatHeader";
+import { useWebsiteSession } from "@/hooks/useWebsiteSession";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatWindowNotice } from "@/components/chat/ChatWindowNotice";
 import { InternalChatWorkspace } from "@/components/chat/InternalChatWorkspace";
@@ -270,6 +271,7 @@ export default function Chat() {
     activeInstanceName,
     { enabled: isAdmin }
   );
+  const websiteSession = useWebsiteSession(selectedLead?.id ?? null);
   const showSidebar = !isMobile || !selectedLead;
   const showChatPanel = !isMobile || Boolean(selectedLead);
 
@@ -478,6 +480,11 @@ export default function Chat() {
                 onSchedule={handleSchedule}
                 showFinalizeButton={leadAiControl.reason === "human_handoff"}
                 onFinalize={openHandoffDialog}
+                websiteSession={{
+                  live: websiteSession.live,
+                  busy: websiteSession.busy,
+                  onHandoff: () => void websiteSession.handoff(),
+                }}
                 aiControl={
                   isAdmin
                     ? {
