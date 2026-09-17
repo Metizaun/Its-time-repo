@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { LookupFunction } from "node:net";
 import https from "node:https";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -15,6 +16,22 @@ export type AgendaDeliveryRow = {
 type DeliveryTarget = { outbound_url: string; status: string };
 type Credential = { ciphertext: unknown; iv: unknown; auth_tag: unknown; key_version: string };
 export type HttpResult = { status: number; retryAfter?: string; responseExcerpt?: string };
+const webhookHttpsAgent = new https.Agent({ autoSelectFamily: false });
+
+export function createPinnedWebhookLookup(
+  addresses: Array<{ address: string; family: 4 | 6 }>,
+): LookupFunction {
+  const [firstAddress] = addresses;
+  if (!firstAddress) throw new Error("AGENDA_DNS_EMPTY");
+
+  return (_hostname, options, callback) => {
+    if (options.all) {
+      callback(null, addresses.map((address) => ({ ...address })));
+      return;
+    }
+    callback(null, firstAddress.address, firstAddress.family);
+  };
+}
 
 export function isRetryableStatus(status: number) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
@@ -46,15 +63,14 @@ export async function postSignedAgendaWebhook(input: {
   maxResponseBytes: number; lookup?: WebhookDnsLookup;
 }): Promise<HttpResult> {
   const target = await resolvePublicWebhookTarget(input.url, { lookup: input.lookup });
-  const address = target.addresses[0];
-  if (!address) throw new Error("AGENDA_DNS_EMPTY");
   const timestamp = Math.floor(Date.now() / 1_000).toString();
   const signature = signWebhook(input.secret, timestamp, input.body);
   return new Promise((resolve, reject) => {
     const request = https.request(target.url, {
       method: "POST",
       servername: target.url.hostname,
-      lookup: (_hostname, _options, callback) => callback(null, address.address, address.family),
+      agent: webhookHttpsAgent,
+      lookup: createPinnedWebhookLookup(target.addresses),
       headers: {
         "content-type": "application/json",
         "content-length": input.body.byteLength,

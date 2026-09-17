@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(41);
+SELECT plan(44);
 
 SELECT has_table('agenda_sync','resync_runs','execucoes de ressincronizacao sao duraveis');
 SELECT has_table('agenda_sync','resync_deltas','deltas concorrentes possuem buffer');
@@ -83,9 +83,16 @@ SELECT ok(agenda_sync.consume_inbound_rate_limit(9972,'99727000-0000-4000-8000-0
 
 UPDATE agenda_sync.outbox SET status='dead_letter',dead_lettered_at=now(),attempt_count=8
 WHERE aces_id=9972 AND sequence=(SELECT min(sequence) FROM agenda_sync.outbox WHERE aces_id=9972);
+INSERT INTO agenda_sync.deliveries(connection_id,aces_id,outbox_id,event_id,attempt_number,started_at,finished_at,duration_ms,outcome,worker_id)
+SELECT connection_id,aces_id,id,event_id,1,now()-interval '2 minutes',now()-interval '1 minute',1,'dead_letter','worker-original'
+FROM agenda_sync.outbox WHERE aces_id=9972 ORDER BY sequence LIMIT 1;
 SELECT is(agenda_sync.resolve_dead_letter(9972,'99721000-0000-4000-8000-000000000001','99727000-0000-4000-8000-000000000001',
   (SELECT id FROM agenda_sync.outbox WHERE aces_id=9972 ORDER BY sequence LIMIT 1),'retry','Falha corrigida'),'retry','dead letter pode ser repetida com motivo');
 SELECT is((SELECT attempt_count FROM agenda_sync.outbox WHERE aces_id=9972 ORDER BY sequence LIMIT 1),0::smallint,'retry reinicia tentativas preservando o evento');
+CREATE TEMP TABLE retried AS SELECT * FROM agenda_sync.claim_delivery('worker-manual-retry',60,1);
+SELECT is((SELECT count(*)::integer FROM retried),1,'retry manual inicia uma nova janela de entrega');
+SELECT ok(agenda_sync.finish_delivery((SELECT id FROM retried),'worker-manual-retry',now(),1,204,'No Content'),'tentativa reiniciada nao colide com o historico');
+SELECT is((SELECT count(*)::integer FROM agenda_sync.deliveries WHERE aces_id=9972 AND attempt_number=1),2,'historico conserva tentativas com o mesmo numero entre janelas');
 
 SELECT * FROM finish();
 ROLLBACK;

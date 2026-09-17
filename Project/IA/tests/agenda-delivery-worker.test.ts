@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isRetryableDeliveryError, isRetryableStatus, retryAt, retryDelayMs } from "../agenda-sync/delivery-worker.js";
+import {
+  createPinnedWebhookLookup,
+  isRetryableDeliveryError,
+  isRetryableStatus,
+  retryAt,
+  retryDelayMs,
+} from "../agenda-sync/delivery-worker.js";
 import { UnsafeWebhookUrlError } from "../integrations/safe-webhook-url.js";
 
 test("classifica somente falhas temporarias para retry", () => {
@@ -26,4 +32,28 @@ test("Retry-After em segundos ou data tem precedencia e limite de 24 horas", () 
   assert.equal(retryAt({ attempt: 1, retryAfter: "120", nowMs: now }).toISOString(), "2026-09-11T12:02:00.000Z");
   assert.equal(retryAt({ attempt: 1, retryAfter: "2026-09-11T12:05:00Z", nowMs: now }).toISOString(), "2026-09-11T12:05:00.000Z");
   assert.equal(retryAt({ attempt: 1, retryAfter: "999999", nowMs: now }).toISOString(), "2026-09-12T12:00:00.000Z");
+});
+
+test("lookup fixado respeita o contrato all:true do Node", async () => {
+  const addresses = [
+    { address: "203.0.113.10", family: 4 as const },
+    { address: "2001:db8::10", family: 6 as const },
+  ];
+  const lookup = createPinnedWebhookLookup(addresses);
+
+  const all = await new Promise<{ address: string | Array<{ address: string; family: number }>; family?: number }>((resolve, reject) => {
+    lookup("partner.example", { all: true }, (error, address, family) => {
+      if (error) reject(error);
+      else resolve({ address, family });
+    });
+  });
+  assert.deepEqual(all, { address: addresses, family: undefined });
+
+  const one = await new Promise<{ address: string | Array<{ address: string; family: number }>; family?: number }>((resolve, reject) => {
+    lookup("partner.example", { all: false }, (error, address, family) => {
+      if (error) reject(error);
+      else resolve({ address, family });
+    });
+  });
+  assert.deepEqual(one, { address: "203.0.113.10", family: 4 });
 });

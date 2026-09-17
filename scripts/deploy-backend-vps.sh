@@ -253,6 +253,7 @@ docker build -f "$API_DIR/Dockerfile" -t "$BACKEND_IMAGE" "$APP_DIR"
 
 log "Validando schema do Supabase antes do deploy"
 docker run --rm \
+  --network $TRAEFIK_NETWORK \
   --env SUPABASE_URL \
   --env SUPABASE_SERVICE_ROLE_KEY \
   --entrypoint node \
