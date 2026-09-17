@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChatUnread } from "@/contexts/ChatUnreadContext";
 import { useIsStaff } from "@/hooks/useIsStaff";
+import { useIsSupportStaff } from "@/hooks/useIsSupportStaff";
 
 const navigation = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard },
@@ -56,6 +57,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const isAdmin = userRole === "ADMIN";
   const { total: chatUnreadTotal } = useChatUnread();
   const { isStaff } = useIsStaff();
+  const { isSupportStaff } = useIsSupportStaff();
 
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < TABLET_BP);
   const [collapsed, setCollapsed] = useState<boolean>(getInitialCollapsed);
@@ -214,7 +216,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
             {isAdmin && <NavItem path="/conexoes" icon={Webhook} name="Conexões" />}
             {isAdmin && <NavItem path="/admin" icon={Settings} name="Admin" />}
             {isStaff && <NavItem path="/superadmin" icon={ShieldCheck} name="Superadmin" />}
-            {isStaff && <NavItem path="/simulador-agentes" icon={Play} name="Simulador" />}
+            {isSupportStaff && <NavItem path="/simulador-agentes" icon={Play} name="Simulador" />}
           </ul>
         </nav>
 

@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useIsStaff } from "@/hooks/useIsStaff";
+import { useIsSupportStaff } from "@/hooks/useIsSupportStaff";
 import {
   getSimulatorAgentConfig, listSimulatorAccounts, listSimulatorAgents,
   sendSimulatorReport, simulateAgentTurn,
@@ -53,7 +53,7 @@ function StatusButton({ status, onChange }: { status: SimulatorTestStatus; onCha
 }
 
 export default function AgentSimulator() {
-  const { isStaff, loading: accessLoading } = useIsStaff();
+  const { isSupportStaff, loading: accessLoading } = useIsSupportStaff();
   const [accountId, setAccountId] = useState<number | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [scenarioKey, setScenarioKey] = useState<string | null>(null);
@@ -62,12 +62,12 @@ export default function AgentSimulator() {
   const [generalNote, setGeneralNote] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
 
-  const accounts = useQuery({ queryKey: ["agent-simulator-accounts"], queryFn: listSimulatorAccounts, enabled: isStaff });
-  const agents = useQuery({ queryKey: ["agent-simulator-agents", accountId], queryFn: () => listSimulatorAgents(accountId!), enabled: isStaff && accountId !== null });
+  const accounts = useQuery({ queryKey: ["agent-simulator-accounts"], queryFn: listSimulatorAccounts, enabled: isSupportStaff });
+  const agents = useQuery({ queryKey: ["agent-simulator-agents", accountId], queryFn: () => listSimulatorAgents(accountId!), enabled: isSupportStaff && accountId !== null });
   const config = useQuery({
     queryKey: ["agent-simulator-agent", accountId, agentId],
     queryFn: () => getSimulatorAgentConfig(accountId!, agentId!),
-    enabled: isStaff && accountId !== null && agentId !== null,
+    enabled: isSupportStaff && accountId !== null && agentId !== null,
   });
 
   useEffect(() => {
@@ -176,7 +176,7 @@ export default function AgentSimulator() {
   };
 
   if (accessLoading) return <div className="flex min-h-[40vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-[var(--color-primary-500)]" /></div>;
-  if (!isStaff) return <Navigate to="/" replace />;
+  if (!isSupportStaff) return <Navigate to="/" replace />;
 
   return <main className="space-y-5">
     <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">

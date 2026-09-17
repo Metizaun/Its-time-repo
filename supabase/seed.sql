@@ -125,6 +125,11 @@ FROM auth.users
 WHERE lower(email) = 'mattsyk1@gmail.com'
 ON CONFLICT (auth_user_id) DO UPDATE SET nome = EXCLUDED.nome;
 
+INSERT INTO costs.support_staff (auth_user_id, nome)
+SELECT auth_user_id, nome
+FROM costs.admin_staff
+ON CONFLICT (auth_user_id) DO UPDATE SET nome = EXCLUDED.nome;
+
 INSERT INTO costs.subscriptions (
   aces_id, plan_id, status, started_at, cycle_anchor_day,
   implantacao_brl, mensalidade_brl_override, ai_budget_brl_override,

@@ -10639,6 +10639,14 @@ export class AgentManager {
     return data === true;
   }
 
+  async isSupportStaff(authUserId: string) {
+    const { data, error } = await this.serviceClient.rpc("service_support_is_staff", {
+      p_auth_user_id: authUserId,
+    });
+    if (error) throw new HttpError(500, "Nao foi possivel validar o acesso do suporte", error);
+    return data === true;
+  }
+
   async adminRpc(functionName: string, params: JsonRecord = {}) {
     if (!functionName.startsWith("service_admin_")) {
       throw new HttpError(500, "RPC administrativa invalida");

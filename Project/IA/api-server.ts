@@ -1175,6 +1175,15 @@ const requireStaff = asyncHandler(
   },
 );
 
+const requireSupportStaff = asyncHandler(
+  async (req: AuthenticatedRequest, _res, next) => {
+    if (!req.authContext || !(await manager.isSupportStaff(req.authContext.authUserId))) {
+      throw new HttpError(403, "Acesso restrito ao time de suporte");
+    }
+    next();
+  },
+);
+
 function adminNumber(value: unknown, field: string, options?: { min?: number; integer?: boolean }) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || (options?.integer && !Number.isInteger(parsed))) {
@@ -5202,12 +5211,20 @@ app.get(
   }),
 );
 
+app.get(
+  "/api/agent-simulator/access",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    res.json({ isSupportStaff: await manager.isSupportStaff(req.authContext!.authUserId) });
+  }),
+);
+
 // Agent simulator: restricted to Its Time support staff and deliberately separate
 // from production message dispatch. Only a final evaluation summary is persisted.
 app.get(
   "/api/agent-simulator/accounts",
   authMiddleware,
-  requireStaff,
+  requireSupportStaff,
   asyncHandler(async (_req, res) => {
     res.json({ accounts: await agentSimulatorService.listAccounts() });
   }),
@@ -5216,7 +5233,7 @@ app.get(
 app.get(
   "/api/agent-simulator/accounts/:acesId/agents",
   authMiddleware,
-  requireStaff,
+  requireSupportStaff,
   asyncHandler(async (req, res) => {
     const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
     res.json({ agents: await agentSimulatorService.listAgents(acesId) });
@@ -5226,7 +5243,7 @@ app.get(
 app.get(
   "/api/agent-simulator/accounts/:acesId/agents/:agentId",
   authMiddleware,
-  requireStaff,
+  requireSupportStaff,
   asyncHandler(async (req, res) => {
     const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
     res.json(await agentSimulatorService.getAgentConfig(acesId, getSingleParam(req.params.agentId)));
@@ -5236,7 +5253,7 @@ app.get(
 app.post(
   "/api/agent-simulator/accounts/:acesId/agents/:agentId/turns",
   authMiddleware,
-  requireStaff,
+  requireSupportStaff,
   asyncHandler(async (req, res) => {
     const acesId = adminNumber(getSingleParam(req.params.acesId), "acesId", { min: 1, integer: true });
     const input = asRecord(req.body);
@@ -5256,7 +5273,7 @@ app.post(
 app.post(
   "/api/agent-simulator/reports",
   authMiddleware,
-  requireStaff,
+  requireSupportStaff,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const input = asRecord(req.body);
     res.json(await agentSimulatorService.sendReport(req.authContext!, {
