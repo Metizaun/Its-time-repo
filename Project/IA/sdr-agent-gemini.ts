@@ -460,6 +460,32 @@ type CustomerConversationRow = {
   created_at: string;
 };
 
+type ChatConversationListRow = {
+  conversation_id: string;
+  aces_id: number;
+  lead_id: string;
+  connection_id: string;
+  interaction_mode: "ai" | "human";
+  conversation_status: "active" | "archived";
+  last_message_at: string | null;
+  last_inbound_at: string | null;
+  last_message_preview: string | null;
+  conversation_created_at: string;
+  lead_name: string | null;
+  lead_email: string | null;
+  lead_phone: string | null;
+  lead_source: string | null;
+  lead_stage_id: string | null;
+  lead_owner_id: string | null;
+  lead_status: string | null;
+  connection_channel_type: MessagingConnectionRow["channel_type"];
+  connection_provider: MessagingConnectionRow["provider"];
+  connection_display_name: string;
+  connection_instance_name: string | null;
+  connection_capability: MessagingConnectionRow["capability"];
+  connection_status: MessagingConnectionRow["status"];
+};
+
 type AgentTransferSessionRow = {
   id: string;
   aces_id: number;
@@ -15713,62 +15739,45 @@ export class AgentManager {
 
   async listChatConversations(context: AuthContext) {
     const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId, context.role);
-    const { data: conversations, error } = await this.serviceClient
-      .from("customer_conversations")
-      .select("id, aces_id, lead_id, connection_id, interaction_mode, status, last_message_at, last_inbound_at, last_message_preview, created_at")
-      .eq("aces_id", context.acesId)
-      .eq("status", "active")
-      .order("last_message_at", { ascending: false, nullsFirst: false });
-    if (error) throw new HttpError(500, "Nao foi possivel listar as conversas", error);
-    const rows = (conversations ?? []) as CustomerConversationRow[];
-    if (rows.length === 0) return [];
-    const [connectionsResult, leadsResult] = await Promise.all([
-      this.serviceClient.from("messaging_connections")
-        .select("id, aces_id, channel_type, provider, display_name, legacy_instance_name, capability, status")
-        .in("id", Array.from(new Set(rows.map((row) => row.connection_id)))),
-      this.serviceClient.from("leads")
-        .select("id, name, email, contact_phone, Fonte, created_at, updated_at, stage_id, owner_id, status")
-        .eq("aces_id", context.acesId)
-        .eq("view", true)
-        .in("id", Array.from(new Set(rows.map((row) => row.lead_id)))),
-    ]);
-    if (connectionsResult.error) throw new HttpError(500, "Nao foi possivel carregar os canais", connectionsResult.error);
-    if (leadsResult.error) throw new HttpError(500, "Nao foi possivel carregar os contatos", leadsResult.error);
-    const connectionById = new Map(((connectionsResult.data ?? []) as MessagingConnectionRow[]).map((item) => [item.id, item]));
-    const leadById = new Map((leadsResult.data ?? []).map((item) => [String(item.id), item]));
-    return rows.flatMap((conversation) => {
-      const connection = connectionById.get(conversation.connection_id);
-      const lead = leadById.get(conversation.lead_id);
-      if (!connection || !lead) return [];
-      if (!isAdminRole(context.role) && connection.legacy_instance_name && !accessibleInstances.has(connection.legacy_instance_name)) return [];
+    const { data, error } = await this.serviceClient.rpc("rpc_list_customer_conversations", {
+      p_aces_id: context.acesId,
+    });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar as conversas", error);
+    const rows = (data ?? []) as ChatConversationListRow[];
+    return rows.flatMap((row) => {
+      if (
+        !isAdminRole(context.role)
+        && row.connection_instance_name
+        && !accessibleInstances.has(row.connection_instance_name)
+      ) return [];
       return [{
-        id: conversation.id,
-        leadId: conversation.lead_id,
-        connectionId: conversation.connection_id,
-        interactionMode: conversation.interaction_mode,
-        status: conversation.status,
-        lastMessageAt: conversation.last_message_at,
-        lastInboundAt: conversation.last_inbound_at,
-        lastMessagePreview: conversation.last_message_preview,
-        createdAt: conversation.created_at,
+        id: row.conversation_id,
+        leadId: row.lead_id,
+        connectionId: row.connection_id,
+        interactionMode: row.interaction_mode,
+        status: row.conversation_status,
+        lastMessageAt: row.last_message_at,
+        lastInboundAt: row.last_inbound_at,
+        lastMessagePreview: row.last_message_preview,
+        createdAt: row.conversation_created_at,
         lead: {
-          id: lead.id,
-          name: lead.name,
-          email: lead.email,
-          phone: lead.contact_phone,
-          source: lead.Fonte,
-          stageId: lead.stage_id,
-          ownerId: lead.owner_id,
-          status: lead.status,
+          id: row.lead_id,
+          name: row.lead_name,
+          email: row.lead_email,
+          phone: row.lead_phone,
+          source: row.lead_source,
+          stageId: row.lead_stage_id,
+          ownerId: row.lead_owner_id,
+          status: row.lead_status,
         },
         connection: {
-          id: connection.id,
-          channelType: connection.channel_type,
-          provider: connection.provider,
-          displayName: connection.display_name,
-          instanceName: connection.legacy_instance_name,
-          capability: connection.capability,
-          status: connection.status,
+          id: row.connection_id,
+          channelType: row.connection_channel_type,
+          provider: row.connection_provider,
+          displayName: row.connection_display_name,
+          instanceName: row.connection_instance_name,
+          capability: row.connection_capability,
+          status: row.connection_status,
         },
       }];
     });

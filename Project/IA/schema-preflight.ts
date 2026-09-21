@@ -83,6 +83,8 @@ const AGENDA_SYNC_INBOUND_MIGRATION =
   "supabase/migrations/20260912172120_agenda_sync_inbound_status.sql";
 const AGENDA_SYNC_RESYNC_MIGRATION =
   "supabase/migrations/20260914000917_agenda_sync_resync_operations.sql";
+const CHAT_CONVERSATION_LOADING_MIGRATION =
+  "supabase/migrations/20260921180231_optimize_chat_conversation_loading.sql";
 const CHAT_ATTACHMENTS_FILE_SIZE_LIMIT = 104857600;
 const CHAT_ATTACHMENTS_ALLOWED_MIME_TYPES = [
   "image/jpeg",
@@ -319,6 +321,21 @@ async function validateInternalTeamChatRpcs(
 
   return missing?.error
     ? buildSchemaFailure("RPCs do Chat interno", INTERNAL_TEAM_CHAT_MIGRATION, missing.error)
+    : null;
+}
+
+async function validateChatConversationLoadingRpc(
+  serviceClient: SupabaseClient<any, any, any>
+) {
+  const { error } = await serviceClient.rpc("rpc_list_customer_conversations", {
+    p_aces_id: -1,
+  });
+  return error
+    ? buildSchemaFailure(
+        "RPC otimizada da lista de conversas",
+        CHAT_CONVERSATION_LOADING_MIGRATION,
+        error
+      )
     : null;
 }
 
@@ -1314,6 +1331,7 @@ export async function assertRuntimeSchemaCompatibility(
     ),
     validateChatAttachmentsStorage(serviceClient),
     validateInternalTeamChatRpcs(serviceClient),
+    validateChatConversationLoadingRpc(serviceClient),
     validateSelectedColumns(
       serviceClient,
       "internal_conversations",
