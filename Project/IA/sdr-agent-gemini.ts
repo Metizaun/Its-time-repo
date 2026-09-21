@@ -2900,6 +2900,22 @@ export class AgentManager {
   }
 
   private async ensureEvolutionInstanceChannel(acesId: number, instanceName: string) {
+    const { data: existingConnection, error: connectionLookupError } = await this.serviceClient
+      .from("messaging_connections")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("provider", "evolution")
+      .eq("provider_external_id", `instance:${instanceName}`)
+      .maybeSingle();
+
+    if (connectionLookupError) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel localizar a conexao existente da instancia",
+        connectionLookupError
+      );
+    }
+
     const { error } = await this.serviceClient.from("instance_channels").upsert(
       {
         aces_id: acesId,
@@ -2908,6 +2924,7 @@ export class AgentManager {
         provider: "evolution",
         capability: "full",
         status: "active",
+        messaging_connection_id: existingConnection?.id ?? null,
       },
       { onConflict: "aces_id,instance_name" }
     );
