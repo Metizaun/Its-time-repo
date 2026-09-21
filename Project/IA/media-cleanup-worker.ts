@@ -44,6 +44,5 @@ export function startMediaCleanupWorker(config: MediaCleanupWorkerConfig) {
 
   void run();
   const interval = setInterval(() => void run(), config.pollMs);
-  interval.unref();
   return { stop: () => clearInterval(interval), run };
 }
