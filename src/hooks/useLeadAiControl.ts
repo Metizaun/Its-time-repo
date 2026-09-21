@@ -23,6 +23,7 @@ function readErrorMessage(error: unknown) {
 export function useLeadAiControl(
   leadId: string | null,
   instanceName?: string | null,
+  conversationId?: string | null,
   options: UseLeadAiControlOptions = {}
 ) {
   const { enabled: hookEnabled = true } = options;
@@ -57,6 +58,7 @@ export function useLeadAiControl(
           accessToken,
           leadId,
           instanceName,
+          conversationId,
         });
 
         setState(nextState);
@@ -77,7 +79,7 @@ export function useLeadAiControl(
         }
       }
     },
-    [hookEnabled, instanceName, leadId]
+    [conversationId, hookEnabled, instanceName, leadId]
   );
 
   const toggle = useCallback(
@@ -114,6 +116,7 @@ export function useLeadAiControl(
           leadId,
           enabled: nextEnabled,
           instanceName,
+          conversationId,
         });
 
         setState(nextState);
@@ -130,12 +133,12 @@ export function useLeadAiControl(
         setSaving(false);
       }
     },
-    [hookEnabled, instanceName, leadId, loading, saving, state]
+    [conversationId, hookEnabled, instanceName, leadId, loading, saving, state]
   );
 
   useEffect(() => {
     void fetchState();
-  }, [fetchState, instanceName]);
+  }, [conversationId, fetchState, instanceName]);
 
   useEffect(() => {
     if (!hookEnabled || !leadId) {
@@ -150,7 +153,9 @@ export function useLeadAiControl(
           event: "INSERT",
           schema: "crm",
           table: "message_history",
-          filter: `lead_id=eq.${leadId}`,
+          filter: conversationId
+            ? `customer_conversation_id=eq.${conversationId}`
+            : `lead_id=eq.${leadId}`,
         },
         () => {
           void fetchState({ silent: true });
@@ -161,7 +166,7 @@ export function useLeadAiControl(
     return () => {
       supabase.removeChannel(messageChannel);
     };
-  }, [fetchState, hookEnabled, instanceName, leadId]);
+  }, [conversationId, fetchState, hookEnabled, instanceName, leadId]);
 
   return {
     state,

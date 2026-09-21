@@ -27,6 +27,7 @@ type LeadAiRequestParams = {
   accessToken: string;
   leadId: string;
   instanceName?: string | null;
+  conversationId?: string | null;
 };
 
 type UpdateLeadAiRequestParams = LeadAiRequestParams & {
@@ -52,10 +53,12 @@ export async function getLeadAiState({
   accessToken,
   leadId,
   instanceName,
+  conversationId,
 }: LeadAiRequestParams): Promise<LeadAiControlState> {
-  const query = instanceName?.trim()
-    ? `?instanceName=${encodeURIComponent(instanceName.trim())}`
-    : "";
+  const params = new URLSearchParams();
+  if (instanceName?.trim()) params.set("instanceName", instanceName.trim());
+  if (conversationId?.trim()) params.set("conversationId", conversationId.trim());
+  const query = params.toString() ? `?${params.toString()}` : "";
   const response = await fetch(`${CRM_BACKEND_URL}/api/chat/leads/${leadId}/ai-state${query}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -74,6 +77,7 @@ export async function updateLeadAiState({
   leadId,
   enabled,
   instanceName,
+  conversationId,
 }: UpdateLeadAiRequestParams): Promise<LeadAiControlState> {
   const response = await fetch(`${CRM_BACKEND_URL}/api/chat/leads/${leadId}/ai-state`, {
     method: "PUT",
@@ -81,7 +85,11 @@ export async function updateLeadAiState({
       "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ enabled, instanceName: instanceName ?? null }),
+    body: JSON.stringify({
+      enabled,
+      instanceName: instanceName ?? null,
+      conversationId: conversationId ?? null,
+    }),
   });
 
   if (!response.ok) {

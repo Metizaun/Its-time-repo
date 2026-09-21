@@ -27,8 +27,8 @@ export function AgentToolConfigurationDialog({
   toolKey,
   onOpenChange,
 }: AgentToolConfigurationDialogProps) {
-  const isWideFlow = toolKey === "visagism" || toolKey === "prescription_analyst" || toolKey === "forwarding" || toolKey === "store_locator";
-  const hasDedicatedEditor = toolKey !== null && toolKey !== "send_media";
+  const isWideFlow = toolKey === "visagism" || toolKey === "prescription_analyst" || toolKey === "forwarding" || toolKey === "store_locator" || toolKey === "send_media";
+  const hasDedicatedEditor = toolKey !== null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

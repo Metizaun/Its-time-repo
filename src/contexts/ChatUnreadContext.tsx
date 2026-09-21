@@ -45,7 +45,7 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
 
     const request = listChatUnreadCounts()
       .then((counts) => {
-        setByLead(Object.fromEntries(counts.map((item) => [item.leadId, item.count])));
+        setByLead(Object.fromEntries(counts.map((item) => [item.conversationId, item.count])));
       })
       .finally(() => {
         if (refetchPromiseRef.current === request) {
@@ -122,7 +122,7 @@ export function ChatUnreadProvider({ children }: { children: ReactNode }) {
     const channel = supabase
       .channel(createRealtimeChannelName(`chat-unread-${session.user.id}`))
       .on("postgres_changes", { event: "INSERT", schema: "crm", table: "message_history" }, scheduleRefetch)
-      .on("postgres_changes", { event: "*", schema: "crm", table: "chat_read_states" }, scheduleRefetch)
+      .on("postgres_changes", { event: "*", schema: "crm", table: "customer_conversation_read_states" }, scheduleRefetch)
       .on("postgres_changes", { event: "INSERT", schema: "crm", table: "internal_messages" }, scheduleRefetch)
       .on("postgres_changes", { event: "*", schema: "crm", table: "internal_conversation_members" }, scheduleRefetch)
       .subscribe((status) => {

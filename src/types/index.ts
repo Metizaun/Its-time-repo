@@ -46,6 +46,18 @@ export interface AIAgent {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  connections?: MessagingConnection[];
+}
+
+export interface MessagingConnection {
+  id: string;
+  aces_id: number;
+  channel_type: "whatsapp" | "instagram" | "website" | "legacy";
+  provider: "evolution" | "meta" | "gupshup" | "instagram" | "website" | "legacy";
+  display_name: string;
+  legacy_instance_name: string | null;
+  capability: "manual_only" | "full" | "disabled";
+  status: "draft" | "active" | "disabled" | "error" | "reconnect_required";
 }
 
 export interface User {

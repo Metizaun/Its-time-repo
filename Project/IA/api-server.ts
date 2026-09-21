@@ -519,8 +519,8 @@ const manager = new AgentManager({
   },
   rbVisagismService,
   instagramService,
-  hasLiveWebsiteSession: async (acesId: number, leadId: string): Promise<boolean> =>
-    Boolean(await websiteWidgetService.getLiveSessionForLead(acesId, leadId)),
+  hasLiveWebsiteSession: async (acesId: number, leadId: string, customerConversationId?: string | null): Promise<boolean> =>
+    Boolean(await websiteWidgetService.getLiveSessionForLead(acesId, leadId, customerConversationId)),
 });
 
 const internalChatService = new InternalChatService({
@@ -1553,6 +1553,7 @@ app.get(
       websiteWidgetService.getLiveSessionForLead(
         context.acesId,
         getSingleParam(req.params.leadId),
+        typeof req.query.conversationId === "string" ? req.query.conversationId : undefined,
       ),
     );
     res.json({ success: true, live: Boolean(session) });
@@ -4016,6 +4017,8 @@ app.post(
     const attachmentInput = asRecord(req.body.attachment);
     const result = await manager.sendManualMessage(context, {
       leadId: String(req.body.leadId ?? ""),
+      customerConversationId:
+        typeof req.body.conversationId === "string" ? req.body.conversationId : null,
       content: typeof req.body.content === "string" ? req.body.content : "",
       instanceName:
         typeof req.body.instanceName === "string"
@@ -4040,6 +4043,29 @@ app.post(
 );
 
 app.get(
+  "/api/chat/conversations",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const conversations = await manager.listChatConversations(req.authContext!);
+    res.json({ success: true, conversations });
+  }),
+);
+
+app.get(
+  "/api/chat/conversations/:conversationId/messages",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.listChatMessages(
+      req.authContext!,
+      "",
+      null,
+      getSingleParam(req.params.conversationId),
+    );
+    res.json(result);
+  }),
+);
+
+app.get(
   "/api/chat/leads/:leadId/messages",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -4057,7 +4083,12 @@ app.get(
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const leadId = getSingleParam(req.params.leadId);
-    const result = await manager.getLeadAiState(req.authContext!, leadId, asString(req.query.instanceName));
+    const result = await manager.getLeadAiState(
+      req.authContext!,
+      leadId,
+      asString(req.query.instanceName),
+      asString(req.query.conversationId),
+    );
     res.json(result);
   }),
 );
@@ -4092,6 +4123,7 @@ app.put(
       leadId,
       req.body.enabled,
       asString(req.body.instanceName),
+      asString(req.body.conversationId),
     );
     res.json(result);
   }),
@@ -4106,6 +4138,7 @@ app.post(
       leadId,
       stageId: String(req.body.stageId ?? ""),
       instanceName: asString(req.body.instanceName),
+      customerConversationId: asString(req.body.conversationId),
     });
     res.json(result);
   }),
@@ -4307,6 +4340,15 @@ app.get(
   }),
 );
 
+app.get(
+  "/api/messaging-connections",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const connections = await manager.listMessagingConnections(req.authContext!);
+    res.json({ success: true, connections });
+  }),
+);
+
 app.post(
   "/api/ai-agents",
   authMiddleware,
@@ -4314,6 +4356,9 @@ app.post(
     const agent = await manager.createAgent(req.authContext!, {
       name: String(req.body.name ?? ""),
       instanceName: typeof req.body.instanceName === "string" ? req.body.instanceName : undefined,
+      connectionIds: Array.isArray(req.body.connectionIds)
+        ? req.body.connectionIds.map(String)
+        : undefined,
       agentType: req.body.agentType === "subagent" ? "subagent" : "primary",
       parentAgentId: typeof req.body.parentAgentId === "string" ? req.body.parentAgentId : undefined,
       agentKey: typeof req.body.agentKey === "string" ? req.body.agentKey : undefined,
@@ -4386,6 +4431,9 @@ app.patch(
         typeof req.body.instanceName === "string"
           ? req.body.instanceName
           : undefined,
+      connectionIds: Array.isArray(req.body.connectionIds)
+        ? req.body.connectionIds.map(String)
+        : undefined,
       routingInstruction:
         typeof req.body.routingInstruction === "string"
           ? req.body.routingInstruction
@@ -4512,6 +4560,9 @@ app.post(
     const agent = await manager.createAgent(req.authContext!, {
       name: String(req.body.name ?? req.body.agentName ?? ""),
       instanceName: String(req.body.instanceName ?? ""),
+      connectionIds: Array.isArray(req.body.connectionIds)
+        ? req.body.connectionIds.map(String)
+        : undefined,
       systemPrompt:
         typeof req.body.systemPrompt === "string"
           ? req.body.systemPrompt
@@ -4576,6 +4627,9 @@ app.patch(
         typeof req.body.instanceName === "string"
           ? req.body.instanceName
           : undefined,
+      connectionIds: Array.isArray(req.body.connectionIds)
+        ? req.body.connectionIds.map(String)
+        : undefined,
       systemPrompt:
         typeof req.body.systemPrompt === "string"
           ? req.body.systemPrompt
@@ -4816,6 +4870,72 @@ app.delete(
       req.authContext!,
       getSingleParam(req.params.id),
       getSingleParam(req.params.ruleId),
+    );
+    res.json(result);
+  }),
+);
+
+app.get("/api/agents/:id/tools/send_media/catalog", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.listAgentMediaCatalog(req.authContext!, getSingleParam(req.params.id)));
+}));
+app.post("/api/agents/:id/tools/send_media/catalogs", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const catalog = await manager.createAgentMediaCatalog(req.authContext!, getSingleParam(req.params.id), { name: String(req.body.name ?? ""), parentId: typeof req.body.parentId === "string" ? req.body.parentId : null });
+  res.status(201).json({ catalog });
+}));
+app.delete("/api/agents/:id/tools/send_media/catalogs/:catalogId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.deleteAgentMediaCatalog(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.catalogId)));
+}));
+app.post("/api/agents/:id/tools/send_media/analyze", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const draft = await manager.analyzeAgentMedia(req.authContext!, getSingleParam(req.params.id), { fileName: String(req.body.fileName ?? ""), mimeType: String(req.body.mimeType ?? ""), base64: String(req.body.base64 ?? "") });
+  res.status(201).json({ draft });
+}));
+app.patch("/api/agents/:id/tools/send_media/assets/:assetId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const asset = await manager.saveAgentMediaAsset(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.assetId), { title: String(req.body.title ?? ""), description: String(req.body.description ?? ""), searchTerms: Array.isArray(req.body.searchTerms) ? req.body.searchTerms.map(String) : [], catalogIds: Array.isArray(req.body.catalogIds) ? req.body.catalogIds.map(String) : [], sendEnabled: req.body.sendEnabled !== false });
+  res.json({ asset });
+}));
+app.get("/api/agents/:id/tools/send_media/trash", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.listArchivedAgentMedia(req.authContext!, getSingleParam(req.params.id)));
+}));
+app.delete("/api/agents/:id/tools/send_media/catalog/assets/:assetId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.archiveAgentMedia(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.assetId)));
+}));
+app.post("/api/agents/:id/tools/send_media/catalog/assets/:assetId/restore", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.restoreAgentMedia(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.assetId)));
+}));
+
+app.get(
+  "/api/agents/:id/tools/prescription_analyst/catalog",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const products = await manager.listOpticalCatalogProducts(req.authContext!, getSingleParam(req.params.id));
+    res.json({ success: true, products });
+  }),
+);
+
+app.post(
+  "/api/agents/:id/tools/prescription_analyst/catalog",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const product = await manager.upsertOpticalCatalogProduct(req.authContext!, getSingleParam(req.params.id), {
+      id: typeof req.body.id === "string" ? req.body.id : null,
+      lensCategory: req.body.lensCategory === "multifocal" ? "multifocal" : "single_vision",
+      displayName: String(req.body.displayName ?? ""),
+      brand: typeof req.body.brand === "string" ? req.body.brand : null,
+      treatments: Array.isArray(req.body.treatments) ? req.body.treatments.map(String) : [],
+      description: typeof req.body.description === "string" ? req.body.description : null,
+      priceCents: Number(req.body.priceCents),
+      isActive: req.body.isActive !== false,
+    });
+    res.status(201).json({ success: true, product });
+  }),
+);
+
+app.delete(
+  "/api/agents/:id/tools/prescription_analyst/catalog/:productId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const result = await manager.deactivateOpticalCatalogProduct(
+      req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.productId),
     );
     res.json(result);
   }),

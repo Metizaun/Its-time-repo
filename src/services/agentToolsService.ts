@@ -84,6 +84,14 @@ export type VisagismCatalogItem = {
   display_order: number;
 };
 
+export type MediaCatalog = { id: string; parent_id: string | null; name: string };
+export type AgentMediaAsset = {
+  id: string; title: string; description: string; search_terms: string[]; attributes: Record<string, unknown>;
+  preview_url: string | null; file_name: string; send_enabled: boolean; origin: "send_media" | "visagism";
+  catalog_ids: string[]; disabled_at?: string | null; purge_after?: string | null;
+};
+export type AgentMediaCatalogState = { catalogs: MediaCatalog[]; assets: AgentMediaAsset[]; limit: number; used: number };
+
 export type VisagismAnalysis = {
   product_name: string;
   color: string;
@@ -115,6 +123,18 @@ export type LensPriceRule = {
   priceCents: number;
   currency: "BRL";
   priority: number;
+  isActive: boolean;
+};
+
+export type OpticalCatalogProduct = {
+  id: string;
+  lensCategory: "single_vision" | "multifocal";
+  displayName: string;
+  brand: string | null;
+  treatments: string[];
+  description: string | null;
+  priceCents: number;
+  currency: "BRL";
   isActive: boolean;
 };
 
@@ -288,6 +308,31 @@ export async function saveVisagismCatalogItem(
   return response.item;
 }
 
+export async function listAgentMediaCatalog(agentId: string) {
+  return getCrmBackend<AgentMediaCatalogState>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/catalog`);
+}
+export async function saveAgentMediaCatalog(agentId: string, input: { id?: string; name: string; parentId?: string | null }) {
+  return postCrmBackend<{ catalog: MediaCatalog }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/catalogs`, input);
+}
+export async function deleteAgentMediaCatalog(agentId: string, catalogId: string) {
+  return deleteCrmBackend<{ success: boolean }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/catalogs/${encodeURIComponent(catalogId)}`);
+}
+export async function saveAgentMediaAsset(agentId: string, input: { id?: string; title: string; description: string; searchTerms: string[]; catalogIds: string[]; sendEnabled: boolean }) {
+  return patchCrmBackend<{ asset: AgentMediaAsset }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/assets/${encodeURIComponent(input.id ?? "")}`, input);
+}
+export async function analyzeAgentMedia(agentId: string, input: { fileName: string; mimeType: string; base64: string }) {
+  return postCrmBackend<{ draft: Omit<AgentMediaAsset, "id" | "catalog_ids" | "send_enabled" | "origin"> & { draftId: string } }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/analyze`, input);
+}
+export async function listArchivedAgentMedia(agentId: string) {
+  return getCrmBackend<{ assets: AgentMediaAsset[] }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/trash`);
+}
+export async function archiveAgentMedia(agentId: string, assetId: string) {
+  return deleteCrmBackend<{ success: boolean }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/catalog/assets/${encodeURIComponent(assetId)}`);
+}
+export async function restoreAgentMedia(agentId: string, assetId: string) {
+  return postCrmBackend<{ success: boolean }>(`/api/agents/${encodeURIComponent(agentId)}/tools/send_media/catalog/assets/${encodeURIComponent(assetId)}/restore`, {});
+}
+
 export async function listStoreLocatorStores(
   agentId: string,
   input: { search?: string; status?: "all" | "active" | "inactive" | "pending" } = {},
@@ -379,6 +424,30 @@ export async function runRbBillingNow(agentId: string) {
   return postCrmBackend<{ success: boolean; result: unknown }>(
     `/api/agents/${encodeURIComponent(agentId)}/tools/rb_billing/run-now`,
     {}
+  );
+}
+
+export async function listOpticalCatalogProducts(agentId: string) {
+  const response = await getCrmBackend<{ products?: OpticalCatalogProduct[] }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/prescription_analyst/catalog`,
+  );
+  return response.products ?? [];
+}
+
+export async function saveOpticalCatalogProduct(
+  agentId: string,
+  input: Omit<OpticalCatalogProduct, "id" | "currency"> & { id?: string },
+) {
+  const response = await postCrmBackend<{ product: OpticalCatalogProduct }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/prescription_analyst/catalog`,
+    input,
+  );
+  return response.product;
+}
+
+export async function deactivateOpticalCatalogProduct(agentId: string, productId: string) {
+  return deleteCrmBackend<{ success: boolean }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/prescription_analyst/catalog/${encodeURIComponent(productId)}`,
   );
 }
 

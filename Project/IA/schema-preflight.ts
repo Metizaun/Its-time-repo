@@ -1985,11 +1985,32 @@ export async function assertRuntimeSchemaCompatibility(
       "supabase/migrations/20260728185300_add_rb_connections_and_visagism_storage.sql"
     ),
     validateSelectedColumns(
+      agentsClient,
+      "media_assets",
+      ["id", "aces_id", "agent_id", "storage_bucket", "storage_path", "mime_type", "title", "description", "search_terms", "analysis_completed_at", "send_enabled"],
+      "agents.media_assets",
+      "supabase/migrations/20260918143000_create_agent_media_catalogs.sql"
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "media_catalogs",
+      ["id", "aces_id", "agent_id", "parent_id", "name"],
+      "agents.media_catalogs",
+      "supabase/migrations/20260918143000_create_agent_media_catalogs.sql"
+    ),
+    validateSelectedColumns(
       serviceClient,
       "receituarios",
-      ["id", "lead_id", "aces_id", "source_attachment_id", "agent_tool_run_id", "status", "raw_extraction"],
+      ["id", "lead_id", "aces_id", "source_attachment_id", "agent_tool_run_id", "status", "raw_extraction", "lens_category"],
       "crm.receituarios (prescription analyst)",
       PRESCRIPTION_ANALYST_MIGRATION
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "optical_catalog_products",
+      ["id", "aces_id", "agent_tool_id", "lens_category", "display_name", "brand", "treatments", "description", "price_cents", "is_active"],
+      "crm.optical_catalog_products",
+      "supabase/migrations/20260918120000_add_optical_catalog_products.sql"
     ),
     validateSelectedColumns(
       serviceClient,

@@ -55,20 +55,21 @@ export type WebsiteWidgetAgentPort = {
   ): Promise<{ leadId: string }>;
   processInbound(
     acesId: number,
-    input: { leadId: string; instanceName: string; content: string },
+    input: { leadId: string; instanceName: string; messagingConnectionId: string; content: string },
   ): Promise<WebsiteWidgetInboundResult>;
   requeueReply(
     acesId: number,
     input: {
       leadId: string;
       instanceName: string;
+      messagingConnectionId: string;
       content: string;
       messageId: string | null;
     },
   ): Promise<{ queued: boolean; reason?: string }>;
   saveAgentMessage(
     acesId: number,
-    input: { leadId: string; instanceName: string; content: string },
+    input: { leadId: string; instanceName: string; messagingConnectionId: string; content: string },
   ): Promise<void>;
 };
 
@@ -103,7 +104,7 @@ const UUID_PATTERN =
 const MESSAGE_MAX_LENGTH = 2000;
 const DEFAULT_WELCOME = "Oi! Como posso ajudar?";
 const HANDOFF_FALLBACK =
-  "Tive um problema para responder agora, mas sua mensagem foi registrada e um atendente vai continuar com voce pelo WhatsApp.";
+  "Tive um problema para responder agora, mas sua mensagem foi registrada e um atendente vai continuar com voce por este canal.";
 
 export class WebsiteWidgetError extends Error {
   constructor(
@@ -123,6 +124,7 @@ type ConnectionRow = {
   name: string;
   agent_id: string | null;
   instance_name: string;
+  messaging_connection_id: string;
   welcome_message: string | null;
   theme: Record<string, unknown> | null;
   allowed_domains: string[] | null;
@@ -337,6 +339,7 @@ export class WebsiteWidgetService {
     const result = await this.agent.processInbound(connection.aces_id, {
       leadId: session.lead_id,
       instanceName: connection.instance_name,
+      messagingConnectionId: connection.messaging_connection_id,
       content: text,
     });
 
@@ -375,7 +378,11 @@ export class WebsiteWidgetService {
     await this.touchSession(session.id);
 
     const cursor = this.parseCursor(input.cursor);
-    const messages = await this.readMessages(session.lead_id, cursor);
+    const messages = await this.readMessages(
+      session.lead_id,
+      connection.messaging_connection_id,
+      cursor,
+    );
     const awaitingReply = await this.advancePendingReply(connection, session);
 
     return {
@@ -411,8 +418,31 @@ export class WebsiteWidgetService {
     return { ended: true };
   }
 
-  async getLiveSessionForLead(acesId: number, leadId: string) {
-    const { data, error } = await this.crm
+  async getLiveSessionForLead(acesId: number, leadId: string, customerConversationId?: string | null) {
+    let websiteConnectionId: string | null = null;
+    if (customerConversationId) {
+      const { data: conversation, error: conversationError } = await this.crm
+        .from("customer_conversations")
+        .select("connection_id")
+        .eq("id", customerConversationId)
+        .eq("aces_id", acesId)
+        .eq("lead_id", leadId)
+        .maybeSingle();
+      if (conversationError) throw mapDatabaseError(conversationError);
+      if (!conversation) return null;
+
+      const { data: websiteConnection, error: websiteConnectionError } = await this.crm
+        .from("website_widget_connections")
+        .select("id")
+        .eq("aces_id", acesId)
+        .eq("messaging_connection_id", conversation.connection_id)
+        .maybeSingle();
+      if (websiteConnectionError) throw mapDatabaseError(websiteConnectionError);
+      websiteConnectionId = typeof websiteConnection?.id === "string" ? websiteConnection.id : null;
+      if (!websiteConnectionId) return null;
+    }
+
+    let query = this.crm
       .from("website_widget_sessions")
       .select("id, aces_id, connection_id, lead_id, status, last_seen_at")
       .eq("aces_id", acesId)
@@ -420,8 +450,9 @@ export class WebsiteWidgetService {
       .eq("status", "active")
       .gte("last_seen_at", this.idleThreshold())
       .order("last_seen_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    if (websiteConnectionId) query = query.eq("connection_id", websiteConnectionId);
+    const { data, error } = await query.maybeSingle();
     if (error) throw mapDatabaseError(error);
     return (data as SessionRow | null) ?? null;
   }
@@ -432,9 +463,9 @@ export class WebsiteWidgetService {
     const pending = await this.oldestPendingJob(session.id);
     if (!pending) return false;
 
-    // The answer may have gone out over WhatsApp after the session went idle.
-    // Checking every channel here is what stops a retry from answering twice.
-    if (await this.hasAnswerSince(session.lead_id, pending.created_at)) {
+    // The answer may have gone out through another channel after the session
+    // went idle. Checking every channel stops a retry from answering twice.
+    if (await this.hasAnswerSince(session.lead_id, connection.messaging_connection_id, pending.created_at)) {
       await this.resolvePendingJobs(session.id);
       return false;
     }
@@ -474,6 +505,7 @@ export class WebsiteWidgetService {
       await this.agent.requeueReply(connection.aces_id, {
         leadId: session.lead_id,
         instanceName: connection.instance_name,
+        messagingConnectionId: connection.messaging_connection_id,
         content: original,
         messageId: job.inbound_message_id,
       });
@@ -492,7 +524,7 @@ export class WebsiteWidgetService {
 
   /**
    * Last resort so the visitor is never left staring at an empty chat: record an
-   * answer in the conversation and let the WhatsApp path take over.
+   * answer in the same website conversation, without changing channels.
    */
   private async exhaustJob(
     connection: ConnectionRow,
@@ -503,6 +535,7 @@ export class WebsiteWidgetService {
     await this.agent.saveAgentMessage(connection.aces_id, {
       leadId: session.lead_id,
       instanceName: connection.instance_name,
+      messagingConnectionId: connection.messaging_connection_id,
       content: HANDOFF_FALLBACK,
     });
     await this.crm
@@ -533,11 +566,15 @@ export class WebsiteWidgetService {
     return (data as { id: string; created_at: string } | null) ?? null;
   }
 
-  private async hasAnswerSince(leadId: string, since: string) {
+  private async hasAnswerSince(leadId: string, messagingConnectionId: string, since: string) {
+    const conversationId = await this.findWebsiteConversationId(leadId, messagingConnectionId);
+    if (!conversationId) return false;
+
     const { data, error } = await this.crm
       .from("message_history")
       .select("id")
       .eq("lead_id", leadId)
+      .eq("customer_conversation_id", conversationId)
       .eq("direction", "outbound")
       .gte("sent_at", since)
       .limit(1)
@@ -571,12 +608,19 @@ export class WebsiteWidgetService {
    * they can type a phone number, so anything the business sent to that contact
    * over WhatsApp must never surface in the website chat.
    */
-  private async readMessages(leadId: string, cursor: string): Promise<WebsiteWidgetMessage[]> {
+  private async readMessages(
+    leadId: string,
+    messagingConnectionId: string,
+    cursor: string,
+  ): Promise<WebsiteWidgetMessage[]> {
+    const conversationId = await this.findWebsiteConversationId(leadId, messagingConnectionId);
+    if (!conversationId) return [];
+
     const { data, error } = await this.crm
       .from("message_history")
       .select("id, content, direction, sent_at")
       .eq("lead_id", leadId)
-      .eq("provider", "website")
+      .eq("customer_conversation_id", conversationId)
       .gt("sent_at", cursor)
       .order("sent_at", { ascending: true })
       .limit(50);
@@ -588,6 +632,17 @@ export class WebsiteWidgetService {
       direction: row.direction === "outbound" ? "outbound" : "inbound",
       sentAt: String(row.sent_at),
     }));
+  }
+
+  private async findWebsiteConversationId(leadId: string, messagingConnectionId: string) {
+    const { data, error } = await this.crm
+      .from("customer_conversations")
+      .select("id")
+      .eq("lead_id", leadId)
+      .eq("connection_id", messagingConnectionId)
+      .maybeSingle();
+    if (error) throw mapDatabaseError(error);
+    return typeof data?.id === "string" ? data.id : null;
   }
 
   private async readMessageContent(messageId: string) {

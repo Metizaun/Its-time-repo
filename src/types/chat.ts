@@ -1,6 +1,37 @@
 export type ChatAttachmentKind = "image" | "audio" | "document";
 export type ChatSystemKind = "handoff_transition" | "handoff_note" | "handoff_complete";
-export type ChatProvider = "evolution" | "meta" | "gupshup" | "instagram";
+export type ChatProvider = "evolution" | "meta" | "gupshup" | "instagram" | "website";
+
+export interface ChatConversation {
+  id: string;
+  leadId: string;
+  connectionId: string;
+  interactionMode: "ai" | "human";
+  status: "active" | "archived";
+  lastMessageAt: string | null;
+  lastInboundAt: string | null;
+  lastMessagePreview: string | null;
+  createdAt: string;
+  lead: {
+    id: string;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    source: string | null;
+    stageId: string | null;
+    ownerId: string | null;
+    status: string | null;
+  };
+  connection: {
+    id: string;
+    channelType: "whatsapp" | "instagram" | "website" | "legacy";
+    provider: ChatProvider | "legacy";
+    displayName: string;
+    instanceName: string | null;
+    capability: "manual_only" | "full" | "disabled";
+    status: string;
+  };
+}
 
 export interface ChatSendPolicy {
   provider: ChatProvider;
@@ -86,6 +117,7 @@ export interface ChatSendAttachment {
 
 export interface ChatSendPayload {
   content: string;
+  conversationId?: string | null;
   instanceName?: string | null;
   attachment?: ChatSendAttachment | null;
 }

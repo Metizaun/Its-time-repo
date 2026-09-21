@@ -26,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChat } from "@/hooks/useChat";
+import { useChatConversations } from "@/hooks/useChatConversations";
 import { useCrmUsers } from "@/hooks/useCrmUsers";
 import { useLeadAiControl } from "@/hooks/useLeadAiControl";
 import { useInstances } from "@/hooks/useInstances";
@@ -47,6 +48,7 @@ export default function Chat() {
     enableRealtime: true,
     includeInteractionModes: true,
   });
+  const { conversations, loading: conversationsLoading, refetch: refetchConversations } = useChatConversations();
   const { pipelines, loading: pipelinesLoading } = usePipelines();
   const { instances, loading: instancesLoading } = useInstances();
   const { setSearchQuery, ui } = useApp();
@@ -71,13 +73,32 @@ export default function Chat() {
   const [preparingFinalize, setPreparingFinalize] = useState(false);
   const [forwardingHandoff, setForwardingHandoff] = useState(false);
   const [finalizingHandoff, setFinalizingHandoff] = useState(false);
-  const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
+  const selectedConversation = conversations.find((conversation) => conversation.id === selectedLeadId) ?? null;
+  const selectedLead = leads.find((lead) => lead.id === selectedConversation?.leadId) ?? null;
+
+  const conversationLeads = useMemo(() => conversations.flatMap((conversation) => {
+    const lead = leads.find((item) => item.id === conversation.leadId);
+    if (!lead) return [];
+    return [{
+      ...lead,
+      id: conversation.id,
+      lead_name: conversation.lead.name || lead.lead_name,
+      email: conversation.lead.email ?? lead.email,
+      contact_phone: conversation.lead.phone ?? lead.contact_phone,
+      source: conversation.connection.channelType,
+      instance_name: conversation.connection.instanceName ?? conversation.connection.displayName,
+      last_message_at: conversation.lastMessageAt,
+      interaction_mode: conversation.interactionMode,
+    }];
+  }), [conversations, leads]);
 
   const { messages, sendPolicy, loading: messagesLoading, sendMessage } = useChat(
-    selectedLeadId,
-    selectedLead?.instance_name ?? null,
+    selectedLead?.id ?? null,
+    selectedConversation?.connection.instanceName ?? null,
+    selectedConversation?.id ?? null,
   );
   const activeInstanceName = useMemo(() => {
+    if (selectedConversation) return selectedConversation.connection.instanceName;
     const latestInbound = [...messages]
       .reverse()
       .find((message) => message.direction === "inbound" && message.instance_name);
@@ -85,7 +106,7 @@ export default function Chat() {
 
     const latestMessage = [...messages].reverse().find((message) => message.instance_name);
     return latestMessage?.instance_name ?? selectedLead?.instance_name ?? null;
-  }, [messages, selectedLead?.instance_name]);
+  }, [messages, selectedConversation, selectedLead?.instance_name]);
   const { byLead: unreadByLead, markRead, internalTotal } = useChatUnread();
   const isTeamMode = searchParams.get("mode") === "team";
   const selectedInternalConversationId = isTeamMode ? searchParams.get("conversationId") : null;
@@ -97,16 +118,16 @@ export default function Chat() {
 
   const searchFilteredLeads = useMemo(() => {
     const query = ui.searchQuery.trim().toLocaleLowerCase("pt-BR");
-    if (!query) return leads;
+    if (!query) return conversationLeads;
 
-    return leads.filter((lead) =>
+    return conversationLeads.filter((lead) =>
       lead.lead_name.toLocaleLowerCase("pt-BR").includes(query) ||
       lead.email?.toLocaleLowerCase("pt-BR").includes(query) ||
       lead.contact_phone?.toLocaleLowerCase("pt-BR").includes(query) ||
       lead.source?.toLocaleLowerCase("pt-BR").includes(query) ||
       lead.instance_name?.toLocaleLowerCase("pt-BR").includes(query)
     );
-  }, [leads, ui.searchQuery]);
+  }, [conversationLeads, ui.searchQuery]);
 
   const companyOptions = useMemo(() => {
     const unique = new Map<string, { id: string; name: string; cnpj: string }>();
@@ -189,22 +210,27 @@ export default function Chat() {
 
   useEffect(() => {
     if (isTeamMode) return;
-    const leadIdFromQuery = searchParams.get("leadId");
-    if (!leadIdFromQuery) return;
-    setSelectedLeadId(leadIdFromQuery);
-  }, [isTeamMode, searchParams]);
+    const conversationId = searchParams.get("conversationId");
+    if (conversationId) {
+      setSelectedLeadId(conversationId);
+      return;
+    }
+    const legacyLeadId = searchParams.get("leadId");
+    if (!legacyLeadId) return;
+    setSelectedLeadId(conversations.find((item) => item.leadId === legacyLeadId)?.id ?? null);
+  }, [conversations, isTeamMode, searchParams]);
 
   useEffect(() => {
     const conversationTarget = (location.state as { conversationTarget?: unknown } | null)?.conversationTarget;
     if (typeof conversationTarget !== "string" || !conversationTarget) return;
-    setSelectedLeadId(conversationTarget);
+    setSelectedLeadId(conversations.find((item) => item.leadId === conversationTarget)?.id ?? conversationTarget);
     navigate(location.pathname, { replace: true, state: null });
-  }, [location.pathname, location.state, navigate]);
+  }, [conversations, location.pathname, location.state, navigate]);
 
   const handleSelectLead = (leadId: string | null) => {
     setSelectedLeadId(leadId);
     if (leadId) {
-      setSearchParams({ leadId });
+      setSearchParams({ conversationId: leadId });
       return;
     }
     setSearchParams({});
@@ -226,21 +252,22 @@ export default function Chat() {
   };
 
   const handleOpenMentionedLead = (leadId: string) => {
-    setSelectedLeadId(leadId);
+    const conversationId = conversations.find((item) => item.leadId === leadId)?.id ?? null;
+    setSelectedLeadId(conversationId);
     setActiveFilter("all");
-    setSearchParams({ leadId });
+    setSearchParams(conversationId ? { conversationId } : {});
   };
 
-  const selectedRouting = selectedLeadId ? routingQueue.byLead.get(selectedLeadId) ?? null : null;
+  const selectedRouting = selectedLead ? routingQueue.byLead.get(selectedLead.id) ?? null : null;
 
   useEffect(() => {
     if (leadsLoading || !selectedLeadId || activeFilter === "all") return;
     if (sidebarLeads.some((lead) => lead.id === selectedLeadId)) return;
 
     setSelectedLeadId(null);
-    if (searchParams.has("leadId")) {
+    if (searchParams.has("conversationId")) {
       const nextSearchParams = new URLSearchParams(searchParams);
-      nextSearchParams.delete("leadId");
+      nextSearchParams.delete("conversationId");
       setSearchParams(nextSearchParams);
     }
   }, [activeFilter, leadsLoading, searchParams, selectedLeadId, setSearchParams, sidebarLeads]);
@@ -269,9 +296,13 @@ export default function Chat() {
   const leadAiControl = useLeadAiControl(
     selectedLead?.id ?? null,
     activeInstanceName,
+    selectedConversation?.id ?? null,
     { enabled: isAdmin }
   );
-  const websiteSession = useWebsiteSession(selectedLead?.id ?? null);
+  const websiteSession = useWebsiteSession(
+    selectedConversation?.connection.channelType === "website" ? selectedLead?.id ?? null : null,
+    selectedConversation?.connection.channelType === "website" ? selectedConversation.id : null,
+  );
   const showSidebar = !isMobile || !selectedLead;
   const showChatPanel = !isMobile || Boolean(selectedLead);
 
@@ -281,7 +312,7 @@ export default function Chat() {
     }
 
     await sendMessage(payload, selectedLead.contact_phone || undefined, activeInstanceName);
-    await refetch({ showLoading: false });
+    await Promise.all([refetch({ showLoading: false }), refetchConversations({ showLoading: false })]);
   };
 
   const handleSchedule = () => {
@@ -373,7 +404,12 @@ export default function Chat() {
     setFinalizingHandoff(true);
 
     try {
-      await finalizeHumanHandoff(selectedLead.id, finalizeStageId, activeInstanceName);
+      await finalizeHumanHandoff(
+        selectedLead.id,
+        finalizeStageId,
+        activeInstanceName,
+        selectedConversation?.id ?? null,
+      );
       if (selectedRouting?.status === "claimed") {
         await routingQueue.close(selectedRouting.routingEventId).catch((error) => {
           console.error("Atendimento finalizado, mas a fila nao foi fechada:", error);
@@ -443,7 +479,7 @@ export default function Chat() {
             totalCount={instanceFilteredLeads.length}
             selectedLeadId={selectedLeadId}
             onSelectLead={handleSelectLead}
-            loading={leadsLoading}
+            loading={leadsLoading || conversationsLoading}
             activeFilter={activeFilter}
             onFilterChange={setActiveFilter}
             manualCount={manualCount}
@@ -469,7 +505,7 @@ export default function Chat() {
           {selectedLead ? (
             <>
               <ChatHeader
-                key={selectedLead.id}
+                key={selectedConversation?.id ?? selectedLead.id}
                 leadName={selectedLead.lead_name}
                 instanceName={activeInstanceName || selectedLead.instance_name}
                 channelLabel={selectedLead.instagram_username || activeInstanceName || selectedLead.instance_name}

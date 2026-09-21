@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentManager, resolveAudioDispatchFailure } from "../sdr-agent-gemini.js";
+import {
+  AgentManager,
+  DEFAULT_AI_AUDIO_SELECTION_RATE,
+  MAX_AI_AUDIO_SELECTION_RATE,
+  normalizeAiAudioSelectionRate,
+  resolveAudioDispatchFailure,
+  shouldSelectAiAudio,
+} from "../sdr-agent-gemini.js";
 
 test("nao libera fallback de texto depois que o audio foi despachado", () => {
   assert.equal(resolveAudioDispatchFailure(true), "delivered_requires_reconciliation");
@@ -8,6 +15,34 @@ test("nao libera fallback de texto depois que o audio foi despachado", () => {
 
 test("libera fallback antes do despacho do audio", () => {
   assert.equal(resolveAudioDispatchFailure(false), "fallback_to_text");
+});
+
+test("normaliza a frequencia de audio como fracao entre 0 e 1", () => {
+  assert.equal(normalizeAiAudioSelectionRate(undefined), DEFAULT_AI_AUDIO_SELECTION_RATE);
+  assert.equal(normalizeAiAudioSelectionRate(0), 0);
+  assert.equal(normalizeAiAudioSelectionRate(0.125), 0.125);
+  assert.equal(normalizeAiAudioSelectionRate(MAX_AI_AUDIO_SELECTION_RATE), MAX_AI_AUDIO_SELECTION_RATE);
+  assert.throws(() => normalizeAiAudioSelectionRate(-0.01), /entre 0% e 22,5%/);
+  assert.throws(() => normalizeAiAudioSelectionRate(0.226), /entre 0% e 22,5%/);
+});
+
+test("pedido explicito de audio ignora o sorteio da frequencia", () => {
+  assert.equal(shouldSelectAiAudio({
+    runId: "run",
+    agentId: "agent",
+    leadId: "lead",
+    rate: 0,
+    eligible: true,
+    explicitAudioRequest: true,
+  }), true);
+  assert.equal(shouldSelectAiAudio({
+    runId: "run",
+    agentId: "agent",
+    leadId: "lead",
+    rate: 1,
+    eligible: false,
+    explicitAudioRequest: true,
+  }), false);
 });
 
 test("configuracao de audio persiste readiness e habilitacao atomicamente", async () => {

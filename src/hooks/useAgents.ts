@@ -12,6 +12,7 @@ import {
 interface AgentPayload {
   name: string;
   instance_name: string | null;
+  connection_ids?: string[];
   agent_type?: AIAgent["agent_type"];
   parent_agent_id?: string | null;
   agent_key?: string | null;
@@ -84,6 +85,10 @@ function buildAgentSaveError(err: unknown, instanceName?: string | null) {
     return new Error(
       `A instância${instanceLabel} já possui um agente principal. Escolha outra instância.`
     );
+  }
+
+  if (code === "AGENT_CONNECTION_OCCUPIED") {
+    return new Error("Uma das conexoes selecionadas ja possui um agente principal.");
   }
 
   if (code === "AGENT_INSTANCE_OUTSIDE_ACCOUNT") {
@@ -174,7 +179,7 @@ export function useAgents() {
       try {
         setSaving(true);
 
-        const conflictingAgent = payload.agent_type === "subagent"
+        const conflictingAgent = payload.agent_type === "subagent" || payload.connection_ids?.length
           ? null
           : await findConflictingAgent(payload.instance_name, agentId);
         if (conflictingAgent) {
@@ -188,6 +193,7 @@ export function useAgents() {
           const response = await patchCrmBackend<AgentSaveResponse>(`/api/ai-agents/${encodeURIComponent(agentId)}`, {
             name: payload.name,
             instanceName: payload.instance_name,
+            connectionIds: payload.connection_ids,
             routingInstruction: payload.routing_instruction,
             systemPrompt: payload.system_prompt,
             model: payload.model,
@@ -209,6 +215,7 @@ export function useAgents() {
           const response = await postCrmBackend<{ agent: AIAgent }>("/api/ai-agents", {
             name: payload.name,
             instanceName: payload.instance_name,
+            connectionIds: payload.connection_ids,
             agentType: payload.agent_type ?? "primary",
             parentAgentId: payload.parent_agent_id,
             agentKey: payload.agent_key,

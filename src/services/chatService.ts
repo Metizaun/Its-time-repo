@@ -3,6 +3,7 @@ import type {
   ChatAttachment,
   ChatAttachmentKind,
   ChatMessage,
+  ChatConversation,
   ChatQuickReply,
   ChatSendPolicy,
   ChatSendPayload,
@@ -218,7 +219,8 @@ function normalizeSendPolicy(policy: ChatSendPolicy | null | undefined): ChatSen
     policy.provider !== "evolution" &&
     policy.provider !== "meta" &&
     policy.provider !== "gupshup" &&
-    policy.provider !== "instagram"
+    policy.provider !== "instagram" &&
+    policy.provider !== "website"
   ) {
     return null;
   }
@@ -264,6 +266,21 @@ export async function listChatMessages(leadId: string, instanceName?: string | n
     messages: (response.messages ?? []).map(normalizeMessage),
     sendPolicy: normalizeSendPolicy(response.sendPolicy),
   };
+}
+
+export async function listConversationMessages(conversationId: string) {
+  const response = await getCrmBackend<ListChatMessagesResponse>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`
+  );
+  return {
+    messages: (response.messages ?? []).map(normalizeMessage),
+    sendPolicy: normalizeSendPolicy(response.sendPolicy),
+  };
+}
+
+export async function listChatConversations() {
+  const response = await getCrmBackend<{ conversations?: ChatConversation[] }>("/api/chat/conversations");
+  return response.conversations ?? [];
 }
 
 export type ChatLeadInteractionMode = {
@@ -318,13 +335,19 @@ export async function createAttachmentUploadUrl(params: CreateAttachmentUploadUr
 export async function sendManualMessage(leadId: string, payload: ChatSendPayload) {
   return postCrmBackend<{ success: boolean; messageId?: string; attachmentId?: string }>("/api/chat/send-manual", {
     leadId,
+    conversationId: payload.conversationId ?? null,
     content: payload.content,
     instanceName: payload.instanceName ?? null,
     attachment: payload.attachment ?? null,
   });
 }
 
-export async function finalizeHumanHandoff(leadId: string, stageId: string, instanceName?: string | null) {
+export async function finalizeHumanHandoff(
+  leadId: string,
+  stageId: string,
+  instanceName?: string | null,
+  conversationId?: string | null,
+) {
   return postCrmBackend<{
     success: boolean;
     leadId: string;
@@ -333,6 +356,7 @@ export async function finalizeHumanHandoff(leadId: string, stageId: string, inst
   }>(`/api/chat/leads/${encodeURIComponent(leadId)}/handoff/finalize`, {
     stageId,
     instanceName: instanceName ?? null,
+    conversationId: conversationId ?? null,
   });
 }
 

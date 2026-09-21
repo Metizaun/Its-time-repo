@@ -37,7 +37,7 @@
 
     /* Backgrounds */
     --color-bg-base: #F7F6F4;
-    --color-bg-subtle: #F0EEE9;
+    --color-bg-subtle: #F4F4F5;
     --color-bg-muted: #E8E5DF;
     --color-bg-inverse: #1A1A18;
 
@@ -2833,6 +2833,56 @@ body.sidebar-mobile-open {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.audio-selection-slider {
+  display: block;
+  width: 100%;
+  height: 0.375rem;
+  appearance: none;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    var(--color-primary-500) 0 var(--audio-selection-progress),
+    var(--color-gray-200) var(--audio-selection-progress) 100%
+  );
+  box-shadow: var(--shadow-inset);
+  cursor: pointer;
+}
+
+.audio-selection-slider:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.audio-selection-slider::-webkit-slider-runnable-track {
+  height: 0.375rem;
+  background: transparent;
+}
+
+.audio-selection-slider::-moz-range-track {
+  height: 0.375rem;
+  background: transparent;
+}
+
+.audio-selection-slider::-webkit-slider-thumb {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin-top: -0.375rem;
+  appearance: none;
+  border: 2px solid var(--color-surface-1);
+  border-radius: var(--radius-full);
+  background: var(--color-primary-500);
+  box-shadow: var(--shadow-sm);
+}
+
+.audio-selection-slider::-moz-range-thumb {
+  width: 1.125rem;
+  height: 1.125rem;
+  border: 2px solid var(--color-surface-1);
+  border-radius: var(--radius-full);
+  background: var(--color-primary-500);
+  box-shadow: var(--shadow-sm);
 }
 
 /* ─── Updates page — icon visuals ───────────────────────────────────────────── */

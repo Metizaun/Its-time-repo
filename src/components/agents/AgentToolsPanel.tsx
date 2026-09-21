@@ -10,6 +10,7 @@ import { AudioToolConfigPanel } from "@/components/agents/AudioToolConfigPanel";
 import { ForwardingConfigPanel } from "@/components/agents/ForwardingConfigPanel";
 import { CalendarToolConfigPanel } from "@/components/agents/CalendarToolConfigPanel";
 import { StoreLocatorConfigPanel } from "@/components/agents/StoreLocatorConfigPanel";
+import { SendMediaCatalogPanel } from "@/components/agents/SendMediaCatalogPanel";
 import {
   listAgentTools,
   updateAgentTool,
@@ -24,7 +25,7 @@ type AgentToolsPanelProps = {
   onConfigure?: (toolKey: ConfigurableToolKey) => void;
 };
 
-type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "prescription_analyst" | "visagism" | "store_locator";
+type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "send_media" | "prescription_analyst" | "visagism" | "store_locator";
 
 function readinessCopy(tool: AgentTool) {
   if (tool.enabled) return "Ativa";
@@ -34,7 +35,7 @@ function readinessCopy(tool: AgentTool) {
 }
 
 function isConfigurableToolKey(value: string): value is ConfigurableToolKey {
-  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "prescription_analyst" || value === "visagism" || value === "store_locator";
+  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "send_media" || value === "prescription_analyst" || value === "visagism" || value === "store_locator";
 }
 
 export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose, onCreateSubagent, onConfigure }: AgentToolsPanelProps) {
@@ -144,9 +145,14 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
           <div key={tool.id} className="grid min-w-0 gap-2">
           {toolFilterKey ? (
             <div className="flex min-h-10 items-center justify-between gap-3 border-b border-[var(--border-default)] pb-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-[var(--color-gray-800)]">Tool ativa</p>
-                <p className="mt-0.5 text-xs text-[var(--color-gray-500)]">{readinessCopy(tool)}</p>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-lg)] border border-[var(--cq-flow-icon-border)] bg-[var(--color-surface-1)] shadow-sm">
+                  <ToolGlyph tool={tool} className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[var(--color-gray-800)]">{tool.name}</p>
+                  <p className="mt-0.5 text-xs text-[var(--color-gray-500)]">{readinessCopy(tool)}</p>
+                </div>
               </div>
               {saving ? (
                 <Loader2 className="h-4 w-4 animate-spin text-[var(--color-gray-500)] motion-reduce:animate-none" aria-label="Salvando" />
@@ -221,6 +227,12 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
               agentId={agentId}
               tool={tool}
               onClose={closeConfiguration}
+              onChanged={() => setReloadKey((value) => value + 1)}
+            />
+          ) : null}
+          {tool.key === "send_media" && toolFilterKey === tool.key ? (
+            <SendMediaCatalogPanel
+              agentId={agentId}
               onChanged={() => setReloadKey((value) => value + 1)}
             />
           ) : null}

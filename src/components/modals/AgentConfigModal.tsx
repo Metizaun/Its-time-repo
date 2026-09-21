@@ -1,16 +1,17 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { X, GripVertical, Maximize2, Minimize2, ChevronRight } from "lucide-react";
+import { X, GripVertical, Maximize2, Minimize2, ChevronDown, ChevronRight, Check } from "lucide-react";
 
 import {
   AgentInstanceChangeRequiredError,
   type AgentInstanceChangePolicy,
   useAgents,
 } from "@/hooks/useAgents";
-import { useInstances } from "@/hooks/useInstances";
+import { useMessagingConnections } from "@/hooks/useMessagingConnections";
 import { PROMPT_GUIDANCE_SECTIONS } from "@/lib/aiPrompt";
 import { cn } from "@/lib/utils";
 import { AIAgent } from "@/types";
 import { Switch } from "@/components/ui/switch";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -91,10 +92,12 @@ export function AgentConfigModal({
   onClose,
   onSaved,
 }: AgentConfigModalProps) {
-  const { instances } = useInstances();
+  const { connections, loading: connectionsLoading } = useMessagingConnections(open);
 
   const [name, setName] = useState("");
   const [instanceName, setInstanceName] = useState("");
+  const [selectedConnectionIds, setSelectedConnectionIds] = useState<string[]>([]);
+  const [connectionPickerOpen, setConnectionPickerOpen] = useState(false);
   const [selectedParentId, setSelectedParentId] = useState("");
   const [routingInstruction, setRoutingInstruction] = useState("");
   const [personalityLevel, setPersonalityLevel] = useState(2);
@@ -114,18 +117,23 @@ export function AgentConfigModal({
     [agents]
   );
 
-  const availableInstances = useMemo(() => {
-    const blockedInstances = new Set(
+  const availableConnections = useMemo(() => {
+    const blockedConnections = new Set(
       agents
         .filter((existingAgent) => existingAgent.agent_type === "primary" && existingAgent.id !== agent?.id)
-        .map((existingAgent) => existingAgent.instance_name)
+        .flatMap((existingAgent) => existingAgent.connections ?? [])
+        .map((connection) => connection.id)
     );
+    return connections.filter((connection) =>
+      agent?.connections?.some((current) => current.id === connection.id)
+      || !blockedConnections.has(connection.id)
+    );
+  }, [agent?.connections, agent?.id, agents, connections]);
 
-    return instances.filter(
-      (instance) =>
-        instance.instancia === agent?.instance_name || !blockedInstances.has(instance.instancia)
-    );
-  }, [agent?.id, agent?.instance_name, agents, instances]);
+  const selectedConnections = useMemo(
+    () => availableConnections.filter((connection) => selectedConnectionIds.includes(connection.id)),
+    [availableConnections, selectedConnectionIds]
+  );
 
   useEffect(() => {
     if (!open) {
@@ -135,6 +143,7 @@ export function AgentConfigModal({
     if (agent) {
       setName(agent.name);
       setInstanceName(agent.instance_name ?? "");
+      setSelectedConnectionIds((agent.connections ?? []).map((connection) => connection.id));
       setSelectedParentId(agent.parent_agent_id ?? "");
       setRoutingInstruction(agent.routing_instruction ?? "");
       setSystemPrompt(stripPersonalityInstructions(agent.system_prompt));
@@ -154,6 +163,7 @@ export function AgentConfigModal({
     } else {
       setName("");
       setInstanceName("");
+      setSelectedConnectionIds([]);
       setSelectedParentId(parentAgentId ?? (primaryAgents.length === 1 ? primaryAgents[0].id : ""));
       setRoutingInstruction("");
       setSystemPrompt("");
@@ -164,6 +174,7 @@ export function AgentConfigModal({
     }
 
     setStudioExpanded(false);
+    setConnectionPickerOpen(false);
     setInstanceDecision(null);
   }, [open, agent, parentAgentId, primaryAgents]);
 
@@ -172,14 +183,7 @@ export function AgentConfigModal({
       return;
     }
 
-    setInstanceName((current) => {
-      if (availableInstances.some((instance) => instance.instancia === current)) {
-        return current;
-      }
-
-      return availableInstances[0]?.instancia ?? "";
-    });
-  }, [agent, availableInstances, effectiveAgentType, open]);
+  }, [agent, effectiveAgentType, open]);
 
   useEffect(() => {
     if (effectiveAgentType !== "subagent") return;
@@ -222,6 +226,16 @@ export function AgentConfigModal({
     event.preventDefault();
   }, []);
 
+  function toggleConnection(connectionId: string) {
+    const next = selectedConnectionIds.includes(connectionId)
+      ? selectedConnectionIds.filter((id) => id !== connectionId)
+      : [...selectedConnectionIds, connectionId];
+
+    setSelectedConnectionIds(next);
+    const primary = availableConnections.find((connection) => connection.id === next[0]);
+    setInstanceName(primary?.legacy_instance_name ?? "");
+  }
+
   async function saveAgent(instanceChangePolicy?: AgentInstanceChangePolicy) {
     const personality = PERSONALITY_LEVELS[personalityLevel];
     const basePrompt = stripPersonalityInstructions(systemPrompt);
@@ -231,6 +245,7 @@ export function AgentConfigModal({
         {
           name: name.trim(),
           instance_name: effectiveAgentType === "subagent" ? null : instanceName,
+          connection_ids: effectiveAgentType === "subagent" ? undefined : selectedConnectionIds,
           agent_type: effectiveAgentType,
           parent_agent_id: effectiveAgentType === "subagent" ? selectedParentId : null,
           agent_key: agent?.agent_key ?? undefined,
@@ -266,7 +281,7 @@ export function AgentConfigModal({
     if (
       !name.trim()
       || !systemPrompt.trim()
-      || (effectiveAgentType === "primary" && !instanceName)
+      || (effectiveAgentType === "primary" && selectedConnectionIds.length === 0)
       || (effectiveAgentType === "subagent" && (!selectedParentId || !routingInstruction.trim()))
     ) {
       return;
@@ -290,7 +305,7 @@ export function AgentConfigModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-[rgba(26,24,20,0.45)] backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-[rgba(26,24,20,0.32)] backdrop-blur-sm" onClick={onClose} />
 
       <div
         className={cn(
@@ -404,30 +419,73 @@ export function AgentConfigModal({
               {effectiveAgentType === "primary" ? (
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-text-secondary)]">
-                  Instancia Vinculada
+                  Conexoes atendidas
                 </label>
-                <select
-                  value={instanceName}
-                  onChange={(event) => setInstanceName(event.target.value)}
-                  required
-                  disabled={!agent && availableInstances.length === 0}
-                  className="w-full rounded-xl border border-[var(--color-border-medium)] bg-[var(--color-bg-surface)] px-4 py-2.5 text-sm text-foreground transition-colors focus:border-[var(--color-accent)]/60 focus:outline-none"
-                >
-                  <option value="" disabled>
-                    Selecione uma instancia
-                  </option>
-                  {availableInstances.map((instance) => (
-                    <option key={instance.instancia} value={instance.instancia}>
-                      {instance.instancia}
-                    </option>
-                  ))}
-                </select>
-                {!agent && availableInstances.length === 0 ? (
+                <Popover open={connectionPickerOpen} onOpenChange={setConnectionPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={connectionsLoading || availableConnections.length === 0}
+                      aria-label="Selecionar conexoes atendidas"
+                      className="select-trigger flex w-full items-center justify-between gap-3 px-4 py-2 text-left disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span className="min-w-0 truncate text-sm text-foreground">
+                        {connectionsLoading
+                          ? "Carregando conexoes..."
+                          : selectedConnections.length === 0
+                            ? "Selecione as conexoes"
+                            : selectedConnections.length === 1
+                              ? selectedConnections[0].display_name
+                              : `${selectedConnections.length} conexoes selecionadas`}
+                      </span>
+                      <ChevronDown className="h-4 w-4 flex-shrink-0 text-[var(--color-gray-500)]" />
+                    </button>
+                  </PopoverTrigger>
+
+                  <PopoverContent
+                    align="start"
+                    side="bottom"
+                    className="select-content w-[var(--radix-popover-trigger-width)] p-1"
+                  >
+                    <div role="group" aria-label="Conexoes atendidas" className="max-h-52 overflow-y-auto">
+                      {availableConnections.map((connection) => {
+                        const checked = selectedConnectionIds.includes(connection.id);
+                        return (
+                          <button
+                            key={connection.id}
+                            type="button"
+                            aria-pressed={checked}
+                            onClick={() => toggleConnection(connection.id)}
+                            className={cn(
+                              "select-item relative flex w-full items-center py-1 pl-8 pr-2 text-left text-xs outline-none hover:bg-[var(--color-primary-50)] hover:text-[var(--color-gray-900)] focus-visible:bg-[var(--color-primary-50)]",
+                              checked && "bg-[var(--color-primary-50)] text-[var(--color-gray-900)]"
+                            )}
+                          >
+                            <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+                              {checked ? <Check className="h-4 w-4" /> : null}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate">{connection.display_name}</span>
+                              <span className="block text-[10px] capitalize text-[var(--color-text-secondary)]">
+                                {connection.channel_type} · {connection.provider}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                {!agent && !connectionsLoading && availableConnections.length === 0 ? (
                   <p className="text-[11px] text-[var(--color-text-secondary)]">
-                    Todas as instancias disponiveis desta conta ja possuem um agente vinculado.
+                    Todas as conexoes disponiveis desta conta ja possuem um agente vinculado.
                     Abra um agente existente para editar a configuracao.
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                    O agente respondera separadamente em cada conexao selecionada.
+                  </p>
+                )}
               </div>
               ) : null}
 

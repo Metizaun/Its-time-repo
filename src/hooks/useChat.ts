@@ -8,13 +8,14 @@ import {
   getInstagramBlockedPolicyFromError,
   getTemplateRequiredPolicyFromError,
   listChatMessages,
+  listConversationMessages,
   sendManualMessage,
 } from "@/services/chatService";
 import type { ChatComposerPayload, ChatMessage, ChatSendPolicy } from "@/types/chat";
 
 export type { ChatMessage } from "@/types/chat";
 
-export function useChat(leadId: string | null, instanceName?: string | null) {
+export function useChat(leadId: string | null, instanceName?: string | null, conversationId?: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sendPolicy, setSendPolicy] = useState<ChatSendPolicy | null>(null);
   const [loading, setLoading] = useState(false);
@@ -22,16 +23,21 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
   activeLeadIdRef.current = leadId;
   const activeInstanceNameRef = useRef(instanceName);
   activeInstanceNameRef.current = instanceName;
+  const activeConversationIdRef = useRef(conversationId);
+  activeConversationIdRef.current = conversationId;
 
   const fetchMessages = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!leadId) return;
 
     if (!options.silent) setLoading(true);
     try {
-      const result = await listChatMessages(leadId, instanceName);
+      const result = conversationId
+        ? await listConversationMessages(conversationId)
+        : await listChatMessages(leadId, instanceName);
       if (
         activeLeadIdRef.current !== leadId ||
-        activeInstanceNameRef.current !== instanceName
+        activeInstanceNameRef.current !== instanceName ||
+        activeConversationIdRef.current !== conversationId
       ) return;
       setMessages(result.messages);
       setSendPolicy(result.sendPolicy);
@@ -41,9 +47,14 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
         description: error instanceof Error ? error.message : "Tente novamente.",
       });
     } finally {
-      if (!options.silent && activeLeadIdRef.current === leadId) setLoading(false);
+      if (
+        !options.silent &&
+        activeLeadIdRef.current === leadId &&
+        activeInstanceNameRef.current === instanceName &&
+        activeConversationIdRef.current === conversationId
+      ) setLoading(false);
     }
-  }, [instanceName, leadId]);
+  }, [conversationId, instanceName, leadId]);
 
   const sendMessage = async (
     payload: ChatComposerPayload,
@@ -115,6 +126,7 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
 
         await sendManualMessage(leadId, {
           content,
+          conversationId,
           instanceName: instanceName || null,
           attachment: {
             messageId: uploadIntent.messageId,
@@ -129,6 +141,7 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
       } else {
         await sendManualMessage(leadId, {
           content,
+          conversationId,
           instanceName: instanceName || null,
         });
       }
@@ -173,7 +186,9 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
           event: "INSERT",
           schema: "crm",
           table: "message_history",
-          filter: `lead_id=eq.${leadId}`,
+          filter: conversationId
+            ? `customer_conversation_id=eq.${conversationId}`
+            : `lead_id=eq.${leadId}`,
         },
         async (payload) => {
           console.log("Realtime detectou nova mensagem:", payload);
@@ -225,7 +240,7 @@ export function useChat(leadId: string | null, instanceName?: string | null) {
       document.removeEventListener("visibilitychange", handleResume);
       void supabase.removeChannel(channel);
     };
-  }, [fetchMessages, instanceName, leadId]);
+  }, [conversationId, fetchMessages, instanceName, leadId]);
 
   useEffect(() => {
     if (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Loader2, Pause, Play, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { listAudioVoices, updateAgentTool, type AgentTool, type AudioVoice } from "@/services/agentToolsService";
+
+const DEFAULT_AUDIO_SELECTION_RATE = 0.018;
+const MAX_AUDIO_SELECTION_RATE_PERCENT = 22.5;
 
 type AudioToolConfigPanelProps = {
   agentId: string;
@@ -21,10 +24,21 @@ function voiceCategoryCopy(category: string | null) {
   return null;
 }
 
+function selectionRatePercentFromConfig(value: unknown) {
+  const rate = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(rate)) return DEFAULT_AUDIO_SELECTION_RATE * 100;
+  return Math.min(MAX_AUDIO_SELECTION_RATE_PERCENT, Math.max(0, Number((rate * 100).toFixed(1))));
+}
+
+function formatSelectionRate(value: number) {
+  return `${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+}
+
 export function AudioToolConfigPanel({ agentId, tool, onClose, onChanged }: AudioToolConfigPanelProps) {
   const [query, setQuery] = useState("");
   const [voices, setVoices] = useState<AudioVoice[]>([]);
   const [selectedId, setSelectedId] = useState(typeof tool.config.voiceId === "string" ? tool.config.voiceId : "");
+  const [selectionRatePercent, setSelectionRatePercent] = useState(() => selectionRatePercentFromConfig(tool.config.selectionRate));
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -84,8 +98,17 @@ export function AudioToolConfigPanel({ agentId, tool, onClose, onChanged }: Audi
     }
     setSaving(true);
     try {
-      await updateAgentTool(agentId, "ai_audio", { config: { voiceId: selectedId } });
-      toast.success("Voz salva. O Audio IA ja pode ser ativado quando estiver disponivel.");
+      if (!Number.isFinite(selectionRatePercent) || selectionRatePercent < 0 || selectionRatePercent > MAX_AUDIO_SELECTION_RATE_PERCENT) {
+        toast.error("Informe uma porcentagem entre 0% e 22,5%");
+        return;
+      }
+      await updateAgentTool(agentId, "ai_audio", {
+        config: {
+          voiceId: selectedId,
+          selectionRate: Number((selectionRatePercent / 100).toFixed(4)),
+        },
+      });
+      toast.success("Voz salva. O Audio IA foi ativado.");
       onChanged();
       onClose();
     } catch (error) {
@@ -106,6 +129,25 @@ export function AudioToolConfigPanel({ agentId, tool, onClose, onChanged }: Audi
         {voices.map((voice) => <div key={voice.id} className={cn("flex items-center gap-3 rounded-[var(--radius-lg)] border p-3 transition-all", selectedId === voice.id ? "border-[var(--color-primary-300)] bg-[var(--color-primary-50)] shadow-sm" : "border-[var(--border-default)]")}><Button type="button" variant="ghost" size="icon" disabled={!voice.previewUrl} onClick={() => togglePreview(voice)} aria-label={playingId === voice.id ? `Pausar ${voice.name}` : `Escutar ${voice.name}`}>{playingId === voice.id ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button><button type="button" disabled={!voice.previewUrl} onClick={() => setSelectedId(voice.id)} className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-50"><p className="truncate text-sm font-semibold text-[var(--color-gray-900)]">{voice.name}</p><p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-gray-500)]">{voice.description || voiceCategoryCopy(voice.category) || (voice.previewUrl ? "Amostra disponivel" : "Amostra indisponivel")}</p></button></div>)}
         {voices.length === 0 ? <p className="col-span-full py-8 text-center text-sm text-[var(--color-gray-500)]">Nenhuma voz encontrada.</p> : null}
       </div>}
+
+      {selectedId ? <div className="mt-5 border-t border-[var(--border-default)] pt-4">
+        <div className="flex items-center justify-between gap-4">
+          <label htmlFor="audio-selection-rate" className="text-sm font-semibold text-[var(--color-gray-800)]">Frequência de áudio</label>
+          <output htmlFor="audio-selection-rate" className="text-sm font-semibold tabular-nums text-[var(--color-gray-700)]">{formatSelectionRate(selectionRatePercent)}</output>
+        </div>
+        <input
+          id="audio-selection-rate"
+          type="range"
+          min={0}
+          max={MAX_AUDIO_SELECTION_RATE_PERCENT}
+          step={0.1}
+          value={Number.isFinite(selectionRatePercent) ? selectionRatePercent : 0}
+          onChange={(event) => setSelectionRatePercent(Number(event.target.value))}
+          aria-label="Frequência de áudio"
+          className="audio-selection-slider mt-3"
+          style={{ "--audio-selection-progress": `${(selectionRatePercent / MAX_AUDIO_SELECTION_RATE_PERCENT) * 100}%` } as CSSProperties}
+        />
+      </div> : null}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
         <div>{hasMore ? <Button variant="ghost" size="sm" onClick={() => void load(false)}>Carregar mais</Button> : null}</div>

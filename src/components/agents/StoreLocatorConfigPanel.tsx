@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Edit3, Loader2, MapPin, Plus, Search, Store, X } from "lucide-react";
+import { ArrowLeft, Building2, Edit3, Loader2, Plus, Search, Store, X } from "lucide-react";
 import { toast } from "sonner";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { CompanyMultiSelect } from "@/components/agents/CompanyMultiSelect";
 import { useCompanies } from "@/hooks/useCompanies";
+import { formatCnpj } from "@/lib/cnpj";
 import {
   deactivateStoreLocatorStore,
   listStoreLocatorStores,
@@ -111,6 +112,7 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
   const [stores, setStores] = useState<StoreLocatorStore[]>([]);
   const [form, setForm] = useState<StoreFormState>(() => emptyForm());
   const [search, setSearch] = useState("");
+  const [companySearch, setCompanySearch] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "inactive" | "pending">("all");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -122,6 +124,30 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
   );
   const [companiesDirty, setCompaniesDirty] = useState(false);
   const [savingCompanies, setSavingCompanies] = useState(false);
+
+  const activeCompanies = useMemo(
+    () => companies.filter((company) => company.isActive),
+    [companies],
+  );
+
+  const visibleCompanies = useMemo(() => {
+    const query = companySearch.trim().toLocaleLowerCase("pt-BR");
+    if (!query) return activeCompanies;
+
+    return activeCompanies.filter((company) =>
+      [company.name, company.cnpj, company.city, company.state]
+        .some((value) => value.toLocaleLowerCase("pt-BR").includes(query)),
+    );
+  }, [activeCompanies, companySearch]);
+
+  const selectedCompanyCount = activeCompanies.filter((company) => allowedCompanyIds.includes(company.id)).length;
+  const companySummary = companiesLoading
+    ? "Carregando empresas"
+    : activeCompanies.length === 0
+      ? "Nenhuma empresa cadastrada"
+      : selectedCompanyCount === 0
+        ? "Nenhuma empresa selecionada"
+        : `${selectedCompanyCount} ${selectedCompanyCount === 1 ? "empresa selecionada" : "empresas selecionadas"}`;
 
   async function saveAllowedCompanies() {
     setSavingCompanies(true);
@@ -262,20 +288,18 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
             </button>
-          ) : (
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-lg)] border border-[var(--cq-flow-icon-border)] bg-[var(--color-surface-1)] shadow-sm">
-              <MapPin className="h-5 w-5 text-[var(--color-primary-600)]" aria-hidden="true" />
-            </span>
-          )}
+          ) : null}
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-[var(--color-gray-900)]">
-              {mode === "list" ? "Filiais cadastradas" : form.id ? "Editar filial" : "Adicionar filial"}
-            </h2>
-            <p className="mt-1 text-sm text-[var(--color-gray-500)]">
-              {mode === "list"
-                ? "Cadastre unidades exclusivas desta Tool e controle quais podem ser recomendadas."
-                : "Alterações no endereço validam novamente a localização antes de liberar a filial para a IA."}
-            </p>
+            {mode === "form" ? (
+              <>
+                <h2 className="text-sm font-semibold text-[var(--color-gray-900)]">
+                  {form.id ? "Editar filial" : "Adicionar filial"}
+                </h2>
+                <p className="mt-1 text-xs text-[var(--color-gray-500)]">
+                  Alterações no endereço validam novamente a localização antes de liberar a filial para a IA.
+                </p>
+              </>
+            ) : null}
           </div>
         </div>
         <button
@@ -290,39 +314,102 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
 
       {mode === "list" ? (
         <div className="pt-4">
-          <section
-            className="rounded-[var(--radius-xl)] border border-[var(--border-default)] p-4"
-            aria-label="Empresas visíveis para este agente"
+          <Accordion
+            type="single"
+            collapsible
+            className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-sm"
           >
-            <h3 className="text-sm font-semibold text-[var(--color-gray-900)]">Empresas que este agente pode citar</h3>
-            <p className="mt-1 text-xs text-[var(--color-gray-500)]">
-              Controla quais empresas cadastradas (agenda, preços e dados de contato) este agente pode ver e oferecer.
-              Sem nenhuma selecionada, o agente não enxerga nenhuma empresa.
-            </p>
-            <div className="mt-3 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-              <CompanyMultiSelect
-                companies={companies
-                  .filter((company) => company.isActive)
-                  .map((company) => ({ id: company.id, name: company.name, cnpj: company.cnpj, city: company.city, state: company.state }))}
-                loading={companiesLoading}
-                disabled={savingCompanies}
-                selectedIds={allowedCompanyIds}
-                onChange={(ids) => {
-                  setAllowedCompanyIds(ids);
-                  setCompaniesDirty(true);
-                }}
-              />
-              <button
-                type="button"
-                disabled={!companiesDirty || savingCompanies}
-                onClick={() => void saveAllowedCompanies()}
-                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary-500)] px-4 text-sm font-semibold text-white shadow-sm transition-[background-color,box-shadow] hover:bg-[var(--color-primary-600)] focus-visible:outline-none focus-visible:shadow-focus active:shadow-inset disabled:cursor-not-allowed disabled:opacity-60"
+            <AccordionItem value="companies" className="border-0">
+              <AccordionTrigger
+                className="px-4 py-3 text-left hover:no-underline focus-visible:outline-none focus-visible:shadow-focus"
+                aria-label="Expandir empresas com acesso da IA"
               >
-                {savingCompanies ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-                Salvar empresas
-              </button>
-            </div>
-          </section>
+                <span className="flex min-w-0 items-center gap-3 pr-3">
+                  <Building2 className="h-4 w-4 shrink-0 text-[var(--color-primary-500)]" aria-hidden="true" />
+                  <span className="min-w-0">
+                    <strong className="block truncate text-sm font-semibold text-[var(--color-gray-900)]">Empresas com acesso da IA</strong>
+                    <span className="mt-0.5 block truncate text-xs font-normal text-[var(--color-gray-500)]">{companySummary}</span>
+                  </span>
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="px-4">
+                <div className="space-y-3 border-t border-[var(--border-default)] pt-3">
+                  {activeCompanies.length > 0 ? (
+                    <label className="relative block">
+                      <span className="sr-only">Buscar empresa</span>
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-gray-400)]" aria-hidden="true" />
+                      <Input
+                        value={companySearch}
+                        onChange={(event) => setCompanySearch(event.target.value)}
+                        placeholder="Buscar empresa ou CNPJ"
+                        className="pl-10"
+                      />
+                    </label>
+                  ) : null}
+
+                  {companiesLoading ? (
+                    <div className="flex items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-bg-subtle)] px-3 py-6 text-sm text-[var(--color-gray-500)]" aria-live="polite">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                      Carregando empresas
+                    </div>
+                  ) : activeCompanies.length === 0 ? (
+                    <div className="rounded-[var(--radius-lg)] bg-[var(--color-bg-subtle)] px-3 py-5 text-center text-sm text-[var(--color-gray-500)]">
+                      Nenhuma empresa cadastrada.
+                    </div>
+                  ) : visibleCompanies.length === 0 ? (
+                    <div className="rounded-[var(--radius-lg)] bg-[var(--color-bg-subtle)] px-3 py-5 text-center text-sm text-[var(--color-gray-500)]">
+                      Nenhuma empresa encontrada.
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)]">
+                      {visibleCompanies.map((company) => {
+                        const checked = allowedCompanyIds.includes(company.id);
+
+                        return (
+                          <label
+                            key={company.id}
+                            className="flex cursor-pointer items-center gap-3 border-b border-[var(--border-default)] px-3 py-2.5 last:border-b-0 hover:bg-[var(--color-surface-2)]"
+                          >
+                            <Checkbox
+                              checked={checked}
+                              disabled={savingCompanies}
+                              onCheckedChange={(value) => {
+                                const nextIds = value === true
+                                  ? [...new Set([...allowedCompanyIds, company.id])]
+                                  : allowedCompanyIds.filter((id) => id !== company.id);
+                                setAllowedCompanyIds(nextIds);
+                                setCompaniesDirty(true);
+                              }}
+                              aria-label={`${checked ? "Remover" : "Adicionar"} ${company.name}`}
+                            />
+                            <Building2 className="h-4 w-4 shrink-0 text-[var(--color-gray-500)]" aria-hidden="true" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-[var(--color-gray-800)]">{company.name}</span>
+                              <span className="mt-0.5 block truncate font-mono text-[11px] text-[var(--color-gray-500)]">
+                                {company.city}/{company.state} · {formatCnpj(company.cnpj)}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={!companiesDirty || savingCompanies}
+                      onClick={() => void saveAllowedCompanies()}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary-500)] px-4 text-sm font-semibold text-white shadow-primary transition-[background-color,box-shadow] hover:bg-[var(--color-primary-600)] hover:shadow-primary-hover focus-visible:outline-none focus-visible:shadow-focus active:shadow-inset disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {savingCompanies ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                      Salvar empresas
+                    </button>
+                  </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
 
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">
             <label className="relative min-w-0 flex-1">

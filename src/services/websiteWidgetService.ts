@@ -66,9 +66,12 @@ export async function deleteWebsiteWidgetConnection(id: string) {
   await deleteCrmBackend<{ deleted: boolean }>(`${BASE}/${id}`);
 }
 
-export async function getWebsiteSessionState(leadId: string) {
+export async function getWebsiteSessionState(leadId: string, customerConversationId?: string | null) {
+  const query = customerConversationId
+    ? `?conversationId=${encodeURIComponent(customerConversationId)}`
+    : "";
   const response = await getCrmBackend<{ live?: boolean }>(
-    `/api/website-widget/leads/${leadId}/session`,
+    `/api/website-widget/leads/${leadId}/session${query}`,
   );
   return Boolean(response.live);
 }

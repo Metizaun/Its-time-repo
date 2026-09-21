@@ -113,7 +113,12 @@ export default function Agentes() {
             Configure seus agentes para prospectar, atender e vender automaticamente.
           </p>
         </div>
-        <Button type="button" onClick={openCreatePrimary} className="gap-2 self-start sm:self-auto">
+        <Button
+          type="button"
+          onClick={openCreatePrimary}
+          disabled={Boolean(deletingAgentId)}
+          className="gap-2 self-start sm:self-auto"
+        >
           <Plus className="h-4 w-4" /> Novo agente
         </Button>
       </header>
@@ -220,7 +225,13 @@ export default function Agentes() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={Boolean(deletingAgentId)}>Cancelar</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => void confirmDeleteAgent()}
+              onClick={(event) => {
+                // Keep the confirmation open until the async delete finishes. The
+                // default Radix action would close it immediately and allow a new
+                // agent creation to race the DELETE request.
+                event.preventDefault();
+                void confirmDeleteAgent();
+              }}
               disabled={Boolean(deletingAgentId)}
               className="gap-2 bg-[var(--color-error-500)] text-white hover:bg-[var(--color-error-600)]"
             >

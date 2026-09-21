@@ -86,10 +86,54 @@ import {
   generateCentralStructuredResponse,
   type CentralAiExecutionResult,
 } from "./central-ai-provider.js";
+import { isExplicitAudioRequest } from "./audio-request.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
 export const DEFAULT_USER_MESSAGE_TEMPLATE = `Analise a conversa e retorne JSON valido seguindo o schema solicitado.`;
+export const DEFAULT_AI_AUDIO_SELECTION_RATE = 0.018;
+export const MAX_AI_AUDIO_SELECTION_RATE = 0.225;
+
+export function normalizeAiAudioSelectionRate(value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_AI_AUDIO_SELECTION_RATE;
+  }
+
+  const rate = Number(value);
+  if (!Number.isFinite(rate) || rate < 0 || rate > MAX_AI_AUDIO_SELECTION_RATE) {
+    throw new HttpError(422, "A frequencia de audio deve estar entre 0% e 22,5%");
+  }
+
+  return Number(rate.toFixed(4));
+}
+
+function safeAiAudioSelectionRate(value: unknown) {
+  try {
+    return normalizeAiAudioSelectionRate(value);
+  } catch {
+    return DEFAULT_AI_AUDIO_SELECTION_RATE;
+  }
+}
+
+export function shouldSelectAiAudio(params: {
+  runId: string;
+  agentId: string;
+  leadId: string;
+  rate: number;
+  eligible: boolean;
+  explicitAudioRequest?: boolean;
+}) {
+  if (!params.eligible) return false;
+  if (params.explicitAudioRequest === true) return true;
+
+  const normalizedRate = Math.min(Math.max(params.rate, 0), 1);
+  const sample = createHash("sha256")
+    .update(`${params.runId}:${params.agentId}:${params.leadId}`)
+    .digest()
+    .readUInt32BE(0) % 10_000;
+
+  return sample < Math.round(normalizedRate * 10_000);
+}
 
 function resolveAgentToolEnabledState(input: {
   currentEnabled: boolean;
@@ -392,6 +436,30 @@ type AgentRow = {
   updated_at: string;
 };
 
+type MessagingConnectionRow = {
+  id: string;
+  aces_id: number;
+  channel_type: "whatsapp" | "instagram" | "website" | "legacy";
+  provider: "evolution" | "meta" | "gupshup" | "instagram" | "website" | "legacy";
+  display_name: string;
+  legacy_instance_name: string | null;
+  capability: "manual_only" | "full" | "disabled";
+  status: "draft" | "active" | "disabled" | "error" | "reconnect_required";
+};
+
+type CustomerConversationRow = {
+  id: string;
+  aces_id: number;
+  lead_id: string;
+  connection_id: string;
+  interaction_mode: "ai" | "human";
+  status: "active" | "archived";
+  last_message_at: string | null;
+  last_inbound_at: string | null;
+  last_message_preview: string | null;
+  created_at: string;
+};
+
 type AgentTransferSessionRow = {
   id: string;
   aces_id: number;
@@ -618,6 +686,7 @@ type MessageRow = {
   created_by: string | null;
   sent_at: string;
   conversation_id: string | null;
+  customer_conversation_id?: string | null;
   provider?: MessagingProviderName | null;
   provider_message_id?: string | null;
   provider_status?: string | null;
@@ -778,6 +847,7 @@ export type ParsedWebhookMessage = {
   content: string;
   messageId: string | null;
   conversationId: string | null;
+  customerConversationId?: string | null;
   sentAt: string;
   pushName: string | null;
   mediaKind: "audio" | "image" | "document" | null;
@@ -870,6 +940,7 @@ type WebhookContactIdentity = {
 type CreateAgentInput = {
   name: string;
   instanceName?: string;
+  connectionIds?: string[];
   agentType?: "primary" | "subagent";
   parentAgentId?: string | null;
   agentKey?: string | null;
@@ -922,6 +993,7 @@ type StageRuleInput = {
 
 type SendManualMessageInput = {
   leadId: string;
+  customerConversationId?: string | null;
   content?: string;
   instanceName?: string | null;
   attachment?: ChatAttachmentSendInput | null;
@@ -931,6 +1003,33 @@ type FinalizeHumanHandoffInput = {
   leadId: string;
   stageId: string;
   instanceName?: string | null;
+  customerConversationId?: string | null;
+};
+
+export type OpticalCatalogProduct = {
+  id: string;
+  lensCategory: LensCategory;
+  displayName: string;
+  brand: string | null;
+  treatments: string[];
+  description: string | null;
+  priceCents: number;
+  currency: "BRL";
+  isActive: boolean;
+};
+
+export type OpticalCatalogRequest = {
+  action: "none" | "search";
+  lensCategory: LensCategory | null;
+  treatment: string | null;
+  query: string | null;
+};
+
+export type OpticalCatalogSearchResult = {
+  status: "ignored" | "exact" | "alternatives" | "empty";
+  requestedCategory: LensCategory | null;
+  requestedTreatment: string | null;
+  products: OpticalCatalogProduct[];
 };
 
 type TestHandoffInput = {
@@ -992,6 +1091,8 @@ type StoreLocatorDecision = {
   preferenceType: "favorite" | "secondary";
 };
 
+type OpticalCatalogDecision = OpticalCatalogRequest;
+
 type StructuredModelResponse = {
   reply_blocks: string[];
   stage_decision: {
@@ -1027,6 +1128,7 @@ type StructuredModelResponse = {
   visagism: VisagismDecision;
   agenda_request: AgendaRequest;
   store_locator: StoreLocatorDecision;
+  optical_catalog_request: OpticalCatalogDecision;
 };
 
 type AgendaExecutionResult = {
@@ -1126,7 +1228,7 @@ type ServiceConfig = {
   instancePhoneAllowlists?: Record<string, string[]>;
   rbVisagismService?: RbVisagismService;
   instagramService?: InstagramService;
-  hasLiveWebsiteSession?: (acesId: number, leadId: string) => Promise<boolean>;
+  hasLiveWebsiteSession?: (acesId: number, leadId: string, customerConversationId?: string | null) => Promise<boolean>;
 };
 
 export class HttpError extends Error {
@@ -1812,6 +1914,49 @@ export function matchLensPriceRule(
     .sort((left, right) => left.priority - right.priority || left.displayName.localeCompare(right.displayName))[0] ?? null;
 }
 
+/**
+ * Commercial matching deliberately never uses prescription degrees. A prescription supplies
+ * a useful family hint, while the customer request decides which active catalog products are
+ * shown. When the requested treatment does not exist, same-family products are alternatives.
+ */
+export function searchOpticalCatalog(
+  products: OpticalCatalogProduct[],
+  request: OpticalCatalogRequest,
+  profileCategory: LensCategory | null = null,
+): OpticalCatalogSearchResult {
+  if (request.action === "none") {
+    return { status: "ignored", requestedCategory: null, requestedTreatment: null, products: [] };
+  }
+  const requestedCategory = request.lensCategory ?? profileCategory;
+  const requestedTreatment = request.treatment?.trim() || null;
+  const active = products.filter((product) => product.isActive);
+  const sameCategory = requestedCategory
+    ? active.filter((product) => product.lensCategory === requestedCategory)
+    : active;
+  const treatmentMatches = requestedTreatment
+    ? sameCategory.filter((product) => product.treatments.some((item) => normalizeAsciiText(item).includes(normalizeAsciiText(requestedTreatment))))
+    : [];
+  const sorted = (items: OpticalCatalogProduct[]) => [...items]
+    .sort((left, right) => left.priceCents - right.priceCents || left.displayName.localeCompare(right.displayName))
+    .slice(0, 3);
+
+  if (treatmentMatches.length > 0) {
+    return { status: "exact", requestedCategory, requestedTreatment, products: sorted(treatmentMatches) };
+  }
+  if (sameCategory.length > 0) {
+    return { status: "alternatives", requestedCategory, requestedTreatment, products: sorted(sameCategory) };
+  }
+  // With no known category (or no product in it), a treatment can still be useful across
+  // the catalog. The reply model explains the category instead of claiming an indication.
+  const crossCategoryMatches = requestedTreatment
+    ? active.filter((product) => product.treatments.some((item) => normalizeAsciiText(item).includes(normalizeAsciiText(requestedTreatment))))
+    : active;
+  if (crossCategoryMatches.length > 0) {
+    return { status: requestedTreatment ? "exact" : "alternatives", requestedCategory, requestedTreatment, products: sorted(crossCategoryMatches) };
+  }
+  return { status: "empty", requestedCategory, requestedTreatment, products: [] };
+}
+
 function addHours(date: Date, hours: number) {
   return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
@@ -2030,7 +2175,10 @@ function sanitizeStorageFileName(value: string) {
 }
 
 function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  // PostgreSQL accepts UUIDs independently of RFC version/variant bits. Keep
+  // the validation aligned with the database so existing seeded/imported IDs
+  // (including version-0 UUIDs) are not discarded before reaching Supabase.
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 function buildAttachmentStoragePath(params: {
@@ -2078,6 +2226,7 @@ function parseStructuredJson(text: string): StructuredModelResponse {
   const nativeFollowup = asRecord(parsed.native_followup);
   const visagism = asRecord(parsed.visagism);
   const storeLocator = asRecord(parsed.store_locator);
+  const opticalCatalog = asRecord(parsed.optical_catalog_request);
 
   return {
     reply_blocks: Array.isArray(parsed.reply_blocks)
@@ -2151,6 +2300,14 @@ function parseStructuredJson(text: string): StructuredModelResponse {
         ? storeLocator.confirmation
         : "unknown",
       preferenceType: storeLocator.preferenceType === "secondary" ? "secondary" : "favorite",
+    },
+    optical_catalog_request: {
+      action: opticalCatalog.action === "search" ? "search" : "none",
+      lensCategory: opticalCatalog.lensCategory === "multifocal"
+        ? "multifocal"
+        : opticalCatalog.lensCategory === "single_vision" ? "single_vision" : null,
+      treatment: asString(opticalCatalog.treatment),
+      query: asString(opticalCatalog.query),
     },
   };
 }
@@ -3568,6 +3725,56 @@ export class AgentManager {
     return agent;
   }
 
+  private async getAnyAgentByConnection(connectionId: string, acesId: number) {
+    const { data: binding, error: bindingError } = await this.agentsClient
+      .from("agent_messaging_connections")
+      .select("agent_id")
+      .eq("connection_id", connectionId)
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (bindingError) throw new HttpError(500, "Nao foi possivel localizar o agente da conexao", bindingError);
+    if (!binding) return null;
+    const { data: agent, error: agentError } = await this.agentsClient
+      .from("ai_agents")
+      .select("*")
+      .eq("id", binding.agent_id)
+      .eq("aces_id", acesId)
+      .eq("agent_type", "primary")
+      .maybeSingle();
+    if (agentError) throw new HttpError(500, "Nao foi possivel carregar o agente da conexao", agentError);
+    return (agent as AgentRow | null) ?? null;
+  }
+
+  private async findMessagingConnection(
+    acesId: number,
+    instanceName: string,
+    provider: string,
+  ) {
+    try {
+      const { data, error } = await this.serviceClient
+        .from("messaging_connections")
+        .select("id, aces_id, channel_type, provider, display_name, legacy_instance_name, capability, status")
+        .eq("aces_id", acesId)
+        .eq("legacy_instance_name", instanceName)
+        .eq("provider", provider)
+        .neq("channel_type", "legacy")
+        .limit(2);
+      if (error) throw error;
+      return (data ?? []).length === 1 ? (data![0] as MessagingConnectionRow) : null;
+    } catch (error) {
+      // Compatibility fallback for rolling upgrades and isolated unit-test
+      // clients that do not expose the new canonical table yet.
+      console.warn("[crm-ai] Conexao canonica indisponivel; usando roteamento legado:", {
+        acesId,
+        instanceName,
+        provider,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   private async getStagesForAccount(acesId: number, pipelineId?: string | null) {
     let query = this.serviceClient
       .from("pipeline_stages")
@@ -3732,6 +3939,101 @@ export class AgentManager {
     }
   }
 
+  async listMessagingConnections(context: AuthContext) {
+    this.ensureAdmin(context);
+    const accessibleInstances = await this.getAccessibleInstanceNames(
+      context.acesId,
+      context.crmUserId,
+      context.role,
+    );
+    const { data, error } = await this.serviceClient
+      .from("messaging_connections")
+      .select("id, aces_id, channel_type, provider, display_name, legacy_instance_name, capability, status")
+      .eq("aces_id", context.acesId)
+      .neq("channel_type", "legacy")
+      .order("display_name", { ascending: true });
+    if (error) throw new HttpError(500, "Nao foi possivel listar as conexoes", error);
+
+    return ((data ?? []) as MessagingConnectionRow[]).filter((connection) =>
+      isAdminRole(context.role)
+      || !connection.legacy_instance_name
+      || accessibleInstances.has(connection.legacy_instance_name)
+    );
+  }
+
+  private async getAgentConnections(agentIds: string[]) {
+    if (agentIds.length === 0) return new Map<string, MessagingConnectionRow[]>();
+    const { data: bindings, error: bindingError } = await this.agentsClient
+      .from("agent_messaging_connections")
+      .select("agent_id, connection_id")
+      .in("agent_id", agentIds)
+      .eq("is_active", true);
+    if (bindingError) throw new HttpError(500, "Nao foi possivel carregar as conexoes dos agentes", bindingError);
+    const connectionIds = Array.from(new Set((bindings ?? []).map((binding) => String(binding.connection_id))));
+    const connectionById = new Map<string, MessagingConnectionRow>();
+    if (connectionIds.length > 0) {
+      const { data: connections, error: connectionError } = await this.serviceClient
+        .from("messaging_connections")
+        .select("id, aces_id, channel_type, provider, display_name, legacy_instance_name, capability, status")
+        .in("id", connectionIds);
+      if (connectionError) throw new HttpError(500, "Nao foi possivel carregar as conexoes", connectionError);
+      for (const connection of (connections ?? []) as MessagingConnectionRow[]) connectionById.set(connection.id, connection);
+    }
+    const byAgent = new Map<string, MessagingConnectionRow[]>();
+    for (const binding of bindings ?? []) {
+      const connection = connectionById.get(String(binding.connection_id));
+      if (!connection) continue;
+      const current = byAgent.get(String(binding.agent_id)) ?? [];
+      current.push(connection);
+      byAgent.set(String(binding.agent_id), current);
+    }
+    return byAgent;
+  }
+
+  private async syncAgentConnections(context: AuthContext, agentId: string, connectionIds: string[]) {
+    const uniqueIds = Array.from(new Set(connectionIds.map((id) => id.trim()).filter(isUuid)));
+    if (uniqueIds.length !== connectionIds.length || uniqueIds.length === 0) {
+      throw new HttpError(400, "Selecione ao menos uma conexao valida para o agente");
+    }
+    const available = await this.listMessagingConnections(context);
+    const availableById = new Map(available.map((connection) => [connection.id, connection]));
+    const selected = uniqueIds.map((id) => availableById.get(id));
+    if (selected.some((connection) => !connection)) {
+      throw new HttpError(403, "Uma das conexoes selecionadas nao esta disponivel para esta conta");
+    }
+    const { data: occupied, error: occupiedError } = await this.agentsClient
+      .from("agent_messaging_connections")
+      .select("agent_id, connection_id")
+      .in("connection_id", uniqueIds)
+      .eq("is_active", true)
+      .neq("agent_id", agentId);
+    if (occupiedError) throw new HttpError(500, "Nao foi possivel validar as conexoes do agente", occupiedError);
+    if ((occupied ?? []).length > 0) {
+      throw new HttpError(409, "Uma das conexoes ja possui um agente principal", {
+        code: "AGENT_CONNECTION_OCCUPIED",
+        connectionId: occupied![0].connection_id,
+      });
+    }
+    const { error: deactivateError } = await this.agentsClient
+      .from("agent_messaging_connections")
+      .update({ is_active: false })
+      .eq("agent_id", agentId)
+      .eq("aces_id", context.acesId)
+      .not("connection_id", "in", `(${uniqueIds.join(",")})`);
+    if (deactivateError) throw new HttpError(500, "Nao foi possivel atualizar as conexoes removidas", deactivateError);
+    const { error: upsertError } = await this.agentsClient
+      .from("agent_messaging_connections")
+      .upsert(uniqueIds.map((connectionId) => ({
+        agent_id: agentId,
+        connection_id: connectionId,
+        aces_id: context.acesId,
+        is_active: true,
+        created_by: context.crmUserId,
+      })), { onConflict: "agent_id,connection_id" });
+    if (upsertError) throw new HttpError(500, "Nao foi possivel vincular as conexoes ao agente", upsertError);
+    return selected as MessagingConnectionRow[];
+  }
+
   async listAgents(context: AuthContext) {
     this.ensureAdmin(context);
     const accessibleInstances = await this.getAccessibleInstanceNames(
@@ -3751,16 +4053,23 @@ export class AgentManager {
     }
 
     const allAgents = (data ?? []) as AgentRow[];
+    const connectionsByAgent = await this.getAgentConnections(allAgents.map((agent) => agent.id));
     const visiblePrimaryIds = new Set(
       allAgents
-        .filter((agent) => agent.agent_type !== "subagent" && accessibleInstances.has(agent.instance_name))
+        .filter((agent) => agent.agent_type !== "subagent" && (
+          isAdminRole(context.role)
+          || (agent.instance_name ? accessibleInstances.has(agent.instance_name) : false)
+          || (connectionsByAgent.get(agent.id) ?? []).some((connection) =>
+            !connection.legacy_instance_name || accessibleInstances.has(connection.legacy_instance_name)
+          )
+        ))
         .map((agent) => agent.id),
     );
     return allAgents.filter((agent) =>
       agent.agent_type === "subagent"
         ? Boolean(agent.parent_agent_id && visiblePrimaryIds.has(agent.parent_agent_id))
         : visiblePrimaryIds.has(agent.id),
-    );
+    ).map((agent) => ({ ...agent, connections: connectionsByAgent.get(agent.id) ?? [] }));
   }
 
   async listAgentTemplates(context: AuthContext) {
@@ -3850,6 +4159,7 @@ export class AgentManager {
 
     const currentConfig = asRecord(audioTool.config);
     const voiceId = asString(currentConfig.voiceId) ?? this.elevenLabsDefaultVoiceId;
+    const selectionRate = safeAiAudioSelectionRate(currentConfig.selectionRate);
     const ready = Boolean(this.elevenLabsTtsEnabled && this.elevenLabsApiKey && voiceId);
     const readiness = this.elevenLabsTtsEnabled ? (ready ? "ready" : "needs_config") : "unavailable";
 
@@ -3860,7 +4170,7 @@ export class AgentManager {
         is_enabled: ready ? Boolean(audioTool.is_enabled) : false,
         config: {
           ...currentConfig,
-          selectionRate: 0.018,
+          selectionRate,
           voiceId: voiceId ?? null,
         },
         last_validated_at: new Date().toISOString(),
@@ -3899,6 +4209,23 @@ export class AgentManager {
       }
 
       let ready = Number(count ?? 0) > 0;
+      if (binding.tool_key === "send_media") {
+        const { data: assets, error: assetsError } = await this.agentsClient
+          .from("media_assets")
+          .select("id")
+          .eq("aces_id", acesId)
+          .eq("agent_id", agentId)
+          .eq("send_enabled", true)
+          .not("analysis_completed_at", "is", null);
+        if (assetsError) throw new HttpError(500, "Nao foi possivel validar o catalogo de midia", assetsError);
+        const assetIds = (assets ?? []).map((asset) => String(asset.id));
+        if (assetIds.length > 0) {
+          const { count: linked, error: linkedError } = await this.agentsClient
+            .from("media_catalog_assets").select("asset_id", { count: "exact", head: true }).in("asset_id", assetIds);
+          if (linkedError) throw new HttpError(500, "Nao foi possivel validar categorias de midia", linkedError);
+          ready = Number(linked ?? 0) > 0;
+        } else ready = false;
+      }
       if (binding.tool_key === "forwarding") {
         const { data: eligibleDestinationCount, error: eligibilityError } = await this.agentsClient.rpc(
           "count_ready_forwarding_destinations",
@@ -4223,11 +4550,17 @@ export class AgentManager {
       return subagent;
     }
 
-    if (!input.instanceName?.trim()) {
-      throw new HttpError(400, "Instancia do agente e obrigatoria");
+    const requestedConnectionIds = input.connectionIds ?? [];
+    let instanceName = input.instanceName?.trim() ?? "";
+    if (requestedConnectionIds.length > 0) {
+      const availableConnections = await this.listMessagingConnections(context);
+      const firstConnection = availableConnections.find((connection) => connection.id === requestedConnectionIds[0]);
+      if (!firstConnection) throw new HttpError(404, "Conexao principal nao encontrada");
+      instanceName = firstConnection.legacy_instance_name ?? instanceName;
     }
-
-    const instanceName = input.instanceName.trim();
+    if (!instanceName) {
+      throw new HttpError(400, "Selecione ao menos uma conexao para o agente");
+    }
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
 
     if (input.templateKey?.trim()) {
@@ -4281,7 +4614,10 @@ export class AgentManager {
       await this.syncMissingStageRules(agent);
       await this.syncPlatformToolReadiness(agent.id, agent.aces_id);
       await this.ensureStoreLocatorToolBinding(agent.id, agent.aces_id);
-      return agent;
+      const connections = requestedConnectionIds.length > 0
+        ? await this.syncAgentConnections(context, agent.id, requestedConnectionIds)
+        : (await this.getAgentConnections([agent.id])).get(agent.id) ?? [];
+      return { ...agent, connections };
     }
 
     const payload = {
@@ -4322,7 +4658,10 @@ export class AgentManager {
     await this.refreshDerivedAgentState(agent);
     await this.ensureCalendarToolBinding(agent.id, agent.aces_id);
     await this.ensureStoreLocatorToolBinding(agent.id, agent.aces_id);
-    return agent;
+    const connections = requestedConnectionIds.length > 0
+      ? await this.syncAgentConnections(context, agent.id, requestedConnectionIds)
+      : (await this.getAgentConnections([agent.id])).get(agent.id) ?? [];
+    return { ...agent, connections };
   }
 
   async deleteAgent(context: AuthContext, agentId: string) {
@@ -4700,7 +5039,7 @@ export class AgentManager {
     if (toolKey === "ai_audio") {
       const voiceId = asString(nextConfig.voiceId);
       if (input.config !== undefined && voiceId) await this.validateElevenLabsVoice(voiceId);
-      nextConfig.selectionRate = 0.018;
+      nextConfig.selectionRate = normalizeAiAudioSelectionRate(nextConfig.selectionRate);
       nextConfig.voiceId = voiceId;
     }
     const audioReady = toolKey === "ai_audio"
@@ -4910,6 +5249,69 @@ export class AgentManager {
       .eq("agent_tool_id", binding.id);
     if (error) throw new HttpError(500, "Nao foi possivel desativar a regra de lentes", error);
     await this.refreshPrescriptionToolReadiness(context.acesId, binding.id);
+    return { success: true };
+  }
+
+  async listOpticalCatalogProducts(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "prescription_analyst");
+    const { data, error } = await this.serviceClient.from("optical_catalog_products")
+      .select("*")
+      .eq("aces_id", context.acesId)
+      .eq("agent_tool_id", binding.id)
+      .eq("is_active", true)
+      .order("lens_category", { ascending: true })
+      .order("price_cents", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw new HttpError(500, "Nao foi possivel listar o catalogo de lentes", error);
+    return (data ?? []).map((row: Record<string, unknown>) => this.mapOpticalCatalogProduct(row));
+  }
+
+  async upsertOpticalCatalogProduct(
+    context: AuthContext,
+    agentId: string,
+    input: Omit<OpticalCatalogProduct, "currency"> & { id?: string | null },
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "prescription_analyst");
+    const displayName = input.displayName.trim();
+    if (!displayName) throw new HttpError(400, "Informe o nome do produto");
+    if (!Number.isInteger(input.priceCents) || input.priceCents < 0) {
+      throw new HttpError(400, "Informe um preco valido");
+    }
+    const treatments = [...new Set(input.treatments.map((item) => item.trim()).filter(Boolean))];
+    const payload = {
+      id: input.id ?? undefined,
+      aces_id: context.acesId,
+      agent_tool_id: binding.id,
+      lens_category: input.lensCategory,
+      display_name: displayName,
+      brand: input.brand?.trim() || null,
+      treatments,
+      description: input.description?.trim() || null,
+      price_cents: input.priceCents,
+      currency: "BRL",
+      is_active: input.isActive,
+    };
+    const result = input.id
+      ? await this.serviceClient.from("optical_catalog_products").update(payload)
+        .eq("id", input.id).eq("aces_id", context.acesId).eq("agent_tool_id", binding.id).select("*").single()
+      : await this.serviceClient.from("optical_catalog_products").insert(payload).select("*").single();
+    if (result.error) throw new HttpError(500, "Nao foi possivel salvar o produto", result.error);
+    await this.refreshPrescriptionToolReadiness(context.acesId, binding.id, true);
+    return this.mapOpticalCatalogProduct(result.data);
+  }
+
+  async deactivateOpticalCatalogProduct(context: AuthContext, agentId: string, productId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const binding = await this.getAgentToolBinding(context.acesId, agentId, "prescription_analyst");
+    const { error } = await this.serviceClient.from("optical_catalog_products")
+      .update({ is_active: false })
+      .eq("id", productId).eq("aces_id", context.acesId).eq("agent_tool_id", binding.id);
+    if (error) throw new HttpError(500, "Nao foi possivel desativar o produto", error);
     return { success: true };
   }
 
@@ -5950,6 +6352,142 @@ export class AgentManager {
     return { success: true };
   }
 
+  // Image catalogue v2. These routes deliberately do not require ADMIN: any
+  // authenticated account member who can access the agent may curate its media.
+  async listAgentMediaCatalog(context: AuthContext, agentId: string) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const [catalogResult, assetResult] = await Promise.all([
+      this.agentsClient.from("media_catalogs").select("id,parent_id,name").eq("aces_id", context.acesId).eq("agent_id", agentId).order("name"),
+      this.agentsClient.from("media_assets").select("*").eq("aces_id", context.acesId).eq("agent_id", agentId).is("disabled_at", null).order("created_at", { ascending: false }),
+    ]);
+    if (catalogResult.error || assetResult.error) throw new HttpError(500, "Nao foi possivel carregar o catalogo de midia", catalogResult.error ?? assetResult.error);
+    const assets = await Promise.all((assetResult.data ?? []).map(async (asset: JsonRecord) => {
+      const { data: links, error } = await this.agentsClient.from("media_catalog_assets").select("catalog_id").eq("asset_id", asset.id);
+      if (error) throw new HttpError(500, "Nao foi possivel carregar categorias da midia", error);
+      const signed = await this.serviceClient.storage.from(String(asset.storage_bucket)).createSignedUrl(String(asset.storage_path), this.chatSignedDownloadTtlSeconds);
+      return { ...asset, preview_url: signed.data?.signedUrl ?? null, catalog_ids: (links ?? []).map((link) => link.catalog_id) };
+    }));
+    const { count, error: countError } = await this.agentsClient.from("media_assets").select("id", { count: "exact", head: true }).eq("aces_id", context.acesId).eq("agent_id", agentId).eq("origin", "send_media").is("disabled_at", null);
+    if (countError) throw new HttpError(500, "Nao foi possivel calcular a cota de midia", countError);
+    return { catalogs: catalogResult.data ?? [], assets, limit: 30, used: Number(count ?? 0) };
+  }
+
+  async createAgentMediaCatalog(context: AuthContext, agentId: string, input: { name: string; parentId?: string | null }) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const name = input.name.trim(); if (!name) throw new HttpError(400, "Nome da categoria e obrigatorio");
+    const { data, error } = await this.agentsClient.from("media_catalogs").insert({ aces_id: context.acesId, agent_id: agentId, parent_id: input.parentId ?? null, name }).select("id,parent_id,name").single();
+    if (error) {
+      if (isSupabaseUniqueViolation(error)) {
+        throw new HttpError(409, "Ja existe uma categoria com este nome", error);
+      }
+      throw new HttpError(500, "Nao foi possivel criar a categoria", error);
+    }
+    return data;
+  }
+
+  async deleteAgentMediaCatalog(context: AuthContext, agentId: string, catalogId: string) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data, error } = await this.agentsClient
+      .from("media_catalogs")
+      .delete()
+      .eq("id", catalogId)
+      .eq("aces_id", context.acesId)
+      .eq("agent_id", agentId)
+      .select("id")
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel excluir a categoria", error);
+    if (!data) throw new HttpError(404, "Categoria nao encontrada");
+    return { success: true };
+  }
+
+  async analyzeAgentMedia(context: AuthContext, agentId: string, input: { fileName: string; mimeType: string; base64: string }) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (!["image/jpeg", "image/png", "image/webp"].includes(input.mimeType)) throw new HttpError(400, "Formato de imagem nao aceito");
+    const encoded = input.base64.replace(/^data:[^;]+;base64,/, ""); const buffer = Buffer.from(encoded, "base64");
+    if (!buffer.length || buffer.length > 10 * 1024 * 1024) throw new HttpError(400, "Imagem invalida ou acima de 10 MB");
+    const id = randomUUID(); const fileName = sanitizeStorageFileName(input.fileName || `foto-${id}`); const storagePath = `${context.acesId}/${agentId}/${id}/${fileName}`;
+    const { error: uploadError } = await this.serviceClient.storage.from("agent-media-catalog").upload(storagePath, buffer, { contentType: input.mimeType, upsert: false });
+    if (uploadError) throw new HttpError(500, "Nao foi possivel armazenar a imagem", uploadError);
+    let title = input.fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "Foto de catalogo";
+    let description = `Imagem cadastrada: ${title}.`;
+    let searchTerms = title.toLocaleLowerCase("pt-BR").split(/\s+/).filter(Boolean);
+    if (this.gemini) {
+      try {
+        const model = this.gemini.getGenerativeModel({ model: AgentManager.DEFAULT_CUSTOMER_AGENT_MODEL, generationConfig: { responseMimeType: "application/json", temperature: 0.1 } });
+        const result = await model.generateContent([
+          "Analise esta foto para busca em um catalogo de midias. Retorne somente JSON: title, description, search_terms. Descreva apenas fatos visiveis e texto legivel na imagem; inclua sinonimos e grafias aproximadas somente quando forem sustentadas pela imagem. Nao invente marca, preco ou caracteristicas.",
+          { inlineData: { data: buffer.toString("base64"), mimeType: input.mimeType } },
+        ]);
+        const parsed = asRecord(JSON.parse(result.response.text().replace(/^```json\s*|\s*```$/g, "")));
+        title = asString(parsed.title) ?? title;
+        description = asString(parsed.description) ?? description;
+        const generatedTerms = Array.isArray(parsed.search_terms) ? parsed.search_terms.map((term) => String(term).trim()).filter(Boolean).slice(0, 30) : [];
+        if (generatedTerms.length) searchTerms = generatedTerms;
+      } catch (error) {
+        console.warn("[agent-media] Analise visual indisponivel; usando metadados basicos", error instanceof Error ? error.message : error);
+      }
+    }
+    const { data, error } = await this.agentsClient.from("media_assets").insert({ id, aces_id: context.acesId, agent_id: agentId, storage_path: storagePath, mime_type: input.mimeType, file_name: fileName, file_size: buffer.length, title, description, search_terms: searchTerms, attributes: { source: "upload", analysis: "image_catalog" }, analysis_completed_at: new Date().toISOString(), send_enabled: false }).select("*").single();
+    if (error) { await this.serviceClient.storage.from("agent-media-catalog").remove([storagePath]); throw new HttpError(500, "Nao foi possivel registrar a imagem", error); }
+    const signed = await this.serviceClient.storage.from("agent-media-catalog").createSignedUrl(storagePath, this.chatSignedDownloadTtlSeconds);
+    return { ...data, draftId: id, preview_url: signed.data?.signedUrl ?? null };
+  }
+
+  async saveAgentMediaAsset(context: AuthContext, agentId: string, assetId: string, input: { title: string; description: string; searchTerms?: string[]; catalogIds?: string[]; sendEnabled?: boolean }) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const title = input.title.trim(); if (!title) throw new HttpError(400, "Titulo da foto e obrigatorio");
+    const catalogIds = [...new Set((input.catalogIds ?? []).filter(isUuid))];
+    if (input.sendEnabled && catalogIds.length === 0) throw new HttpError(400, "Escolha ao menos uma categoria antes de ativar o envio");
+    const payload: JsonRecord = { title, description: input.description.trim(), search_terms: (input.searchTerms ?? []).map((term) => term.trim()).filter(Boolean).slice(0, 30), send_enabled: input.sendEnabled !== false, disabled_at: input.sendEnabled === false ? new Date().toISOString() : null, purge_after: input.sendEnabled === false ? new Date(Date.now() + 30 * 86400000).toISOString() : null };
+    const { data, error } = await this.agentsClient.from("media_assets").update(payload).eq("id", assetId).eq("aces_id", context.acesId).eq("agent_id", agentId).select("*").single();
+    if (error || !data) throw new HttpError(404, "Foto nao encontrada", error);
+    const { error: clearError } = await this.agentsClient.from("media_catalog_assets").delete().eq("asset_id", assetId); if (clearError) throw new HttpError(500, "Nao foi possivel atualizar categorias", clearError);
+    if (catalogIds.length) { const { error: linkError } = await this.agentsClient.from("media_catalog_assets").insert(catalogIds.map((catalogId) => ({ catalog_id: catalogId, asset_id: assetId }))); if (linkError) throw new HttpError(400, "Categorias invalidas", linkError); }
+    await this.syncDataToolReadiness(agentId, context.acesId, true); return data;
+  }
+
+  async listArchivedAgentMedia(context: AuthContext, agentId: string) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data, error } = await this.agentsClient
+      .from("media_assets")
+      .select("*")
+      .eq("aces_id", context.acesId)
+      .eq("agent_id", agentId)
+      .not("disabled_at", "is", null)
+      .order("purge_after", { ascending: true });
+    if (error) throw new HttpError(500, "Nao foi possivel carregar a lixeira de midia", error);
+    const assets = await Promise.all((data ?? []).map(async (asset: JsonRecord) => {
+      const { data: links, error: linksError } = await this.agentsClient.from("media_catalog_assets").select("catalog_id").eq("asset_id", asset.id);
+      if (linksError) throw new HttpError(500, "Nao foi possivel carregar categorias da midia", linksError);
+      return { ...asset, preview_url: null, catalog_ids: (links ?? []).map((link) => link.catalog_id) };
+    }));
+    return { assets };
+  }
+
+  async archiveAgentMedia(context: AuthContext, agentId: string, assetId: string) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const now = new Date();
+    const { data, error } = await this.agentsClient.from("media_assets")
+      .update({ send_enabled: false, disabled_at: now.toISOString(), purge_after: new Date(now.getTime() + 30 * 86400000).toISOString() })
+      .eq("id", assetId).eq("aces_id", context.acesId).eq("agent_id", agentId).is("disabled_at", null).select("id").maybeSingle();
+    if (error || !data) throw new HttpError(404, "Foto nao encontrada", error);
+    await this.syncDataToolReadiness(agentId, context.acesId, true);
+    return { success: true };
+  }
+
+  async restoreAgentMedia(context: AuthContext, agentId: string, assetId: string) {
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data: links, error: linksError } = await this.agentsClient.from("media_catalog_assets").select("catalog_id").eq("asset_id", assetId);
+    if (linksError) throw new HttpError(500, "Nao foi possivel validar categorias da midia", linksError);
+    if (!links?.length) throw new HttpError(409, "A foto nao possui uma categoria para ser restaurada");
+    const { data, error } = await this.agentsClient.from("media_assets")
+      .update({ send_enabled: true, disabled_at: null, purge_after: null })
+      .eq("id", assetId).eq("aces_id", context.acesId).eq("agent_id", agentId).not("disabled_at", "is", null).select("id").maybeSingle();
+    if (error || !data) throw new HttpError(404, "Foto nao encontrada na lixeira", error);
+    await this.syncDataToolReadiness(agentId, context.acesId, true);
+    return { success: true };
+  }
+
   async listForwardingDestinations(context: AuthContext, agentId: string) {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
@@ -6229,7 +6767,13 @@ export class AgentManager {
     this.ensureAdmin(context);
     const currentAgent = await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
     let instanceChange: AgentInstanceChangeResult | null = null;
-    const requestedInstance = input.instanceName?.trim();
+    let requestedInstance = input.instanceName?.trim();
+    if (currentAgent.agent_type === "primary" && input.connectionIds?.length) {
+      const availableConnections = await this.listMessagingConnections(context);
+      const firstConnection = availableConnections.find((connection) => connection.id === input.connectionIds![0]);
+      if (!firstConnection) throw new HttpError(404, "Conexao principal nao encontrada");
+      requestedInstance = firstConnection.legacy_instance_name ?? requestedInstance;
+    }
     const isChangingInstance =
       currentAgent.agent_type === "primary"
       && requestedInstance !== undefined
@@ -6364,7 +6908,26 @@ export class AgentManager {
 
     const agent = data as AgentRow;
     await this.refreshDerivedAgentState(agent);
-    return { agent, instanceChange };
+    const connections = currentAgent.agent_type === "primary" && input.connectionIds
+      ? await this.syncAgentConnections(context, agent.id, input.connectionIds)
+      : (await this.getAgentConnections([agent.id])).get(agent.id) ?? [];
+    return { agent: { ...agent, connections }, instanceChange };
+  }
+
+  private mapOpticalCatalogProduct(row: Record<string, unknown>): OpticalCatalogProduct {
+    return {
+      id: String(row.id),
+      lensCategory: row.lens_category === "multifocal" ? "multifocal" : "single_vision",
+      displayName: String(row.display_name),
+      brand: asString(row.brand),
+      treatments: Array.isArray(row.treatments)
+        ? row.treatments.map((item) => String(item).trim()).filter(Boolean)
+        : [],
+      description: asString(row.description),
+      priceCents: Number(row.price_cents),
+      currency: "BRL",
+      isActive: Boolean(row.is_active),
+    };
   }
 
   async getStageRules(context: AuthContext, agentId: string) {
@@ -6532,15 +7095,28 @@ export class AgentManager {
     return { success: true };
   }
 
-  async getLeadAiState(context: AuthContext, leadId: string, requestedInstanceName?: string | null) {
-    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
-    const selectedInstanceName = requestedInstanceName?.trim() || lead.instancia?.trim() || null;
-    const agent =
-      selectedInstanceName
+  async getLeadAiState(
+    context: AuthContext,
+    leadId: string,
+    requestedInstanceName?: string | null,
+    customerConversationId?: string | null,
+  ) {
+    const scopedConversation = customerConversationId
+      ? await this.loadCustomerConversation(context, customerConversationId)
+      : null;
+    const lead = scopedConversation?.lead
+      ?? await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    const selectedInstanceName = scopedConversation?.connection.legacy_instance_name
+      ?? requestedInstanceName?.trim()
+      ?? lead.instancia?.trim()
+      ?? null;
+    const agent = scopedConversation
+      ? await this.getAnyAgentByConnection(scopedConversation.connection.id, context.acesId)
+      : selectedInstanceName
         ? await this.getAnyAgentByInstance(selectedInstanceName, context.acesId, context.crmUserId, context.role)
         : null;
 
-    return this.resolveLeadAiState(lead.id, agent, selectedInstanceName, lead.interaction_mode);
+    return this.resolveLeadAiState(lead.id, agent, selectedInstanceName, lead.interaction_mode, customerConversationId);
   }
 
   async listLeadInteractionModes(context: AuthContext, leadIdsInput: string[]) {
@@ -6661,25 +7237,30 @@ export class AgentManager {
     leadId: string,
     enabled: boolean,
     requestedInstanceName?: string | null,
+    customerConversationId?: string | null,
   ) {
-    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    const scopedConversation = customerConversationId
+      ? await this.loadCustomerConversation(context, customerConversationId)
+      : null;
+    const lead = scopedConversation?.lead
+      ?? await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
 
-    const instanceName = requestedInstanceName?.trim() || lead.instancia?.trim() || "";
+    const instanceName = scopedConversation?.connection.legacy_instance_name
+      ?? requestedInstanceName?.trim()
+      ?? lead.instancia?.trim()
+      ?? "";
     if (!instanceName) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
 
-    const agent = await this.getAnyAgentByInstance(
-      instanceName,
-      context.acesId,
-      context.crmUserId,
-      context.role
-    );
+    const agent = scopedConversation
+      ? await this.getAnyAgentByConnection(scopedConversation.connection.id, context.acesId)
+      : await this.getAnyAgentByInstance(instanceName, context.acesId, context.crmUserId, context.role);
     if (!agent) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
 
-    const currentState = await this.getLeadState(agent.id, lead.id);
+    const currentState = await this.getLeadState(agent.id, lead.id, customerConversationId);
     if (enabled && currentState?.interaction_mode === "human") {
       throw new HttpError(409, "Finalize o atendimento humano antes de reativar a IA.");
     }
@@ -6693,33 +7274,45 @@ export class AgentManager {
           pause_origin: "manual_override",
           pause_reference: context.crmUserId,
           paused_at: new Date().toISOString(),
-        });
+        }, customerConversationId);
 
-    return this.resolveLeadAiState(lead.id, agent, instanceName, lead.interaction_mode);
+    return this.resolveLeadAiState(lead.id, agent, instanceName, lead.interaction_mode, customerConversationId);
   }
 
   async finalizeHumanHandoff(context: AuthContext, input: FinalizeHumanHandoffInput) {
-    const lead = await this.loadLeadById(input.leadId, context.acesId, context.crmUserId, context.role);
+    const scopedConversation = input.customerConversationId
+      ? await this.loadCustomerConversation(context, input.customerConversationId)
+      : null;
+    const lead = scopedConversation?.lead
+      ?? await this.loadLeadById(input.leadId, context.acesId, context.crmUserId, context.role);
+    if (scopedConversation && scopedConversation.conversation.lead_id !== input.leadId) {
+      throw new HttpError(409, "A conversa nao pertence ao lead informado");
+    }
     if (!isUuid(input.stageId)) {
       throw new HttpError(400, "stageId invalido");
     }
 
-    const instanceName = input.instanceName?.trim() || lead.instancia?.trim() || "";
+    const instanceName = scopedConversation?.connection.legacy_instance_name
+      ?? input.instanceName?.trim()
+      ?? lead.instancia?.trim()
+      ?? "";
     if (!instanceName) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
 
-    const agent = await this.getAnyAgentByInstance(
-      instanceName,
-      context.acesId,
-      context.crmUserId,
-      context.role
-    );
+    const agent = scopedConversation
+      ? await this.getAnyAgentByConnection(scopedConversation.connection.id, context.acesId)
+      : await this.getAnyAgentByInstance(
+          instanceName,
+          context.acesId,
+          context.crmUserId,
+          context.role
+        );
     if (!agent) {
       throw new HttpError(409, "Sem agente configurado para esta instancia");
     }
 
-    const currentState = await this.getLeadState(agent.id, lead.id);
+    const currentState = await this.getLeadState(agent.id, lead.id, input.customerConversationId);
     if (currentState?.interaction_mode !== "human") {
       throw new HttpError(409, "Esta instancia nao esta em atendimento humano.");
     }
@@ -6748,7 +7341,12 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel encerrar o atendimento especializado", transferError);
     }
 
-    await this.upsertLeadState(agent.id, lead.id, this.buildEnabledLeadAiPayload(agent));
+    await this.upsertLeadState(
+      agent.id,
+      lead.id,
+      this.buildEnabledLeadAiPayload(agent),
+      input.customerConversationId,
+    );
     await this.saveMessage({
       leadId: lead.id,
       acesId: context.acesId,
@@ -6757,6 +7355,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName,
       conversationId: null,
+      customerConversationId: input.customerConversationId ?? null,
     });
 
     return {
@@ -7851,6 +8450,7 @@ export class AgentManager {
     instanceName: string | null;
     createdBy?: string | null;
     conversationId?: string | null;
+    customerConversationId?: string | null;
     sentAt?: string;
     provider?: InboundProviderName | null;
     providerMessageId?: string | null;
@@ -7870,6 +8470,7 @@ export class AgentManager {
       instance: params.instanceName,
       created_by: params.createdBy ?? null,
       conversation_id: params.conversationId ?? null,
+      customer_conversation_id: params.customerConversationId ?? null,
       sent_at: sentAt,
       sender_agent_id: params.senderAgentId ?? null,
     };
@@ -8439,12 +9040,15 @@ export class AgentManager {
     return data as LeadRow;
   }
 
-  private async fetchRecentConversation(leadId: string, instanceName?: string | null) {
-    const { data, error } = await this.serviceClient
+  private async fetchRecentConversation(leadId: string, instanceName?: string | null, customerConversationId?: string | null) {
+    let query = this.serviceClient
       .from("message_history")
       .select("id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id")
-      .eq("lead_id", leadId)
-      .eq("instance", instanceName ?? "")
+      .eq("lead_id", leadId);
+    query = customerConversationId
+      ? query.eq("customer_conversation_id", customerConversationId)
+      : query.eq("instance", instanceName ?? "");
+    const { data, error } = await query
       .order("sent_at", { ascending: false })
       .limit(15);
 
@@ -8516,13 +9120,16 @@ export class AgentManager {
     }
   }
 
-  private async fetchLatestLeadInboundMessage(leadId: string, instanceName?: string | null) {
-    const { data, error } = await this.serviceClient
+  private async fetchLatestLeadInboundMessage(leadId: string, instanceName?: string | null, customerConversationId?: string | null) {
+    let query = this.serviceClient
       .from("message_history")
       .select("id, content, sent_at")
       .eq("lead_id", leadId)
-      .eq("instance", instanceName ?? "")
-      .eq("source_type", "lead")
+      .eq("source_type", "lead");
+    query = customerConversationId
+      ? query.eq("customer_conversation_id", customerConversationId)
+      : query.eq("instance", instanceName ?? "");
+    const { data, error } = await query
       .order("sent_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -8565,8 +9172,15 @@ export class AgentManager {
     return Math.max(0, AgentManager.CRM_ANALYSIS_INACTIVITY_MS - elapsedMs);
   }
 
-  private scheduleCrmAnalysisAfterInactivity(agentId: string, leadId: string, delayMs: number) {
-    const timerKey = `${agentId}:${leadId}`;
+  private scheduleCrmAnalysisAfterInactivity(
+    agentId: string,
+    leadId: string,
+    delayMs: number,
+    instanceName?: string | null,
+    customerConversationId?: string | null,
+    channelProvider?: InboundProviderName | null,
+  ) {
+    const timerKey = `${agentId}:${leadId}:${encodeURIComponent(instanceName ?? "unknown")}:${customerConversationId ?? "unknown"}`;
     const existingTimer = this.idleAnalysisTimers.get(timerKey);
     if (existingTimer) {
       clearTimeout(existingTimer);
@@ -8574,7 +9188,13 @@ export class AgentManager {
 
     const timer = setTimeout(() => {
       this.idleAnalysisTimers.delete(timerKey);
-      this.flushBufferedConversation(agentId, leadId).catch((error) => {
+      this.flushBufferedConversation(
+        agentId,
+        leadId,
+        instanceName ?? undefined,
+        customerConversationId ?? undefined,
+        channelProvider ?? undefined,
+      ).catch((error) => {
         console.error("[crm-ai] Falha ao processar analise apos inatividade:", error);
       });
     }, Math.max(1000, delayMs));
@@ -8582,26 +9202,89 @@ export class AgentManager {
     this.idleAnalysisTimers.set(timerKey, timer);
   }
 
-  private async getLeadState(agentId: string, leadId: string) {
-    const { data, error } = await this.agentsClient
-      .from("ai_lead_state")
-      .select("*")
-      .eq("agent_id", agentId)
-      .eq("lead_id", leadId)
-      .maybeSingle();
+  private async getLeadState(agentId: string, leadId: string, conversationId?: string | null) {
+    if (!conversationId) {
+      const { data, error } = await this.agentsClient
+        .from("ai_lead_state")
+        .select("*")
+        .eq("agent_id", agentId)
+        .eq("lead_id", leadId)
+        .maybeSingle();
 
-    if (error) {
-      throw new HttpError(500, "Nao foi possivel consultar o estado da IA para o lead", error);
+      if (error) {
+        throw new HttpError(500, "Nao foi possivel consultar o estado da IA para o lead", error);
+      }
+
+      return (data as LeadAiStateRow | null) ?? null;
     }
 
-    return (data as LeadAiStateRow | null) ?? null;
+    const [conversationResult, sharedFactsResult] = await Promise.all([
+      this.agentsClient
+        .from("ai_conversation_state")
+        .select("*")
+        .eq("agent_id", agentId)
+        .eq("lead_id", leadId)
+        .eq("conversation_id", conversationId)
+        .maybeSingle(),
+      this.agentsClient
+        .from("ai_lead_state")
+        .select("optical_profile, memory_summary")
+        .eq("agent_id", agentId)
+        .eq("lead_id", leadId)
+        .maybeSingle(),
+    ]);
+
+    if (conversationResult.error || sharedFactsResult.error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel consultar o estado da IA para o lead",
+        conversationResult.error ?? sharedFactsResult.error,
+      );
+    }
+
+    const sharedFacts = (sharedFactsResult.data as Pick<LeadAiStateRow, "optical_profile" | "memory_summary"> | null) ?? null;
+    const scopedState = conversationResult.data as LeadAiStateRow | null;
+    if (!scopedState) {
+      return {
+        agent_id: agentId,
+        lead_id: leadId,
+        interaction_mode: "ai" as const,
+        freeze_until: null,
+        pause_origin: null,
+        pause_reference: null,
+        paused_at: null,
+        last_processed_message_at: null,
+        last_inbound_at: null,
+        last_ai_reply_at: null,
+        last_classified_stage_id: null,
+        last_confidence: null,
+        status: "active" as const,
+        manual_ai_enabled: null,
+        optical_profile: sharedFacts?.optical_profile ?? {},
+        memory_summary: sharedFacts?.memory_summary ?? null,
+        agenda_context: {},
+        agenda_context_expires_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } satisfies LeadAiStateRow;
+    }
+
+    const scopedOpticalProfile = asRecord(scopedState.optical_profile);
+    return {
+      ...scopedState,
+      optical_profile: Object.keys(scopedOpticalProfile).length > 0
+        ? scopedState.optical_profile
+        : sharedFacts?.optical_profile ?? {},
+      memory_summary: scopedState.memory_summary ?? sharedFacts?.memory_summary ?? null,
+    };
   }
 
   private async resolveLeadAiState(
     leadId: string,
     agent: AgentRow | null,
     instanceName?: string | null,
-    _legacyInteractionMode?: "ai" | "human" | null
+    _legacyInteractionMode?: "ai" | "human" | null,
+    conversationId?: string | null,
   ): Promise<LeadAiControlState> {
     if (!agent) {
       return {
@@ -8619,7 +9302,7 @@ export class AgentManager {
       };
     }
 
-    const leadState = await this.getLeadState(agent.id, leadId);
+    const leadState = await this.getLeadState(agent.id, leadId, conversationId);
     const manualAiEnabled =
       typeof leadState?.manual_ai_enabled === "boolean"
         ? leadState.manual_ai_enabled
@@ -8702,16 +9385,19 @@ export class AgentManager {
     };
   }
 
-  private async upsertLeadState(agentId: string, leadId: string, payload: JsonRecord) {
+  private async upsertLeadState(agentId: string, leadId: string, payload: JsonRecord, conversationId?: string | null) {
     const statePayload = {
       agent_id: agentId,
       lead_id: leadId,
+      ...(conversationId ? { conversation_id: conversationId } : {}),
       ...payload,
       updated_at: new Date().toISOString(),
     };
-    let { error } = await this.agentsClient.from("ai_lead_state").upsert(
+    const stateTable = conversationId ? "ai_conversation_state" : "ai_lead_state";
+    const stateConflict = conversationId ? "agent_id,conversation_id" : "agent_id,lead_id";
+    let { error } = await this.agentsClient.from(stateTable).upsert(
       statePayload,
-      { onConflict: "agent_id,lead_id" }
+      { onConflict: stateConflict }
     );
 
     // Keep the rollout safe if the backend image starts before PostgREST has
@@ -8724,9 +9410,9 @@ export class AgentManager {
     ) {
       const legacyPayload = { ...statePayload } as Record<string, unknown>;
       delete legacyPayload.interaction_mode;
-      ({ error } = await this.agentsClient.from("ai_lead_state").upsert(
+      ({ error } = await this.agentsClient.from(stateTable).upsert(
         legacyPayload,
-        { onConflict: "agent_id,lead_id" }
+        { onConflict: stateConflict }
       ));
     }
 
@@ -8766,6 +9452,7 @@ export class AgentManager {
     pauseOrigin: "manual_send" | "human_webhook" | "ai_policy" | "manual_override",
     pauseReference?: string | null,
     interactionMode?: "ai" | "human",
+    conversationId?: string | null,
   ) {
     const freezeUntil = new Date(Date.now() + agent.human_pause_minutes * 60_000).toISOString();
     await this.upsertLeadState(agent.id, leadId, {
@@ -8775,7 +9462,7 @@ export class AgentManager {
       pause_reference: pauseReference ?? null,
       paused_at: new Date().toISOString(),
       ...(interactionMode ? { interaction_mode: interactionMode } : {}),
-    });
+    }, conversationId);
     return freezeUntil;
   }
 
@@ -8783,6 +9470,7 @@ export class AgentManager {
     runId?: string;
     agentId: string;
     leadId: string;
+    customerConversationId?: string | null;
     messageHistoryIds?: string[];
     inputSnapshot?: JsonRecord;
     outputSnapshot?: JsonRecord;
@@ -8798,6 +9486,7 @@ export class AgentManager {
       id: payload.runId ?? randomUUID(),
       agent_id: payload.agentId,
       lead_id: payload.leadId,
+      customer_conversation_id: payload.customerConversationId ?? null,
       message_history_ids: payload.messageHistoryIds ?? [],
       input_snapshot: payload.inputSnapshot ?? {},
       output_snapshot: payload.outputSnapshot ?? {},
@@ -9416,7 +10105,24 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel carregar os materiais do agente", error);
     }
 
-    return data ?? [];
+    const { data: catalogAssets, error: catalogError } = await this.agentsClient
+      .from("media_assets")
+      .select("id,title,description,search_terms")
+      .eq("aces_id", agent.aces_id)
+      .eq("agent_id", agent.id)
+      .eq("send_enabled", true)
+      .not("analysis_completed_at", "is", null);
+    if (catalogError) throw new HttpError(500, "Nao foi possivel carregar catalogo de fotos", catalogError);
+    const ids = (catalogAssets ?? []).map((asset) => String(asset.id));
+    const { data: links, error: linksError } = ids.length
+      ? await this.agentsClient.from("media_catalog_assets").select("asset_id").in("asset_id", ids)
+      : { data: [], error: null };
+    if (linksError) throw new HttpError(500, "Nao foi possivel validar fotos categorizadas", linksError);
+    const linkedIds = new Set((links ?? []).map((link) => String(link.asset_id)));
+    const modern = (catalogAssets ?? []).filter((asset) => linkedIds.has(String(asset.id))).map((asset) => ({
+      asset_key: String(asset.id), display_name: String(asset.title), description: String(asset.description ?? ""), usage_instruction: Array.isArray(asset.search_terms) ? asset.search_terms.join(", ") : "",
+    }));
+    return [...(data ?? []), ...modern];
   }
 
   private async enqueueBiEvent(params: {
@@ -9443,24 +10149,14 @@ export class AgentManager {
     }
   }
 
-  private isAudioEligible(text: string) {
+  private isAudioEligible(text: string, explicitAudioRequest = false) {
     const normalized = text.trim();
     return (
-      normalized.length >= 20 &&
+      (explicitAudioRequest ? normalized.length > 0 : normalized.length >= 20) &&
       normalized.length <= 800 &&
       !/(?:https?:\/\/|www\.)/i.test(normalized) &&
       !/```|\b(?:otp|token|codigo de verificacao)\b/i.test(normalized)
     );
-  }
-
-  private shouldSelectAudio(runId: string, agentId: string, leadId: string, rate: number) {
-    const normalizedRate = Math.min(Math.max(rate, 0), 1);
-    const sample = createHash("sha256")
-      .update(`${runId}:${agentId}:${leadId}`)
-      .digest()
-      .readUInt32BE(0) % 10_000;
-
-    return sample < Math.round(normalizedRate * 10_000);
   }
 
   private async generateElevenLabsAudio(text: string, voiceId: string) {
@@ -9512,6 +10208,8 @@ export class AgentManager {
     lead: LeadRow;
     runId: string;
     blocks: string[];
+    explicitAudioRequest?: boolean;
+    customerConversationId?: string | null;
   }) {
     const binding = await this.getEnabledAgentTool(params.agent, "ai_audio");
     if (!binding) return false;
@@ -9519,11 +10217,17 @@ export class AgentManager {
     const text = params.blocks.join("\n\n").trim();
     const config = asRecord(binding.config);
     const voiceId = asString(config.voiceId) ?? this.elevenLabsDefaultVoiceId;
-    const selectionRate = 0.018;
-    const eligible = Boolean(voiceId && this.isAudioEligible(text));
-    const selected = eligible
-      ? this.shouldSelectAudio(params.runId, params.agent.id, params.lead.id, selectionRate)
-      : false;
+    const selectionRate = safeAiAudioSelectionRate(config.selectionRate);
+    const explicitAudioRequest = params.explicitAudioRequest === true;
+    const eligible = Boolean(voiceId && this.isAudioEligible(text, explicitAudioRequest));
+    const selected = shouldSelectAiAudio({
+      runId: params.runId,
+      agentId: params.agent.id,
+      leadId: params.lead.id,
+      rate: selectionRate,
+      eligible,
+      explicitAudioRequest,
+    });
 
     await this.enqueueBiEvent({
       acesId: params.agent.aces_id,
@@ -9536,6 +10240,7 @@ export class AgentManager {
         tool_key: "ai_audio",
         eligible,
         selected,
+        explicit_request: explicitAudioRequest,
         rate: selectionRate,
         run_id: params.runId,
       },
@@ -9673,6 +10378,7 @@ export class AgentManager {
         conversationId,
         sentAt,
         provider: providerResult.provider,
+        customerConversationId: params.customerConversationId ?? null,
         providerMessageId: providerResult.providerMessageId,
         providerStatus: providerResult.providerStatus,
         providerPayloadSummary: providerResult.raw,
@@ -9911,6 +10617,16 @@ export class AgentManager {
     throw new Error("Nao foi possivel baixar o material cadastrado");
   }
 
+  private async downloadRegisteredMediaFromStorage(bucket: string, path: string, expectedMimeType: string) {
+    const { data, error } = await this.serviceClient.storage.from(bucket).download(path);
+    if (error || !data) throw new HttpError(500, "Nao foi possivel baixar a foto do catalogo", error);
+    const buffer = Buffer.from(await data.arrayBuffer());
+    if (buffer.byteLength === 0 || buffer.byteLength > CHAT_ATTACHMENT_MAX_FILE_SIZE) throw new Error("Tamanho da foto invalido");
+    const detected = this.detectRegisteredMedia(buffer);
+    if (detected.kind !== "image" || (expectedMimeType && detected.mimeType !== expectedMimeType)) throw new Error("A foto cadastrada possui formato invalido");
+    return { buffer, ...detected };
+  }
+
   private async downloadVisagismCatalogImage(item: VisagismCatalogItemRow) {
     if (item.storage_bucket && item.storage_path) {
       const { data, error } = await this.serviceClient.storage
@@ -9934,7 +10650,12 @@ export class AgentManager {
     lead: LeadRow;
     runId: string;
     assetKey: string;
+    customerConversationId?: string | null;
+    channelProvider?: InboundProviderName | null;
   }) {
+    if (params.channelProvider === "website") {
+      return { succeeded: false, error: "O chat do site aceita somente texto" };
+    }
     const binding = await this.getEnabledAgentTool(params.agent, "send_media");
     if (!binding) {
       return { succeeded: false, error: "Tool Enviar midia nao esta ativa" };
@@ -9952,9 +10673,15 @@ export class AgentManager {
     if (assetError) {
       throw new HttpError(500, "Nao foi possivel carregar o material selecionado", assetError);
     }
-    if (!asset) {
-      return { succeeded: false, error: "Material nao encontrado ou desativado" };
+    let resolvedAsset: JsonRecord | null = asset as JsonRecord | null;
+    if (!resolvedAsset && isUuid(params.assetKey)) {
+      const { data: modern, error: modernError } = await this.agentsClient.from("media_assets").select("*")
+        .eq("id", params.assetKey).eq("aces_id", params.agent.aces_id).eq("agent_id", params.agent.id)
+        .eq("send_enabled", true).not("analysis_completed_at", "is", null).maybeSingle();
+      if (modernError) throw new HttpError(500, "Nao foi possivel carregar a foto selecionada", modernError);
+      resolvedAsset = modern as JsonRecord | null;
     }
+    if (!resolvedAsset) return { succeeded: false, error: "Material nao encontrado ou desativado" };
 
     const toolRunId = randomUUID();
     const idempotencyKey = `${params.runId}:send_media:${params.assetKey}`;
@@ -9991,10 +10718,12 @@ export class AgentManager {
     let storagePath: string | null = null;
     let dispatched = false;
     try {
-      const downloaded = await this.downloadRegisteredMedia(String(asset.source_url));
+      const downloaded = resolvedAsset.storage_bucket && resolvedAsset.storage_path
+        ? await this.downloadRegisteredMediaFromStorage(String(resolvedAsset.storage_bucket), String(resolvedAsset.storage_path), String(resolvedAsset.mime_type ?? "image/jpeg"))
+        : await this.downloadRegisteredMedia(String(resolvedAsset.source_url));
       const messageId = randomUUID();
       const attachmentId = randomUUID();
-      const configuredName = asString(asset.file_name);
+      const configuredName = asString(resolvedAsset.file_name);
       const fileName = sanitizeStorageFileName(
         configuredName ?? `${String(asset.asset_key)}.${downloaded.extension}`
       );
@@ -10033,7 +10762,7 @@ export class AgentManager {
           kind: "permanent",
         });
       }
-      const caption = asString(asset.default_caption);
+      const caption = asString(resolvedAsset.default_caption);
       const providerResult = await provider.sendMedia({
         acesId: params.agent.aces_id,
         instanceName,
@@ -10058,6 +10787,7 @@ export class AgentManager {
         conversationId: `ai-media:${params.runId}:${params.assetKey}`,
         sentAt,
         provider: providerResult.provider,
+        customerConversationId: params.customerConversationId ?? null,
         providerMessageId: providerResult.providerMessageId,
         providerStatus: providerResult.providerStatus,
         providerPayloadSummary: providerResult.raw,
@@ -10138,13 +10868,16 @@ export class AgentManager {
     createdBy?: string | null;
     runId?: string;
     hasMediaAttachment?: boolean;
+    explicitAudioRequest?: boolean;
+    customerConversationId?: string | null;
+    channelProvider?: InboundProviderName | null;
   }) {
     const blocks = params.blocks.map((item) => item.trim()).filter(Boolean);
     if (blocks.length === 0) {
       return null;
     }
 
-    if (await this.hasLiveWebsiteSession(params.lead)) {
+    if (params.channelProvider === "website") {
       return this.deliverWebsiteReplyBlocks(params, blocks);
     }
 
@@ -10154,6 +10887,8 @@ export class AgentManager {
         lead: params.lead,
         runId: params.runId,
         blocks,
+        explicitAudioRequest: params.explicitAudioRequest,
+        customerConversationId: params.customerConversationId,
       });
       if (sentAsAudio) return "audio" as const;
     }
@@ -10198,6 +10933,7 @@ export class AgentManager {
         sentAt,
         senderAgentId: params.sourceType === "ai" ? params.agent.id : null,
         provider: providerResult.provider,
+        customerConversationId: params.customerConversationId ?? null,
         providerMessageId: providerResult.providerMessageId,
         providerStatus: providerResult.providerStatus,
         providerPayloadSummary: providerResult.raw ?? null,
@@ -10211,12 +10947,12 @@ export class AgentManager {
     return "text" as const;
   }
 
-  private async hasLiveWebsiteSession(lead: LeadRow) {
+  private async hasLiveWebsiteSession(lead: LeadRow, customerConversationId?: string | null) {
     if (!this.config.hasLiveWebsiteSession) return false;
     try {
-      return await this.config.hasLiveWebsiteSession(lead.aces_id, lead.id);
+      return await this.config.hasLiveWebsiteSession(lead.aces_id, lead.id, customerConversationId);
     } catch (error) {
-      // A lookup failure must not silence the lead: fall back to WhatsApp.
+      // A lookup failure must not redirect the message to another channel.
       console.warn("[website-widget] Falha ao verificar sessao do site:", {
         leadId: lead.id,
         error: error instanceof Error ? error.message : String(error),
@@ -10236,6 +10972,7 @@ export class AgentManager {
       lead: LeadRow;
       sourceType: "ai" | "human";
       createdBy?: string | null;
+      customerConversationId?: string | null;
     },
     blocks: string[]
   ) {
@@ -10542,6 +11279,7 @@ export class AgentManager {
     reason: string;
     summary: string;
     sourceMessageId: string | null;
+    customerConversationId?: string | null;
   }): Promise<HandoffExecutionResult | null> {
     if (!params.destination.empresa_id) return null;
     const routingIdempotencyKey = params.sourceMessageId
@@ -10582,7 +11320,14 @@ export class AgentManager {
       return null;
     }
 
-    await this.freezeLead(params.agent, params.lead.id, "ai_policy", params.reason);
+    await this.freezeLead(
+      params.agent,
+      params.lead.id,
+      "ai_policy",
+      params.reason,
+      undefined,
+      params.customerConversationId,
+    );
     await this.saveMessage({
       leadId: params.lead.id,
       acesId: params.agent.aces_id,
@@ -10591,6 +11336,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName: params.agent.instance_name,
       conversationId: null,
+      customerConversationId: params.customerConversationId ?? null,
     });
     await this.saveMessage({
       leadId: params.lead.id,
@@ -10603,6 +11349,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName: params.agent.instance_name,
       conversationId: null,
+      customerConversationId: params.customerConversationId ?? null,
     });
 
     await this.enqueueBiEvent({
@@ -10835,7 +11582,8 @@ export class AgentManager {
     agent: AgentRow,
     lead: LeadRow,
     response: StructuredModelResponse,
-    messages: MessageRow[]
+    messages: MessageRow[],
+    customerConversationId?: string | null,
   ): Promise<HandoffExecutionResult> {
     const config = await this.getHandoffConfig(agent);
     const reason =
@@ -10888,6 +11636,7 @@ export class AgentManager {
         reason,
         summary,
         sourceMessageId,
+        customerConversationId,
       });
       if (companyRouting) return companyRouting;
     }
@@ -10903,7 +11652,7 @@ export class AgentManager {
       });
     }
 
-    await this.freezeLead(agent, lead.id, "ai_policy", reason, "human");
+    await this.freezeLead(agent, lead.id, "ai_policy", reason, "human", customerConversationId);
     await this.saveMessage({
       leadId: lead.id,
       acesId: agent.aces_id,
@@ -10912,6 +11661,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName: agent.instance_name,
       conversationId: null,
+      customerConversationId: customerConversationId ?? null,
     });
     await this.saveMessage({
       leadId: lead.id,
@@ -10921,6 +11671,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName: agent.instance_name,
       conversationId: null,
+      customerConversationId: customerConversationId ?? null,
     });
 
     return {
@@ -10938,11 +11689,19 @@ export class AgentManager {
     lead: LeadRow;
     reason: string;
     messages: MessageRow[];
+    customerConversationId?: string | null;
   }): Promise<HandoffExecutionResult> {
     const latestLeadMessage = [...params.messages]
       .reverse()
       .find((message) => message.source_type === "lead")?.content?.trim();
-    await this.freezeLead(params.agent, params.lead.id, "ai_policy", params.reason, "human");
+    await this.freezeLead(
+      params.agent,
+      params.lead.id,
+      "ai_policy",
+      params.reason,
+      "human",
+      params.customerConversationId,
+    );
     await this.saveMessage({
       leadId: params.lead.id,
       acesId: params.agent.aces_id,
@@ -10951,6 +11710,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName: params.agent.instance_name,
       conversationId: null,
+      customerConversationId: params.customerConversationId ?? null,
     });
     await this.saveMessage({
       leadId: params.lead.id,
@@ -10963,6 +11723,7 @@ export class AgentManager {
       sourceType: "system",
       instanceName: params.agent.instance_name,
       conversationId: null,
+      customerConversationId: params.customerConversationId ?? null,
     });
     return {
       triggered: true,
@@ -10978,11 +11739,12 @@ export class AgentManager {
     agentId: string,
     leadId: string,
     context: AgendaConversationContext | null,
+    customerConversationId?: string | null,
   ) {
     await this.upsertLeadState(agentId, leadId, {
       agenda_context: context ?? {},
       agenda_context_expires_at: context?.expiresAt ?? null,
-    });
+    }, customerConversationId);
   }
 
   private async retryAgendaRead<T>(label: string, operation: () => Promise<T>): Promise<T> {
@@ -11450,6 +12212,7 @@ export class AgentManager {
     request: AgendaRequest;
     storedContext: unknown;
     runId: string;
+    customerConversationId?: string | null;
   }): Promise<AgendaExecutionResult> {
     const now = new Date();
     let company: JsonRecord | null = null;
@@ -11485,7 +12248,7 @@ export class AgentManager {
       } else if (!context.companyId && pendingCompanyHypothesis && context.confirmation === "no") {
         const alternatives = context.presentedOptions.filter((option) => option.id !== pendingCompanyHypothesis.id);
         context = setPresentedAgendaOptions(context, alternatives, now);
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("needs_input", "A primeira hipotese foi descartada; apresente as demais unidades validas.", {
           options: alternatives,
         });
@@ -11538,12 +12301,12 @@ export class AgentManager {
           }));
           if (options.length) {
             context = setPresentedAgendaOptions(context, options, now);
-            await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
             return result("needs_input", "Apresente as unidades validas disponiveis para o cliente escolher.", {
               options,
             });
           }
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("empty", "Nao existe unidade ativa e configurada para esta operacao.");
         }
         if (requiresConfirmation) {
@@ -11556,7 +12319,7 @@ export class AgentManager {
           }));
           context = setPresentedAgendaOptions(context, options, now);
           context.selectedOption = context.presentedOptions[0] ?? null;
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("ambiguous", "Confirme com o cliente a primeira unidade sugerida; se ele negar, apresente as alternativas.", {
             hypothesis: context.selectedOption,
             options,
@@ -11610,7 +12373,7 @@ export class AgentManager {
             label: [item.trade_name, item.city, item.state].filter(Boolean).join(" — "),
           }));
           context = setPresentedAgendaOptions(context, options, now);
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("needs_input", "Pergunte somente em qual empresa ou unidade o cliente deseja atendimento.", {
             options,
             hasMore: companies.length > 4,
@@ -11649,7 +12412,7 @@ export class AgentManager {
             ),
           }));
           context = setPresentedAgendaOptions(context, options, now);
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result(options.length ? "needs_input" : "empty", "Selecione o agendamento que deseja reagendar.", { options });
         }
         const { data: appointment, error } = await calendarClient
@@ -11664,7 +12427,7 @@ export class AgentManager {
         if (error) throw buildSupabaseOperationError(error, "Nao foi possivel validar o agendamento");
         if (!appointment?.professional_location_id || !appointment.service_id) {
           context.appointmentEventId = null;
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("empty", "O agendamento selecionado nao esta mais disponivel para reagendamento.");
         }
         context.companyId = appointment.empresa_id ? String(appointment.empresa_id) : null;
@@ -11696,7 +12459,7 @@ export class AgentManager {
         if (params.request.intent === "professionals") {
           context = setPresentedAgendaOptions(context, professionalOptions, now);
         }
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result(directory.length || company ? "succeeded" : "empty", "Consulta deterministica concluida.", {
           company,
           professionals: professionalOptions,
@@ -11736,7 +12499,7 @@ export class AgentManager {
             },
           });
         }
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("denied", "A configuracao atual nao autoriza esta operacao pela IA.", {
           operation: params.request.intent,
         });
@@ -11769,11 +12532,11 @@ export class AgentManager {
             ),
           }));
           context = setPresentedAgendaOptions(context, options, now);
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result(options.length ? "needs_input" : "empty", "Selecione o agendamento que deseja cancelar.", { options });
         }
         if (context.confirmation !== "yes") {
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("needs_confirmation", "Confirme o cancelamento antes de executar.", { selected: selectedEvent });
         }
         const { data, error } = await calendarClient.rpc("cancel_professional_appointment", {
@@ -11781,7 +12544,7 @@ export class AgentManager {
           p_reason: "Cancelado a pedido do cliente pelo atendimento com IA.",
         });
         if (error) throw buildSupabaseOperationError(error, "Nao foi possivel cancelar o agendamento");
-        await this.saveAgendaContext(params.agent.id, params.lead.id, null);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, null, params.customerConversationId);
         return { ...result("succeeded", "Agendamento cancelado.", { event: data }, true), context: createAgendaContext(now) };
       }
 
@@ -11808,7 +12571,7 @@ export class AgentManager {
             attempt_count: directoryLookup.attemptsUsed,
           },
         });
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("empty", "Nenhum profissional ou servico ativo corresponde aos filtros.");
       }
 
@@ -11820,7 +12583,7 @@ export class AgentManager {
           durationMinutes: entry.durationMinutes,
           priceCents: entry.priceCents,
         }));
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("needs_input", "Pergunte somente qual servico o cliente deseja.", { services });
       }
 
@@ -11874,7 +12637,7 @@ export class AgentManager {
             attempt_count: availabilityAttemptsUsed,
           },
         });
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("empty", "A unidade escolhida foi mantida, mas nao ha horarios nas cinco consultas realizadas.", {
           attemptCount: availabilityAttemptsUsed,
         });
@@ -11894,7 +12657,7 @@ export class AgentManager {
           }).format(new Date(`${date}T12:00:00Z`)),
         }));
         context = setPresentedAgendaOptions(context, options, now);
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("needs_input", "Apresente somente as tres datas retornadas.", { options });
       }
 
@@ -11933,17 +12696,17 @@ export class AgentManager {
           eventType: "calendar_availability.succeeded",
           payload: { lead_id: params.lead.id, agent_id: params.agent.id, option_count: options.length },
         });
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("succeeded", "Apresente somente os horarios retornados.", { options });
       }
 
       if (!selectedSlot || !selectedSlot.professionalLocationId || !selectedSlot.serviceId || !selectedSlot.startTime) {
         context = setPresentedAgendaOptions(context, options, now);
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("needs_input", "Solicite a escolha de um dos horarios retornados.", { options });
       }
       if (context.confirmation !== "yes") {
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("needs_confirmation", params.request.intent === "reschedule"
           ? "Confirme o novo horario antes de reagendar."
           : "Confirme empresa, profissional, servico, data e horario antes de criar.", {
@@ -11962,14 +12725,14 @@ export class AgentManager {
           const message = extractSupabaseErrorMessage(appointmentError) ?? "";
           if (message.includes("SLOT_UNAVAILABLE")) {
             context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== selectedSlot.id), now);
-            await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
             return result("conflict", "O horario deixou de estar disponivel; preserve as preferencias e ofereca novas opcoes.", {
               options: context.presentedOptions,
             });
           }
           throw appointmentError;
         }
-        await this.saveAgendaContext(params.agent.id, params.lead.id, null);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, null, params.customerConversationId);
         return { ...result("succeeded", "Agendamento reagendado e revalidado com sucesso.", { appointment }, true), context: createAgendaContext(now) };
       }
       const { data: appointment, error: appointmentError } = await this.retryAgendaRead(
@@ -12004,7 +12767,7 @@ export class AgentManager {
         const message = extractSupabaseErrorMessage(appointmentError) ?? "";
         if (message.includes("SLOT_UNAVAILABLE")) {
           context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== selectedSlot.id), now);
-          await this.saveAgendaContext(params.agent.id, params.lead.id, context);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("conflict", "O horario deixou de estar disponivel; preserve as preferencias e ofereca novas opcoes.", {
             options: context.presentedOptions,
           });
@@ -12018,7 +12781,7 @@ export class AgentManager {
         eventType: "calendar_booking.succeeded",
         payload: { lead_id: params.lead.id, agent_id: params.agent.id },
       });
-      await this.saveAgendaContext(params.agent.id, params.lead.id, null);
+      await this.saveAgendaContext(params.agent.id, params.lead.id, null, params.customerConversationId);
       return { ...result("succeeded", "Agendamento criado e revalidado com sucesso.", { appointment }, true), context: createAgendaContext(now) };
     } catch (error) {
       console.error("[crm-ai] Falha no subworkflow da Agenda:", error);
@@ -12029,7 +12792,7 @@ export class AgentManager {
         eventType: params.request.intent === "book" ? "calendar_booking.failed" : "calendar_availability.failed",
         payload: { lead_id: params.lead.id, agent_id: params.agent.id },
       }).catch(() => undefined);
-      await this.saveAgendaContext(params.agent.id, params.lead.id, context).catch(() => undefined);
+      await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId).catch(() => undefined);
       return result("failed", "A operacao da Agenda falhou apos cinco tentativas; preserve o contexto e nao acione atendimento humano automaticamente.");
     }
   }
@@ -12123,12 +12886,13 @@ export class AgentManager {
     tags: TagRow[],
     messages: MessageRow[],
     runId: string,
+    customerConversationId?: string | null,
   ): Promise<CentralAiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = await this.getHandoffConfig(agent);
     const subagents = agent.agent_type === "primary"
       ? await this.listActiveSubagents(agent)
       : [];
-    let leadState = await this.getLeadState(agent.id, lead.id);
+    let leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
     const agendaContext = readAgendaContext(leadState?.agenda_context);
     const temporalContext = buildNativeTemporalContext();
     const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
@@ -12161,7 +12925,7 @@ export class AgentManager {
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, store_locator, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, store_locator, optical_catalog_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
       "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
@@ -12196,6 +12960,9 @@ export class AgentManager {
       "A primeira filial confirmada e favorite. Uma segunda filial pedida e confirmada usa secondary. Nunca substitua a favorita por uma secundaria sem pedido explicito de troca.",
       "Se nao houver pedido de busca, alternativa ou confirmacao de filial, use store_locator.action=none, locationText=null, confirmation=unknown e preferenceType=favorite.",
       "Nunca calcule distancia, rota ou escolha de filial por conta propria; o backend executa essa decisao de forma deterministica.",
+      "optical_catalog_request deve conter action, lensCategory, treatment e query.",
+      "Use action=search para perguntas sobre lentes, armacoes, tratamentos de lente, preco, valor, orcamento ou opcoes comerciais de otica. Use lensCategory=multifocal ou single_vision apenas se o cliente citar claramente; caso contrario use null. treatment deve copiar somente o tratamento explicitamente pedido, como filtro azul, antirreflexo ou fotossensivel. query resume o pedido comercial do lead. Para outros assuntos use action=none e campos nulos.",
+      "A ausencia de produto, tratamento ou correspondencia comercial nunca justifica handoff humano. O catalogo devolve alternativas para o agente continuar a conversa.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
       "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
       "should_handoff deve ser true apenas quando a condicao de handoff estiver claramente atendida.",
@@ -12356,12 +13123,54 @@ export class AgentManager {
     }
   }
 
+  private async executeOpticalCatalogSearch(params: {
+    agent: AgentRow;
+    lead: LeadRow;
+    decision: OpticalCatalogDecision;
+    opticalProfile: JsonRecord;
+    runId: string;
+  }): Promise<OpticalCatalogSearchResult> {
+    const ignored: OpticalCatalogSearchResult = {
+      status: "ignored", requestedCategory: null, requestedTreatment: null, products: [],
+    };
+    if (params.decision.action === "none") return ignored;
+    const { data: binding, error: bindingError } = await this.agentsClient.from("agent_tools")
+      .select("id").eq("aces_id", params.agent.aces_id).eq("agent_id", params.agent.id)
+      .eq("tool_key", "prescription_analyst").eq("is_enabled", true).eq("readiness", "ready").maybeSingle();
+    if (bindingError || !binding) return ignored;
+    const { data, error } = await this.serviceClient.from("optical_catalog_products")
+      .select("*").eq("aces_id", params.agent.aces_id).eq("agent_tool_id", binding.id).eq("is_active", true);
+    if (error) {
+      console.error("[optical-catalog] Falha ao consultar catalogo:", error);
+      return { ...ignored, status: "empty", requestedCategory: params.decision.lensCategory, requestedTreatment: params.decision.treatment };
+    }
+    const profileCategory = params.opticalProfile.lens_type === "multifocal"
+      ? "multifocal"
+      : params.opticalProfile.lens_type === "monofocal" || params.opticalProfile.lens_type === "single_vision"
+        ? "single_vision" : null;
+    const result = searchOpticalCatalog(
+      (data ?? []).map((row: Record<string, unknown>) => this.mapOpticalCatalogProduct(row)),
+      params.decision,
+      profileCategory,
+    );
+    const toolRunId = randomUUID();
+    await this.agentsClient.from("agent_tool_runs").insert({
+      id: toolRunId, aces_id: params.agent.aces_id, agent_id: params.agent.id, agent_tool_id: binding.id,
+      lead_id: params.lead.id, tool_key: "optical_catalog", status: "succeeded",
+      idempotency_key: `optical_catalog:${params.runId}:${params.agent.id}`,
+      attempt_count: 1, provider: "internal", input_snapshot: { request: params.decision, profile_category: profileCategory },
+      output_snapshot: { result }, started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+    }).then(({ error: runError }) => { if (runError) console.warn("[optical-catalog] Auditoria nao registrada:", runError); });
+    return result;
+  }
+
   private async generateAgentReply(
     agent: AgentRow,
     lead: LeadRow,
     messages: MessageRow[],
     analysis: StructuredModelResponse,
     runId: string,
+    customerConversationId: string | null | undefined,
     executionContext: {
       nativeFollowupShouldSchedule: boolean;
       nativeFollowupNeedsClarification: boolean;
@@ -12369,6 +13178,7 @@ export class AgentManager {
       visagism: JsonRecord;
       agenda: AgendaExecutionResult;
       storeLocator: JsonRecord;
+      opticalCatalog: OpticalCatalogSearchResult;
     }
   ): Promise<CentralAiExecutionResult<ReplyModelResponse>> {
     const mediaAssets = await this.listAvailableMediaAssets(agent);
@@ -12385,7 +13195,7 @@ export class AgentManager {
       .join("\n");
     const billingContext = await this.getLeadBillingContextString(lead.id, agent.id, agent.aces_id);
 
-    let leadState = await this.getLeadState(agent.id, lead.id);
+    const leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
     const opticalProfile = leadState?.optical_profile ?? {};
     const memorySummary = leadState?.memory_summary ?? null;
 
@@ -12423,6 +13233,7 @@ export class AgentManager {
       "Se o visagismo estiver waiting_input, pergunte somente o campo faltante indicado. Se estiver succeeded, nao envie texto adicional porque a imagem ja foi enviada.",
       "Quando houver resultado da Agenda, use apenas os dados estruturados retornados. Nunca invente empresa, profissional, preco ou disponibilidade.",
       "Quando houver resultado de Busca de filiais, use somente store_locator.data. Copie nome, endereco, numero, telefone e horarios exatamente; nunca calcule distancia nem invente dados.",
+      "Quando houver resultado do Catalogo Optico, mencione somente produtos, tratamentos e precos que estejam nele. Se status=alternatives, apresente as opcoes como semelhantes e convide o lead a conhece-las; nunca diga que o tratamento pedido esta incluso. Se status=empty, mantenha a conversa oferecendo conhecer as categorias disponiveis. Nunca acione atendimento humano por resultado vazio do catalogo.",
       "Nao informe que o trajeto foi calculado de carro. Ao apresentar uma filial, pergunte de modo natural se o lead confirma essa unidade.",
       "Se store_locator.status=confirmed, apenas confirme que a preferencia foi salva. Se status=reused_favorite, reutilize a favorita sem sugerir nova consulta.",
       "agenda.data.company contem os dados oficiais da unidade. Quando o processo do cliente ou a pergunta atual exigir endereco, copie address, city, state e postalCode exatamente desses dados.",
@@ -12460,6 +13271,7 @@ export class AgentManager {
         visagism: executionContext.visagism,
         agenda: executionContext.agenda,
         store_locator: executionContext.storeLocator,
+        optical_catalog: executionContext.opticalCatalog,
       })}`,
       "",
       `Materiais disponiveis: ${JSON.stringify(mediaAssets)}`,
@@ -12518,7 +13330,8 @@ export class AgentManager {
     agent: AgentRow,
     lead: LeadRow,
     response: StructuredModelResponse,
-    validStageIds: Set<string>
+    validStageIds: Set<string>,
+    customerConversationId?: string | null,
   ) {
     if (!response.should_apply_stage || !response.stage_decision.stage_id) {
       return {
@@ -12566,7 +13379,7 @@ export class AgentManager {
       last_classified_stage_id: response.stage_decision.stage_id,
       last_confidence: response.confidence,
       status: response.should_pause ? "paused" : "active",
-    });
+    }, customerConversationId);
 
     return {
       appliedStageId: response.stage_decision.stage_id,
@@ -12581,6 +13394,7 @@ export class AgentManager {
     response: StructuredModelResponse;
     tags: TagRow[];
     validStageIds: Set<string>;
+    customerConversationId?: string | null;
   }): Promise<CrmDecisionApplication> {
     const { agent, lead, response, tags, validStageIds } = params;
     const autonomousClassificationEnabled = await this.usesAutonomousPipelineClassification(lead);
@@ -12591,7 +13405,7 @@ export class AgentManager {
           changed: false,
           skippedReason: "deferred_to_pipeline_worker",
         }
-      : await this.applyStageDecision(agent, lead, response, validStageIds);
+      : await this.applyStageDecision(agent, lead, response, validStageIds, params.customerConversationId);
     const tagById = new Map(tags.map((tag) => [tag.id, tag]));
     const selectedTagIds = new Set<string>();
     const rejectedTagIds = new Set<string>();
@@ -12963,7 +13777,6 @@ export class AgentManager {
 
   private formatPrescriptionContext(
     extraction: PrescriptionExtraction,
-    rule: LensPriceRule | null,
     status: "parsed" | "needs_new_image" | "failed",
     handoffRequired: boolean
   ) {
@@ -12977,7 +13790,7 @@ export class AgentManager {
       `od=esf ${extraction.odSphere ?? "?"}; cil ${extraction.odCylinder ?? "?"}; eixo ${extraction.odAxis ?? "?"}`,
       `oe=esf ${extraction.oeSphere ?? "?"}; cil ${extraction.oeCylinder ?? "?"}; eixo ${extraction.oeAxis ?? "?"}`,
       `adicao=${extraction.addition ?? "nao informada"}`,
-      rule ? `regra=${rule.displayName}; preco_centavos=${rule.priceCents}; moeda=${rule.currency}` : "regra_de_preco=nao_encontrada",
+      "catalogo_optico=consulte produtos e precos apenas quando o lead pedir uma opcao comercial",
       extraction.observations ? `observacoes=${truncateText(extraction.observations, 300)}` : null,
       handoffRequired ? "handoff_humano_recomendado=true" : null,
       status !== "parsed" ? "instrucao=solicitar uma nova foto nitida e completa do receituario" : null,
@@ -13143,24 +13956,18 @@ export class AgentManager {
       const validationErrors = readiness.errors;
       const valid = readiness.valid;
       const status = valid ? "parsed" : "needs_new_image";
-      const { data: ruleRows, error: rulesError } = await this.serviceClient.from("lens_price_rules")
-        .select("*").eq("aces_id", agent.aces_id).eq("agent_tool_id", binding.id).eq("is_active", true);
-      if (rulesError) throw new HttpError(500, "Nao foi possivel carregar regras de lentes", rulesError);
-      // matchLensPriceRule permanece estrita (usa getPrescriptionValidationErrors sem relaxamento),
-      // entao so cota preco quando od/oe/eixo estiverem completos, mesmo com status=parsed.
-      const matchedRule = valid
-        ? matchLensPriceRule(extraction, (ruleRows ?? []).map((row: Record<string, unknown>) => this.mapLensPriceRule(row)))
-        : null;
+      // The prescription is a profile signal, never a price gate. Commercial values are
+      // resolved from optical_catalog_products on each customer request.
       const { count: priorFailures } = await this.agentsClient.from("agent_tool_runs")
         .select("id", { count: "exact", head: true }).eq("aces_id", agent.aces_id).eq("lead_id", lead.id)
         .eq("tool_key", "prescription_analyst").eq("status", "waiting_input");
       const handoffRequired = !valid && Number(priorFailures ?? 0) >= 1;
-      const agentContext = this.formatPrescriptionContext(extraction, matchedRule, status, handoffRequired);
+      const agentContext = this.formatPrescriptionContext(extraction, status, handoffRequired);
       const outputSnapshot = {
         occurrence_key: occurrenceKey,
         extraction,
         validation_errors: validationErrors,
-        matched_rule: matchedRule,
+        matched_rule: null,
         handoff_required: handoffRequired,
         agent_context: agentContext,
         raw_model_response: rawText,
@@ -13194,8 +14001,10 @@ export class AgentManager {
         analysis_model: modelName,
         raw_extraction: outputSnapshot,
         extraction_confidence: extraction.confidence,
-        matched_lens_price_rule_id: matchedRule?.id ?? null,
-        quoted_price_cents: matchedRule?.priceCents ?? null,
+        lens_category: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+        tipo_lente: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+        matched_lens_price_rule_id: null,
+        quoted_price_cents: null,
       });
       if (prescriptionError) throw new HttpError(500, "Nao foi possivel salvar o receituario", prescriptionError);
 
@@ -13208,7 +14017,8 @@ export class AgentManager {
         oe_cylinder: extraction.oeCylinder,
         oe_axis: extraction.oeAxis,
         addition: extraction.addition,
-        lens_type: (extraction.addition ?? 0) > 0 ? "multifocal" : "monofocal",
+        lens_type: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+        lens_category: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
         patient_name: extraction.patientName,
         prescription_date: extraction.prescriptionDate,
       };
@@ -13231,7 +14041,7 @@ export class AgentManager {
         payload: {
           tool_key: "prescription_analyst", tool_run_id: toolRunId, agent_id: agent.id, lead_id: lead.id,
           status: valid ? "succeeded" : "waiting_input", duration_ms: Date.now() - startedAt.getTime(),
-          confidence: extraction.confidence, matched_rule_id: matchedRule?.id ?? null, handoff_required: handoffRequired,
+          confidence: extraction.confidence, matched_rule_id: null, handoff_required: handoffRequired,
         },
       });
       await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
@@ -13352,14 +14162,21 @@ export class AgentManager {
   }
 
   private async queueBufferedProcessing(agent: AgentRow, leadId: string, message: ParsedWebhookMessage) {
-    const bufferKey = `crm-ai:buffer:${agent.id}:${leadId}`;
+    const channelKey = encodeURIComponent(message.instanceName || agent.instance_name || "unknown");
+    const bufferKey = `crm-ai:buffer:${agent.id}:${leadId}:${channelKey}`;
     if (this.redis) {
       await this.redis.rpush(bufferKey, JSON.stringify(message));
       const scheduleKey = `${bufferKey}:scheduled`;
       const scheduled = await this.redis.set(scheduleKey, "1", "PX", agent.buffer_wait_ms + 5000, "NX");
       if (scheduled === "OK") {
         setTimeout(() => {
-          this.flushBufferedConversation(agent.id, leadId).catch((error) => {
+          this.flushBufferedConversation(
+            agent.id,
+            leadId,
+            message.instanceName,
+            message.customerConversationId,
+            message.provider,
+          ).catch((error) => {
             console.error("[crm-ai] Falha ao processar buffer Redis:", error);
           });
         }, agent.buffer_wait_ms);
@@ -13377,7 +14194,13 @@ export class AgentManager {
 
     const timer = setTimeout(() => {
       this.memoryTimers.delete(bufferKey);
-      this.flushBufferedConversation(agent.id, leadId).catch((error) => {
+      this.flushBufferedConversation(
+        agent.id,
+        leadId,
+        message.instanceName,
+        message.customerConversationId,
+        message.provider,
+      ).catch((error) => {
         console.error("[crm-ai] Falha ao processar buffer em memoria:", error);
       });
     }, agent.buffer_wait_ms);
@@ -13385,8 +14208,8 @@ export class AgentManager {
     this.memoryTimers.set(bufferKey, timer);
   }
 
-  private async consumeBufferedEntries(agentId: string, leadId: string) {
-    const bufferKey = `crm-ai:buffer:${agentId}:${leadId}`;
+  private async consumeBufferedEntries(agentId: string, leadId: string, instanceName: string) {
+    const bufferKey = `crm-ai:buffer:${agentId}:${leadId}:${encodeURIComponent(instanceName || "unknown")}`;
 
     if (this.redis) {
       const rawItems = await this.redis.lrange(bufferKey, 0, -1);
@@ -13399,10 +14222,24 @@ export class AgentManager {
     return items;
   }
 
-  private async flushBufferedConversation(agentId: string, leadId: string) {
-    const channelAgent = await this.getAgentById(agentId);
+  private async flushBufferedConversation(
+    agentId: string,
+    leadId: string,
+    requestedInstanceName?: string,
+    requestedCustomerConversationId?: string | null,
+    requestedChannelProvider?: InboundProviderName | null,
+  ) {
+    const storedAgent = await this.getAgentById(agentId);
+    const instanceName = requestedInstanceName || storedAgent.instance_name;
+    const channelAgent = { ...storedAgent, instance_name: instanceName };
     let agent = channelAgent;
-    const bufferedEntries = await this.consumeBufferedEntries(agentId, leadId);
+    const bufferedEntries = await this.consumeBufferedEntries(agentId, leadId, instanceName);
+    const customerConversationId = requestedCustomerConversationId
+      ?? bufferedEntries.find((entry) => entry.customerConversationId)?.customerConversationId
+      ?? null;
+    const channelProvider = requestedChannelProvider
+      ?? bufferedEntries.find((entry) => entry.provider)?.provider
+      ?? null;
 
     const lead = await this.loadLeadForAgent(channelAgent, leadId);
     const activeDelegation = await this.resolveActiveSubagentSession(channelAgent, lead.id);
@@ -13412,7 +14249,8 @@ export class AgentManager {
       lead.id,
       channelAgent,
       channelAgent.instance_name,
-      lead.interaction_mode
+      lead.interaction_mode,
+      customerConversationId,
     );
     if (!aiState.enabled) {
       return;
@@ -13439,8 +14277,8 @@ export class AgentManager {
 
     const opticsImageAnalyses = await this.processBufferedOpticsImages(agent, lead, bufferedEntries);
 
-    let leadState = await this.getLeadState(agent.id, lead.id);
-    const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id, agent.instance_name);
+    let leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
+    const latestInbound = await this.fetchLatestLeadInboundMessage(lead.id, agent.instance_name, customerConversationId);
     if (
       !this.shouldAnalyzeLead(
         latestInbound?.sent_at ?? null,
@@ -13454,13 +14292,20 @@ export class AgentManager {
     // Fresh webhook buffers should keep the conversational AI responsive; delayed rechecks are only
     // useful for background CRM analysis when no new inbound batch is waiting right now.
     if (bufferedEntries.length === 0 && inactivityRemainingMs > 0) {
-      this.scheduleCrmAnalysisAfterInactivity(channelAgent.id, lead.id, inactivityRemainingMs);
+      this.scheduleCrmAnalysisAfterInactivity(
+        channelAgent.id,
+        lead.id,
+        inactivityRemainingMs,
+        channelAgent.instance_name,
+        customerConversationId,
+        channelProvider,
+      );
       return;
     }
 
     let rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
     const tags = await this.getTagsForAccount(agent.aces_id);
-    const conversation = await this.fetchRecentConversation(lead.id, agent.instance_name);
+    const conversation = await this.fetchRecentConversation(lead.id, agent.instance_name, customerConversationId);
     const temporalContext = buildNativeTemporalContext();
     const inboundMessages = bufferedEntries
       .map((entry) => entry.messageId)
@@ -13469,9 +14314,18 @@ export class AgentManager {
       inboundMessages.push(latestInbound.id);
     }
     const runId = latestInbound?.id ?? randomUUID();
+    const explicitAudioRequest = isExplicitAudioRequest(latestInbound?.content ?? "");
 
     try {
-      let result = await this.classifyConversation(agent, lead, rules, tags, conversation, runId);
+      let result = await this.classifyConversation(
+        agent,
+        lead,
+        rules,
+        tags,
+        conversation,
+        runId,
+        customerConversationId,
+      );
 
       if (subagentSession && result.parsed.return_to_parent) {
         await this.finishSubagentSession({
@@ -13482,9 +14336,17 @@ export class AgentManager {
         });
         subagentSession = null;
         agent = channelAgent;
-        leadState = await this.getLeadState(agent.id, lead.id);
+        leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
         rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
-        result = await this.classifyConversation(agent, lead, rules, tags, conversation, runId);
+        result = await this.classifyConversation(
+          agent,
+          lead,
+          rules,
+          tags,
+          conversation,
+          runId,
+          customerConversationId,
+        );
       }
 
       if (!subagentSession && agent.agent_type === "primary" && result.parsed.subagent_key) {
@@ -13501,9 +14363,17 @@ export class AgentManager {
           if (!claim.ownsRun) return;
           subagentSession = claim.session;
           agent = selectedSubagent;
-          leadState = await this.getLeadState(agent.id, lead.id);
+          leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
           rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
-          result = await this.classifyConversation(agent, lead, rules, tags, conversation, runId);
+          result = await this.classifyConversation(
+            agent,
+            lead,
+            rules,
+            tags,
+            conversation,
+            runId,
+            customerConversationId,
+          );
         }
       } else if (subagentSession) {
         const claim = await this.startSubagentSession({
@@ -13536,12 +14406,20 @@ export class AgentManager {
         request: result.parsed.agenda_request,
         storedContext: leadState?.agenda_context,
         runId,
+        customerConversationId,
       });
       const storeLocatorApplication = await this.executeStoreLocator({
         agent,
         lead,
         decision: result.parsed.store_locator,
         sourceMessageId: latestInbound?.id ?? null,
+      });
+      const opticalCatalogApplication = await this.executeOpticalCatalogSearch({
+        agent,
+        lead,
+        decision: result.parsed.optical_catalog_request,
+        opticalProfile: leadState?.optical_profile ?? {},
+        runId,
       });
       const delegatedToInternalAgent = agent.agent_type === "subagent";
       const requestedCalendarMutation = ["book", "reschedule", "cancel"].includes(
@@ -13553,14 +14431,23 @@ export class AgentManager {
         result.parsed.handoff_reason =
           result.parsed.handoff_reason || "Solicitacao de agenda que exige atendimento humano.";
       }
-      const replyResult = await this.generateAgentReply(agent, lead, conversation, result.parsed, runId, {
-        nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
-        nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
-        handoffTriggered: result.parsed.should_handoff,
-        visagism: asRecord(visagismApplication),
-        agenda: agendaApplication,
-        storeLocator: asRecord(storeLocatorApplication),
-      });
+      const replyResult = await this.generateAgentReply(
+        agent,
+        lead,
+        conversation,
+        result.parsed,
+        runId,
+        customerConversationId,
+        {
+          nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
+          nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
+          handoffTriggered: result.parsed.should_handoff,
+          visagism: asRecord(visagismApplication),
+          agenda: agendaApplication,
+          storeLocator: asRecord(storeLocatorApplication),
+          opticalCatalog: opticalCatalogApplication,
+        },
+      );
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const visagismRecord = asRecord(visagismApplication);
       if (!delegatedToInternalAgent && visagismRecord.status === "succeeded") {
@@ -13583,6 +14470,7 @@ export class AgentManager {
         response: result.parsed,
         tags,
         validStageIds,
+        customerConversationId,
       });
       if (delegatedToInternalAgent) {
         result.parsed.native_followup.should_schedule = false;
@@ -13624,6 +14512,9 @@ export class AgentManager {
           sourceType: "ai",
           runId,
           hasMediaAttachment: Boolean(requestedMediaKey) || delegatedToInternalAgent,
+          explicitAudioRequest,
+          customerConversationId,
+          channelProvider,
         });
       }
 
@@ -13631,11 +14522,13 @@ export class AgentManager {
         | { succeeded: boolean; error?: string; duplicated?: boolean; messageId?: string; assetKey?: string }
         | null = null;
       if (requestedMediaKey) {
-        mediaDelivery = await this.executeConfiguredMedia({
+          mediaDelivery = await this.executeConfiguredMedia({
           agent,
           lead,
           runId,
           assetKey: requestedMediaKey,
+          customerConversationId,
+          channelProvider,
         });
 
         if (!mediaDelivery.succeeded && result.parsed.reply_blocks.length === 0) {
@@ -13646,11 +14539,19 @@ export class AgentManager {
             sourceType: "ai",
             runId,
             hasMediaAttachment: true,
+            customerConversationId,
+            channelProvider,
           });
         }
       }
 
-      let handoffResult = await this.triggerHandoff(agent, lead, result.parsed, conversation);
+      let handoffResult = await this.triggerHandoff(
+        agent,
+        lead,
+        result.parsed,
+        conversation,
+        customerConversationId,
+      );
       if (
         subagentSession &&
         result.parsed.should_handoff &&
@@ -13662,6 +14563,7 @@ export class AgentManager {
           lead,
           reason: result.parsed.handoff_reason || "Solicitacao clinica para atendimento humano.",
           messages: conversation,
+          customerConversationId,
         });
       }
       let returnedToPrimary = false;
@@ -13694,7 +14596,7 @@ export class AgentManager {
         }
       }
       if (handoffResult.triggered && handoffResult.mode !== "external_notification") {
-        await this.saveAgendaContext(agent.id, lead.id, null);
+        await this.saveAgendaContext(agent.id, lead.id, null, customerConversationId);
       }
       const shouldFreezeLead = shouldFreezeAfterHandoff(result.parsed.should_pause, handoffResult);
 
@@ -13704,6 +14606,8 @@ export class AgentManager {
           lead.id,
           "ai_policy",
           bufferedEntries[bufferedEntries.length - 1]?.messageId ?? null,
+          undefined,
+          customerConversationId,
         );
         await this.upsertLeadState(agent.id, lead.id, {
           last_processed_message_at: processedAt,
@@ -13712,7 +14616,7 @@ export class AgentManager {
           last_classified_stage_id: crmApplication.appliedStageId ?? null,
           last_confidence: result.parsed.confidence,
           status: "paused",
-        });
+        }, customerConversationId);
       } else {
         await this.upsertLeadState(agent.id, lead.id, {
           last_processed_message_at: processedAt,
@@ -13721,13 +14625,14 @@ export class AgentManager {
           last_classified_stage_id: crmApplication.appliedStageId ?? null,
           last_confidence: result.parsed.confidence,
           status: "active",
-        });
+        }, customerConversationId);
       }
 
       await this.createRun({
         runId,
         agentId: agent.id,
         leadId: lead.id,
+        customerConversationId,
         messageHistoryIds: inboundMessages,
         inputSnapshot: {
           lead,
@@ -13801,12 +14706,13 @@ export class AgentManager {
       const message = error instanceof Error ? error.message : "Falha desconhecida na execucao da IA";
       await this.upsertLeadState(agent.id, lead.id, {
         status: "error",
-      });
+      }, customerConversationId);
 
       await this.createRun({
         runId,
         agentId: agent.id,
         leadId: lead.id,
+        customerConversationId,
         messageHistoryIds: inboundMessages,
         inputSnapshot: {
           bufferedEntries,
@@ -13944,7 +14850,15 @@ export class AgentManager {
     }
 
     try {
-      const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
+      const messagingConnection = await this.findMessagingConnection(
+        instance.aces_id,
+        message.instanceName,
+        "evolution",
+      );
+      const resolvedAgent = messagingConnection
+        ? await this.getAnyAgentByConnection(messagingConnection.id, instance.aces_id)
+        : await this.getAnyAgentByInstance(message.instanceName, instance.aces_id);
+      const candidateAgent = resolvedAgent ? { ...resolvedAgent, instance_name: message.instanceName } : null;
 
       const existingLeadForRouting = await this.findLeadByPhone(instance.aces_id, message.phone);
       let instanceAuthorized: boolean;
@@ -14139,6 +15053,7 @@ export class AgentManager {
         await this.createRun({
           agentId: agent.id,
           leadId: lead.id,
+          customerConversationId: savedMessage.customer_conversation_id,
           inputSnapshot: {
             reason: "manual_handoff_from_evolution",
             payload: message.raw,
@@ -14202,7 +15117,8 @@ export class AgentManager {
       lead.id,
       agent,
       message.instanceName,
-      lead.interaction_mode
+      lead.interaction_mode,
+      savedMessage.customer_conversation_id,
     );
     const pipelineReplyEnabled =
       !agent || !aiState.enabled
@@ -14234,12 +15150,13 @@ export class AgentManager {
     await this.upsertLeadState(agent.id, lead.id, {
       last_inbound_at: message.sentAt,
       status: "active",
-    });
+    }, savedMessage.customer_conversation_id);
 
     await this.queueBufferedProcessing(agent, lead.id, {
       ...message,
       content: normalizedContent,
       messageId: savedMessage.id,
+      customerConversationId: savedMessage.customer_conversation_id,
     });
 
       return {
@@ -14297,7 +15214,15 @@ export class AgentManager {
     }
 
     try {
-      const candidateAgent = await this.getAnyAgentByInstance(message.instanceName, acesId);
+      const messagingConnection = await this.findMessagingConnection(
+        acesId,
+        message.instanceName,
+        message.provider,
+      );
+      const resolvedAgent = messagingConnection
+        ? await this.getAnyAgentByConnection(messagingConnection.id, acesId)
+        : await this.getAnyAgentByInstance(message.instanceName, acesId);
+      const candidateAgent = resolvedAgent ? { ...resolvedAgent, instance_name: message.instanceName } : null;
       const existingLeadForRouting = await this.findLeadByPhone(acesId, message.phone);
       const instanceAuthorized = await this.authorizeVerifiedInboundInstance({
         acesId,
@@ -14362,7 +15287,8 @@ export class AgentManager {
       lead.id,
       agent,
       message.instanceName,
-      lead.interaction_mode
+      lead.interaction_mode,
+      savedMessage.customer_conversation_id,
     );
     const pipelineReplyEnabled =
       !agent || !aiState.enabled
@@ -14393,12 +15319,13 @@ export class AgentManager {
     await this.upsertLeadState(agent.id, lead.id, {
       last_inbound_at: message.sentAt,
       status: "active",
-    });
+    }, savedMessage.customer_conversation_id);
 
     await this.queueBufferedProcessing(agent, lead.id, {
       ...message,
       content: normalizedContent,
       messageId: savedMessage.id,
+      customerConversationId: savedMessage.customer_conversation_id,
     });
 
       return {
@@ -14462,7 +15389,7 @@ export class AgentManager {
 
   async processWebsiteInbound(
     acesId: number,
-    input: { leadId: string; instanceName: string; content: string }
+    input: { leadId: string; instanceName: string; messagingConnectionId: string; content: string }
   ) {
     const content = input.content.trim();
     if (!content) {
@@ -14471,6 +15398,11 @@ export class AgentManager {
 
     const sentAt = new Date().toISOString();
     const conversationId = `website:${input.leadId}`;
+    const customerConversation = await this.getOrCreateCustomerConversation(
+      acesId,
+      input.leadId,
+      input.messagingConnectionId,
+    );
     const savedMessage = await this.saveMessage({
       leadId: input.leadId,
       acesId,
@@ -14479,12 +15411,15 @@ export class AgentManager {
       sourceType: "lead",
       instanceName: input.instanceName,
       conversationId,
+      customerConversationId: customerConversation.id,
       sentAt,
       provider: "website",
       providerStatus: "accepted",
     });
 
-    const agent = await this.getAnyAgentByInstance(input.instanceName, acesId);
+    const resolvedAgent = await this.getAnyAgentByConnection(input.messagingConnectionId, acesId)
+      ?? await this.getAnyAgentByInstance(input.instanceName, acesId);
+    const agent = resolvedAgent ? { ...resolvedAgent, instance_name: input.instanceName } : null;
     if (!agent) {
       return {
         queued: false,
@@ -14498,7 +15433,8 @@ export class AgentManager {
       lead.id,
       agent,
       input.instanceName,
-      lead.interaction_mode
+      lead.interaction_mode,
+      customerConversation.id,
     );
     const pipelineReplyEnabled = !aiState.enabled
       ? true
@@ -14517,7 +15453,7 @@ export class AgentManager {
     await this.upsertLeadState(agent.id, lead.id, {
       last_inbound_at: sentAt,
       status: "active",
-    });
+    }, customerConversation.id);
 
     await this.queueBufferedProcessing(agent, lead.id, {
       instanceName: input.instanceName,
@@ -14526,6 +15462,7 @@ export class AgentManager {
       content,
       messageId: savedMessage.id,
       conversationId,
+      customerConversationId: customerConversation.id,
       sentAt,
       pushName: lead.name,
       mediaKind: null,
@@ -14547,17 +15484,33 @@ export class AgentManager {
    */
   async requeueWebsiteReply(
     acesId: number,
-    input: { leadId: string; instanceName: string; content: string; messageId: string | null }
+    input: {
+      leadId: string;
+      instanceName: string;
+      messagingConnectionId?: string | null;
+      content: string;
+      messageId: string | null;
+    }
   ) {
-    const agent = await this.getAnyAgentByInstance(input.instanceName, acesId);
+    const messagingConnectionId = input.messagingConnectionId?.trim() ||
+      (await this.findMessagingConnection(acesId, input.instanceName, "website"))?.id ||
+      null;
+    const resolvedAgent = messagingConnectionId
+      ? await this.getAnyAgentByConnection(messagingConnectionId, acesId)
+      : await this.getAnyAgentByInstance(input.instanceName, acesId);
+    const agent = resolvedAgent ? { ...resolvedAgent, instance_name: input.instanceName } : null;
     if (!agent) return { queued: false, reason: "Instancia sem agente configurado" };
 
     const lead = await this.loadLeadForAgent(agent, input.leadId);
+    const customerConversation = messagingConnectionId
+      ? await this.getOrCreateCustomerConversation(acesId, lead.id, messagingConnectionId)
+      : null;
     const aiState = await this.resolveLeadAiState(
       lead.id,
       agent,
       input.instanceName,
-      lead.interaction_mode
+      lead.interaction_mode,
+      customerConversation?.id ?? null,
     );
     if (!aiState.enabled) {
       return { queued: false, reason: "IA desligada para este lead" };
@@ -14570,6 +15523,7 @@ export class AgentManager {
       content: input.content,
       messageId: input.messageId,
       conversationId: `website:${lead.id}`,
+      customerConversationId: customerConversation?.id ?? null,
       sentAt: new Date().toISOString(),
       pushName: lead.name,
       mediaKind: null,
@@ -14587,8 +15541,19 @@ export class AgentManager {
   /** Fallback answer when the agent could not reply, so the visitor is never left waiting. */
   async saveWebsiteAgentMessage(
     acesId: number,
-    input: { leadId: string; instanceName: string; content: string }
+    input: {
+      leadId: string;
+      instanceName: string;
+      messagingConnectionId?: string | null;
+      content: string;
+    }
   ) {
+    const messagingConnectionId = input.messagingConnectionId?.trim() ||
+      (await this.findMessagingConnection(acesId, input.instanceName, "website"))?.id ||
+      null;
+    const customerConversation = messagingConnectionId
+      ? await this.getOrCreateCustomerConversation(acesId, input.leadId, messagingConnectionId)
+      : null;
     await this.saveMessage({
       leadId: input.leadId,
       acesId,
@@ -14597,6 +15562,7 @@ export class AgentManager {
       sourceType: "ai",
       instanceName: input.instanceName,
       conversationId: `website:fallback:${Date.now()}`,
+      customerConversationId: customerConversation?.id ?? null,
       sentAt: new Date().toISOString(),
       provider: "website",
       providerStatus: "sent",
@@ -14704,20 +15670,146 @@ export class AgentManager {
     };
   }
 
+  private async loadCustomerConversation(
+    context: AuthContext,
+    conversationId: string,
+  ) {
+    if (!isUuid(conversationId)) throw new HttpError(400, "conversationId invalido");
+    const { data: conversation, error: conversationError } = await this.serviceClient
+      .from("customer_conversations")
+      .select("id, aces_id, lead_id, connection_id, interaction_mode, status, last_message_at, last_inbound_at, last_message_preview, created_at")
+      .eq("id", conversationId)
+      .eq("aces_id", context.acesId)
+      .maybeSingle();
+    if (conversationError) throw new HttpError(500, "Nao foi possivel carregar a conversa", conversationError);
+    if (!conversation) throw new HttpError(404, "Conversa nao encontrada");
+    const lead = await this.loadLeadById(String(conversation.lead_id), context.acesId, context.crmUserId, context.role);
+    const { data: connection, error: connectionError } = await this.serviceClient
+      .from("messaging_connections")
+      .select("id, aces_id, channel_type, provider, display_name, legacy_instance_name, capability, status")
+      .eq("id", conversation.connection_id)
+      .eq("aces_id", context.acesId)
+      .single();
+    if (connectionError) throw new HttpError(500, "Nao foi possivel carregar a conexao da conversa", connectionError);
+    const typedConnection = connection as MessagingConnectionRow;
+    if (typedConnection.legacy_instance_name) {
+      await this.ensureInstanceOwnership(context.acesId, typedConnection.legacy_instance_name, context.crmUserId, context.role);
+    }
+    return { conversation: conversation as CustomerConversationRow, connection: typedConnection, lead };
+  }
+
+  private async getOrCreateCustomerConversation(acesId: number, leadId: string, connectionId: string) {
+    const { data, error } = await this.serviceClient
+      .from("customer_conversations")
+      .upsert({ aces_id: acesId, lead_id: leadId, connection_id: connectionId }, {
+        onConflict: "lead_id,connection_id",
+        ignoreDuplicates: false,
+      })
+      .select("id, aces_id, lead_id, connection_id, interaction_mode, status, last_message_at, last_inbound_at, last_message_preview, created_at")
+      .single();
+    if (error) throw new HttpError(500, "Nao foi possivel preparar a conversa", error);
+    return data as CustomerConversationRow;
+  }
+
+  async listChatConversations(context: AuthContext) {
+    const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId, context.role);
+    const { data: conversations, error } = await this.serviceClient
+      .from("customer_conversations")
+      .select("id, aces_id, lead_id, connection_id, interaction_mode, status, last_message_at, last_inbound_at, last_message_preview, created_at")
+      .eq("aces_id", context.acesId)
+      .eq("status", "active")
+      .order("last_message_at", { ascending: false, nullsFirst: false });
+    if (error) throw new HttpError(500, "Nao foi possivel listar as conversas", error);
+    const rows = (conversations ?? []) as CustomerConversationRow[];
+    if (rows.length === 0) return [];
+    const [connectionsResult, leadsResult] = await Promise.all([
+      this.serviceClient.from("messaging_connections")
+        .select("id, aces_id, channel_type, provider, display_name, legacy_instance_name, capability, status")
+        .in("id", Array.from(new Set(rows.map((row) => row.connection_id)))),
+      this.serviceClient.from("leads")
+        .select("id, name, email, contact_phone, Fonte, created_at, updated_at, stage_id, owner_id, status")
+        .eq("aces_id", context.acesId)
+        .eq("view", true)
+        .in("id", Array.from(new Set(rows.map((row) => row.lead_id)))),
+    ]);
+    if (connectionsResult.error) throw new HttpError(500, "Nao foi possivel carregar os canais", connectionsResult.error);
+    if (leadsResult.error) throw new HttpError(500, "Nao foi possivel carregar os contatos", leadsResult.error);
+    const connectionById = new Map(((connectionsResult.data ?? []) as MessagingConnectionRow[]).map((item) => [item.id, item]));
+    const leadById = new Map((leadsResult.data ?? []).map((item) => [String(item.id), item]));
+    return rows.flatMap((conversation) => {
+      const connection = connectionById.get(conversation.connection_id);
+      const lead = leadById.get(conversation.lead_id);
+      if (!connection || !lead) return [];
+      if (!isAdminRole(context.role) && connection.legacy_instance_name && !accessibleInstances.has(connection.legacy_instance_name)) return [];
+      return [{
+        id: conversation.id,
+        leadId: conversation.lead_id,
+        connectionId: conversation.connection_id,
+        interactionMode: conversation.interaction_mode,
+        status: conversation.status,
+        lastMessageAt: conversation.last_message_at,
+        lastInboundAt: conversation.last_inbound_at,
+        lastMessagePreview: conversation.last_message_preview,
+        createdAt: conversation.created_at,
+        lead: {
+          id: lead.id,
+          name: lead.name,
+          email: lead.email,
+          phone: lead.contact_phone,
+          source: lead.Fonte,
+          stageId: lead.stage_id,
+          ownerId: lead.owner_id,
+          status: lead.status,
+        },
+        connection: {
+          id: connection.id,
+          channelType: connection.channel_type,
+          provider: connection.provider,
+          displayName: connection.display_name,
+          instanceName: connection.legacy_instance_name,
+          capability: connection.capability,
+          status: connection.status,
+        },
+      }];
+    });
+  }
+
   async listChatMessages(
     context: AuthContext,
     leadIdInput: string,
     requestedInstanceName?: string | null,
+    customerConversationId?: string | null,
   ) {
-    const leadId = String(leadIdInput ?? "").trim();
+    const scopedConversation = customerConversationId
+      ? await this.loadCustomerConversation(context, customerConversationId)
+      : null;
+    const leadId = scopedConversation?.conversation.lead_id ?? String(leadIdInput ?? "").trim();
     if (!isUuid(leadId)) {
       throw new HttpError(400, "leadId invalido");
     }
 
-    const lead = await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
-    const chatScope = await this.resolveChatInstanceScope(context, lead, requestedInstanceName);
+    const lead = scopedConversation?.lead
+      ?? await this.loadLeadById(leadId, context.acesId, context.crmUserId, context.role);
+    const chatScope = scopedConversation
+      ? {
+          policyInstanceName: scopedConversation.connection.legacy_instance_name,
+          cacheInstanceName: `conversation:${scopedConversation.conversation.id}`,
+          filter: null as string[] | null,
+        }
+      : await this.resolveChatInstanceScope(context, lead, requestedInstanceName);
     const instanceName = chatScope.policyInstanceName;
-    const sendPolicy = instanceName
+    const sendPolicy = scopedConversation?.connection.provider === "website"
+      ? {
+          provider: "website",
+          mode: "freeform",
+          supportsAttachments: false,
+          supportedAttachmentKinds: [],
+          lastInboundAt: scopedConversation.conversation.last_inbound_at,
+          windowExpiresAt: null,
+          evaluatedAt: new Date().toISOString(),
+          remainingMs: null,
+        }
+      : instanceName
       ? await this.resolveChatSendPolicy(lead, instanceName)
       : buildChatSendPolicy("evolution", lead.last_lead_inbound_at);
     const cacheKey = this.chatMessagesCacheKey(context.acesId, lead.id, chatScope.cacheInstanceName);
@@ -14749,12 +15841,14 @@ export class AgentManager {
     let messagesQuery = this.serviceClient
       .from("message_history")
       .select(
-        "id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, provider, provider_message_id, provider_status, provider_payload_summary"
+        "id, lead_id, aces_id, content, direction, source_type, instance, created_by, sent_at, conversation_id, customer_conversation_id, provider, provider_message_id, provider_status, provider_payload_summary"
       )
       .eq("lead_id", lead.id)
       .eq("aces_id", context.acesId);
 
-    if (chatScope.filter) {
+    if (scopedConversation) {
+      messagesQuery = messagesQuery.eq("customer_conversation_id", scopedConversation.conversation.id);
+    } else if (chatScope.filter) {
       if (chatScope.filter.length === 0) {
         return { success: true, messages: [], sendPolicy };
       }
@@ -15245,6 +16339,7 @@ export class AgentManager {
     instanceName: string;
     aiState: { reason: LeadAiReason } | null;
     summary: string;
+    customerConversationId?: string | null;
   }) {
     if (params.aiState?.reason !== "human_handoff") {
       await this.saveMessage({
@@ -15255,6 +16350,7 @@ export class AgentManager {
         sourceType: "system",
         instanceName: params.instanceName,
         conversationId: null,
+        customerConversationId: params.customerConversationId ?? null,
       });
       await this.saveMessage({
         leadId: params.lead.id,
@@ -15267,6 +16363,7 @@ export class AgentManager {
         sourceType: "system",
         instanceName: params.instanceName,
         conversationId: null,
+        customerConversationId: params.customerConversationId ?? null,
       });
     }
 
@@ -15284,10 +16381,12 @@ export class AgentManager {
       "manual_send",
       params.context.crmUserId,
       "human",
+      params.customerConversationId,
     );
     await this.createRun({
       agentId: params.configuredAgent.id,
       leadId: params.lead.id,
+      customerConversationId: params.customerConversationId,
       inputSnapshot: {
         source: "manual_send",
         crm_user_id: params.context.crmUserId,
@@ -15308,6 +16407,7 @@ export class AgentManager {
     content: string;
     attachment: ChatAttachmentSendInput;
     providerName: MessagingProviderName;
+    customerConversationId?: string | null;
   }) {
     const attachment = params.attachment;
     if (!isUuid(attachment.messageId) || !isUuid(attachment.attachmentId)) {
@@ -15399,6 +16499,7 @@ export class AgentManager {
         conversationId,
         sentAt,
         provider: providerName,
+        customerConversationId: params.customerConversationId ?? null,
         providerMessageId: null,
         providerStatus: "failed",
         providerErrorCode: providerFailure.errorCode,
@@ -15435,6 +16536,7 @@ export class AgentManager {
       conversationId,
       sentAt,
       provider: providerResult.provider,
+      customerConversationId: params.customerConversationId ?? null,
       providerMessageId: providerResult.providerMessageId,
       providerStatus: providerResult.providerStatus,
       providerPayloadSummary: providerResult.raw ?? null,
@@ -15455,6 +16557,7 @@ export class AgentManager {
       instanceName: params.instanceName,
       aiState: params.aiState,
       summary: caption || intent.file_name || "Anexo enviado pelo operador.",
+      customerConversationId: params.customerConversationId,
     });
 
     return { success: true, messageId: intent.message_id, attachmentId: intent.attachment_id };
@@ -15466,14 +16569,65 @@ export class AgentManager {
       throw new HttpError(400, "Mensagem vazia");
     }
 
-    const lead = await this.loadLeadById(input.leadId, context.acesId, context.crmUserId, context.role);
-    const instanceName = input.instanceName?.trim() || lead.instancia;
+    const scopedConversation = input.customerConversationId
+      ? await this.loadCustomerConversation(context, input.customerConversationId)
+      : null;
+    const lead = scopedConversation?.lead
+      ?? await this.loadLeadById(input.leadId, context.acesId, context.crmUserId, context.role);
+    if (scopedConversation && input.leadId && scopedConversation.conversation.lead_id !== input.leadId) {
+      throw new HttpError(409, "A conversa nao pertence ao lead informado");
+    }
+    const instanceName = scopedConversation?.connection.legacy_instance_name
+      ?? input.instanceName?.trim()
+      ?? lead.instancia;
 
     if (!instanceName) {
       throw new HttpError(400, "Nenhuma instancia de envio foi definida para este lead");
     }
 
     await this.ensureInstanceOwnership(context.acesId, instanceName, context.crmUserId, context.role);
+
+    if (scopedConversation?.connection.provider === "website") {
+      if (input.attachment) {
+        throw new HttpError(409, "O chat do site ainda aceita apenas mensagens de texto", {
+          code: "WEBSITE_TEXT_ONLY",
+        });
+      }
+      if (!(await this.hasLiveWebsiteSession(lead, scopedConversation.conversation.id))) {
+        throw new HttpError(409, "A sessao do site nao esta ativa. A mensagem nao foi redirecionada para outro canal.", {
+          code: "WEBSITE_SESSION_CLOSED",
+        });
+      }
+      const saved = await this.saveMessage({
+        leadId: lead.id,
+        acesId: context.acesId,
+        content,
+        direction: "outbound",
+        sourceType: "human",
+        instanceName,
+        createdBy: context.crmUserId,
+        conversationId: `website:${lead.id}`,
+        customerConversationId: scopedConversation.conversation.id,
+        provider: "website",
+        providerStatus: "sent",
+        },
+      );
+      const configuredAgent = await this.getAnyAgentByConnection(
+        scopedConversation.connection.id,
+        context.acesId,
+      );
+      if (configuredAgent) {
+        await this.freezeLead(
+          configuredAgent,
+          lead.id,
+          "manual_send",
+          context.crmUserId,
+          "human",
+          scopedConversation.conversation.id,
+        );
+      }
+      return { success: true, messageId: saved.id };
+    }
 
     const sendPolicy = await this.resolveChatSendPolicy(lead, instanceName);
     if (sendPolicy.mode === "template_required") {
@@ -15500,18 +16654,24 @@ export class AgentManager {
       });
     }
 
-    const configuredAgent = await this.getAnyAgentByInstance(
-      instanceName,
-      context.acesId,
-      context.crmUserId,
-      context.role
-    );
+    const configuredAgentBase = scopedConversation
+      ? await this.getAnyAgentByConnection(scopedConversation.connection.id, context.acesId)
+      : await this.getAnyAgentByInstance(
+          instanceName,
+          context.acesId,
+          context.crmUserId,
+          context.role
+        );
+    const configuredAgent = configuredAgentBase
+      ? { ...configuredAgentBase, instance_name: instanceName }
+      : null;
     const aiState = configuredAgent
       ? await this.resolveLeadAiState(
           lead.id,
           configuredAgent,
           instanceName,
-          lead.interaction_mode
+          lead.interaction_mode,
+          scopedConversation?.conversation.id ?? null,
         )
       : null;
 
@@ -15525,6 +16685,7 @@ export class AgentManager {
         content,
         attachment: input.attachment,
         providerName: sendPolicy.provider,
+        customerConversationId: scopedConversation?.conversation.id ?? null,
       });
     }
 
@@ -15549,6 +16710,7 @@ export class AgentManager {
           instanceName,
           createdBy: context.crmUserId,
           conversationId,
+          customerConversationId: scopedConversation?.conversation.id ?? null,
           sentAt,
           provider: providerResult.provider,
           providerMessageId: providerResult.providerMessageId,
@@ -15563,6 +16725,7 @@ export class AgentManager {
           instanceName,
           aiState,
           summary: content,
+          customerConversationId: scopedConversation?.conversation.id ?? null,
         });
         return { success: true, messageId: saved.id };
       } catch (error) {
@@ -15578,6 +16741,7 @@ export class AgentManager {
           instanceName,
           createdBy: context.crmUserId,
           conversationId,
+          customerConversationId: scopedConversation?.conversation.id ?? null,
           sentAt,
           provider: "instagram",
           providerMessageId: null,
@@ -15600,6 +16764,7 @@ export class AgentManager {
       blocks: [content],
       sourceType: "human",
       createdBy: context.crmUserId,
+      customerConversationId: scopedConversation?.conversation.id ?? null,
     });
 
     await this.pauseAgentAfterManualSend({
@@ -15609,6 +16774,7 @@ export class AgentManager {
       instanceName,
       aiState,
       summary: content,
+      customerConversationId: scopedConversation?.conversation.id ?? null,
     });
 
     return { success: true };

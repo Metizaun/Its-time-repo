@@ -81,6 +81,8 @@ exemples/
 !/Project/IA/tests/agenda-security.test.ts
 !/Project/IA/tests/agenda-delivery-worker.test.ts
 !/Project/IA/tests/agenda-inbound.test.ts
+!/Project/IA/tests/optical-catalog.test.ts
+!/Project/IA/tests/audio-request.test.ts
 !/Project/IA/tests/agenda-resync-worker.test.ts
 !/Project/IA/tests/agenda-company-address.test.ts
 !/Project/IA/tests/rb-billing-authorization.test.ts
