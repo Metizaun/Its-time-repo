@@ -149,7 +149,7 @@ function resolveAgentToolEnabledState(input: {
 
 const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
 const CHAT_ATTACHMENT_MAX_FILE_SIZE = 104857600;
-const CHAT_IMAGE_RETENTION_DAYS = 7;
+const CHAT_IMAGE_RETENTION_DAYS_ENV = "CHAT_IMAGE_RETENTION_DAYS";
 const CHAT_ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -175,6 +175,15 @@ const CHAT_ALLOWED_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/rtf",
 ]);
+
+function getChatImageExpiresAt() {
+  const configuredDays = Number(process.env[CHAT_IMAGE_RETENTION_DAYS_ENV] ?? 0);
+  if (!Number.isFinite(configuredDays) || configuredDays <= 0) {
+    return null;
+  }
+
+  return addDays(new Date(), Math.floor(configuredDays)).toISOString();
+}
 
 const DOCUMENT_MIME_TYPES = new Set([
   "application/pdf",
@@ -16154,10 +16163,7 @@ export class AgentManager {
         storage_path: params.storagePath,
         file_name: params.fileName,
         file_size: params.fileSize,
-        expires_at:
-          params.kind === "image"
-            ? addDays(new Date(), CHAT_IMAGE_RETENTION_DAYS).toISOString()
-            : null,
+        expires_at: params.kind === "image" ? getChatImageExpiresAt() : null,
       });
 
     if (error) {
@@ -16341,10 +16347,7 @@ export class AgentManager {
         storage_path: params.intent.storage_path,
         file_name: params.intent.file_name,
         file_size: params.intent.file_size,
-        expires_at:
-          params.intent.kind === "image"
-            ? addDays(new Date(), CHAT_IMAGE_RETENTION_DAYS).toISOString()
-            : null,
+        expires_at: params.intent.kind === "image" ? getChatImageExpiresAt() : null,
       });
 
     if (error) {
