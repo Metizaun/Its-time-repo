@@ -26,6 +26,12 @@ LEFT JOIN crm.messaging_connections AS connection
  AND connection.provider = 'evolution'
  AND connection.provider_external_id = 'instance:' || instance.instancia
 WHERE COALESCE(instance.connection_mode, 'local') <> 'instagram'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM crm.instance_channels AS existing_channel
+    WHERE existing_channel.aces_id = instance.aces_id
+      AND existing_channel.instance_name = instance.instancia
+  )
 ON CONFLICT (aces_id, instance_name) DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';

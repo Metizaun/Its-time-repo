@@ -33,6 +33,12 @@ SELECT
 FROM crm.instance AS instance
 WHERE instance.aces_id = 9898
   AND COALESCE(instance.connection_mode, 'local') <> 'instagram'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM crm.instance_channels AS existing_channel
+    WHERE existing_channel.aces_id = instance.aces_id
+      AND existing_channel.instance_name = instance.instancia
+  )
 ON CONFLICT (aces_id, instance_name) DO NOTHING;
 
 SELECT is(
@@ -137,6 +143,12 @@ SELECT
 FROM crm.instance AS instance
 WHERE instance.aces_id = 9898
   AND COALESCE(instance.connection_mode, 'local') <> 'instagram'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM crm.instance_channels AS existing_channel
+    WHERE existing_channel.aces_id = instance.aces_id
+      AND existing_channel.instance_name = instance.instancia
+  )
 ON CONFLICT (aces_id, instance_name) DO NOTHING;
 
 SELECT is(
