@@ -120,7 +120,11 @@ export async function inspectPublicImage(
 
     const pinnedAddress = target.addresses[0];
     const httpsAgent = new Agent({
-      lookup: (_hostname, _options, callback) => {
+      lookup: (_hostname, options, callback) => {
+        if (options.all) {
+          callback(null, [pinnedAddress]);
+          return;
+        }
         callback(null, pinnedAddress.address, pinnedAddress.family);
       },
     });

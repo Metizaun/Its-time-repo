@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Agent } from "node:https";
 
 import {
   inspectPublicImage,
@@ -27,6 +28,46 @@ test("inspeciona imagem publica e persiste somente metadados", async () => {
   assert.equal(snapshot.caption, "legenda");
   assert.match(snapshot.sha256, /^[a-f0-9]{64}$/);
   assert.equal("buffer" in snapshot, false);
+});
+
+test("fixa o endereco validado quando o Node solicita todos os IPs", async () => {
+  let pinnedLookup: ((
+    hostname: string,
+    options: { all?: boolean },
+    callback: (
+      error: Error | null,
+      address: string | Array<{ address: string; family: 4 | 6 }>,
+      family?: number,
+    ) => void,
+  ) => void) | undefined;
+
+  await inspectPublicImage(
+    { url: "https://cdn.example.com/photo.png" },
+    {
+      lookup,
+      request: async (_url, config) => {
+        const agent = config.httpsAgent as Agent & {
+          options: { lookup?: typeof pinnedLookup };
+        };
+        pinnedLookup = agent.options.lookup;
+        return { status: 200, headers: { "content-type": "image/png" }, data: png };
+      },
+    },
+  );
+
+  assert.ok(pinnedLookup);
+  const validatedLookup = pinnedLookup;
+  await new Promise<void>((resolve, reject) => {
+    validatedLookup("cdn.example.com", { all: true }, (error, addresses) => {
+      if (error) return reject(error);
+      try {
+        assert.deepEqual(addresses, [{ address: "8.8.8.8", family: 4 }]);
+        resolve();
+      } catch (assertionError) {
+        reject(assertionError);
+      }
+    });
+  });
 });
 
 test("valida DNS publico novamente em cada redirecionamento", async () => {
