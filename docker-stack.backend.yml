@@ -187,6 +187,35 @@ services:
         order: stop-first
         failure_action: rollback
 
+  media-cleanup-worker:
+    image: ${BACKEND_IMAGE}
+    command: ["node", "dist/media-cleanup-worker-entry.js"]
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      MEDIA_CLEANUP_WORKER_POLL_MS: ${MEDIA_CLEANUP_WORKER_POLL_MS:-86400000}
+      MEDIA_CLEANUP_WORKER_BATCH_SIZE: ${MEDIA_CLEANUP_WORKER_BATCH_SIZE:-100}
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - traefik-public
+      - evolution-internal
+    deploy:
+      replicas: ${MEDIA_CLEANUP_WORKER_REPLICAS:-1}
+      placement:
+        constraints:
+          - node.hostname == ${SWARM_NODE_HOSTNAME}
+      restart_policy:
+        condition: any
+      update_config:
+        order: stop-first
+        failure_action: rollback
+
 networks:
   traefik-public:
     external: true
