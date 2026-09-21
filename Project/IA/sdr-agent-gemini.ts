@@ -2899,6 +2899,28 @@ export class AgentManager {
     return this.normalizeInstanceConnectionMode(instance.connection_mode) === "instagram";
   }
 
+  private async ensureEvolutionInstanceChannel(acesId: number, instanceName: string) {
+    const { error } = await this.serviceClient.from("instance_channels").upsert(
+      {
+        aces_id: acesId,
+        instance_name: instanceName,
+        channel_type: "whatsapp",
+        provider: "evolution",
+        capability: "full",
+        status: "active",
+      },
+      { onConflict: "aces_id,instance_name" }
+    );
+
+    if (error) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel disponibilizar a instancia como conexao do agente",
+        error
+      );
+    }
+  }
+
   private evolutionHeaders(apiKey = this.config.evolutionApiKey) {
     return { apikey: apiKey };
   }
@@ -7553,6 +7575,8 @@ export class AgentManager {
         throw new HttpError(500, "Nao foi possivel salvar a credencial da Evolution externa", credentialError);
       }
 
+      await this.ensureEvolutionInstanceChannel(context.acesId, instanceName);
+
       return {
         success: true,
         instanceName,
@@ -7657,6 +7681,8 @@ export class AgentManager {
         }
       });
     }
+
+    await this.ensureEvolutionInstanceChannel(context.acesId, instanceName);
 
     const currentStatus = this.normalizeInstanceStatus(existing?.status);
     if (existing && currentStatus !== "connected") {
