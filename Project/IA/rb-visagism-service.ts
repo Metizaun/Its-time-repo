@@ -11,6 +11,7 @@ import { geminiUsageLineItems, tryRecordAiUsage } from "./ai-costs.js";
 import { requireAiBudget } from "./ai-budget.js";
 
 import type { RbConnectionRecord } from "./rb-connection-service.js";
+import { toPublicStorageUrl } from "./storage-public-url.js";
 
 const execFileAsync = promisify(execFile);
 const VISAGISM_BUCKET = "visagism-catalog";
@@ -202,7 +203,7 @@ export class RbVisagismService {
       throw signedError ?? new Error("Nao foi possivel gerar a previa da armacao");
     }
 
-    return { draftId, previewUrl: signed.signedUrl, analysis };
+    return { draftId, previewUrl: toPublicStorageUrl(signed.signedUrl) ?? signed.signedUrl, analysis };
   }
 
   async saveDraft(input: {

@@ -87,6 +87,7 @@ import {
   type CentralAiExecutionResult,
 } from "./central-ai-provider.js";
 import { isExplicitAudioRequest } from "./audio-request.js";
+import { toPublicStorageUrl } from "./storage-public-url.js";
 
 export const DEFAULT_SYSTEM_MESSAGE = `Voce e um agente comercial via WhatsApp. Responda como humano, com linguagem natural, direta e cordial. Seja util, objetivo e claro. Nunca invente dados. Classifique o lead apenas nas etapas reais do funil fornecido.`;
 
@@ -5912,7 +5913,7 @@ export class AgentManager {
         const { data: signed, error: signedError } = await this.serviceClient.storage
           .from(item.storage_bucket)
           .createSignedUrl(item.storage_path, this.chatSignedDownloadTtlSeconds);
-        if (!signedError) previewUrl = signed?.signedUrl ?? null;
+        if (!signedError) previewUrl = toPublicStorageUrl(signed?.signedUrl);
       } else if (item.source_url) {
         previewUrl = item.source_url;
       }
@@ -6238,7 +6239,7 @@ export class AgentManager {
       assetId,
       bucket: AUTOMATION_MEDIA_BUCKET,
       storagePath,
-      uploadUrl: data.signedUrl,
+      uploadUrl: toPublicStorageUrl(data.signedUrl) ?? data.signedUrl,
       uploadToken: data.token,
       maxFileSize,
       mimeType,
@@ -6439,7 +6440,7 @@ export class AgentManager {
       const { data: links, error } = await this.agentsClient.from("media_catalog_assets").select("catalog_id").eq("asset_id", asset.id);
       if (error) throw new HttpError(500, "Nao foi possivel carregar categorias da midia", error);
       const signed = await this.serviceClient.storage.from(String(asset.storage_bucket)).createSignedUrl(String(asset.storage_path), this.chatSignedDownloadTtlSeconds);
-      return { ...asset, preview_url: signed.data?.signedUrl ?? null, catalog_ids: (links ?? []).map((link) => link.catalog_id) };
+      return { ...asset, preview_url: toPublicStorageUrl(signed.data?.signedUrl), catalog_ids: (links ?? []).map((link) => link.catalog_id) };
     }));
     const { count, error: countError } = await this.agentsClient.from("media_assets").select("id", { count: "exact", head: true }).eq("aces_id", context.acesId).eq("agent_id", agentId).eq("origin", "send_media").is("disabled_at", null);
     if (countError) throw new HttpError(500, "Nao foi possivel calcular a cota de midia", countError);
@@ -6504,7 +6505,7 @@ export class AgentManager {
     const { data, error } = await this.agentsClient.from("media_assets").insert({ id, aces_id: context.acesId, agent_id: agentId, storage_path: storagePath, mime_type: input.mimeType, file_name: fileName, file_size: buffer.length, title, description, search_terms: searchTerms, attributes: { source: "upload", analysis: "image_catalog" }, analysis_completed_at: new Date().toISOString(), send_enabled: false }).select("*").single();
     if (error) { await this.serviceClient.storage.from("agent-media-catalog").remove([storagePath]); throw new HttpError(500, "Nao foi possivel registrar a imagem", error); }
     const signed = await this.serviceClient.storage.from("agent-media-catalog").createSignedUrl(storagePath, this.chatSignedDownloadTtlSeconds);
-    return { ...data, draftId: id, preview_url: signed.data?.signedUrl ?? null };
+    return { ...data, draftId: id, preview_url: toPublicStorageUrl(signed.data?.signedUrl) };
   }
 
   async saveAgentMediaAsset(context: AuthContext, agentId: string, assetId: string, input: { title: string; description: string; searchTerms?: string[]; catalogIds?: string[]; sendEnabled?: boolean }) {
@@ -8429,7 +8430,7 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel gerar URL assinada do anexo", error);
     }
 
-    return data.signedUrl;
+    return toPublicStorageUrl(data.signedUrl) ?? data.signedUrl;
   }
 
   private async assertStorageObjectExists(storagePath: string) {
@@ -15739,7 +15740,7 @@ export class AgentManager {
       storagePath,
       messageId,
       attachmentId,
-      uploadUrl: data.signedUrl,
+      uploadUrl: toPublicStorageUrl(data.signedUrl) ?? data.signedUrl,
       uploadToken: data.token,
       intentExpiresAt,
       maxFileSize: CHAT_ATTACHMENT_MAX_FILE_SIZE,

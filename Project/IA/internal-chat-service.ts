@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { HttpError } from "./sdr-agent-gemini.js";
+import { toPublicStorageUrl } from "./storage-public-url.js";
 
 const ATTACHMENTS_BUCKET = "chat-attachments";
 const MAX_ATTACHMENT_BYTES = 104_857_600;
@@ -362,7 +363,7 @@ export class InternalChatService {
           const { data: signed, error: signedError } = await this.serviceClient.storage
             .from(String(attachment.storage_bucket))
             .createSignedUrl(String(attachment.storage_path), SIGNED_DOWNLOAD_TTL_SECONDS);
-          if (!signedError) downloadUrl = signed?.signedUrl ?? null;
+          if (!signedError) downloadUrl = toPublicStorageUrl(signed?.signedUrl);
         }
         return {
           id: String(attachment.id), kind: attachment.kind, mimeType: attachment.mime_type,
@@ -658,7 +659,7 @@ export class InternalChatService {
     }
     return {
       success: true, bucket: ATTACHMENTS_BUCKET, storagePath, messageId, attachmentId,
-      uploadUrl: data.signedUrl, uploadToken: data.token, intentExpiresAt,
+      uploadUrl: toPublicStorageUrl(data.signedUrl) ?? data.signedUrl, uploadToken: data.token, intentExpiresAt,
       maxFileSize: MAX_ATTACHMENT_BYTES, mimeType, kind,
     };
   }

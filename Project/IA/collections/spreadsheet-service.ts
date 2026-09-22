@@ -13,6 +13,7 @@ import {
 } from "./domain.js";
 import { CollectionIngestionService } from "./ingestion-service.js";
 import { FileCollectionAdapter } from "./adapters/file-adapter.js";
+import { toPublicStorageUrl } from "../storage-public-url.js";
 
 const BUCKET = "collection-imports";
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -272,7 +273,7 @@ export class CollectionSpreadsheetService {
       created_by: input.userId,
     });
     if (error) throw error;
-    return { importId, storagePath, token: signed.token, signedUrl: signed.signedUrl };
+    return { importId, storagePath, token: signed.token, signedUrl: toPublicStorageUrl(signed.signedUrl) ?? signed.signedUrl };
   }
 
   private async loadImport(acesId: number, importId: string) {
