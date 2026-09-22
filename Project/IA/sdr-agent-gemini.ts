@@ -15920,7 +15920,11 @@ export class AgentManager {
       p_aces_id: context.acesId,
     });
     if (error) throw new HttpError(500, "Nao foi possivel carregar as conversas", error);
-    const rows = (data ?? []) as ChatConversationListRow[];
+    // Legacy connections retain migrated history, but are not operational chat
+    // channels. Excluding them here keeps every client-side list, counter and
+    // filter aligned without changing the preserved conversation records.
+    const rows = ((data ?? []) as ChatConversationListRow[])
+      .filter((row) => row.connection_channel_type !== "legacy");
     const effectiveModes = await this.resolveListedConversationInteractionModes(context.acesId, rows);
     return rows.flatMap((row) => {
       if (
