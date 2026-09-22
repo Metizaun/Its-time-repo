@@ -38,6 +38,30 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatRbDecision(execution: AutomationExecution) {
+  if (!execution.rb_decision_local_date) {
+    return "-";
+  }
+
+  const [year, month, day] = execution.rb_decision_local_date.split("-");
+  const context = execution.rb_decision_context;
+  const record = context && typeof context === "object" && !Array.isArray(context) ? context : null;
+  const kind = record?.message_kind === "reminder" ? "Lembrete" : "Cobrança";
+  const daysOffset = typeof record?.days_offset === "number" ? ` · ${record.days_offset}d` : "";
+
+  return `${day}/${month}/${year} · ${kind}${daysOffset}`;
+}
+
+function formatExecutionReason(execution: AutomationExecution) {
+  const parts = [
+    execution.rb_outcome_code,
+    execution.completed_reason || execution.last_error,
+    execution.rb_decision_local_date ? `${execution.attempt_count} tentativa(s)` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.join(" · ") || "-";
+}
+
 function PreviewTree({ node }: { node: AutomationPreviewTreeNode }) {
   return (
     <div className="space-y-3 rounded-2xl border bg-background/50 p-4">
@@ -251,6 +275,7 @@ export function AutomationSimulationPanel({
               <TableRow>
                 <TableHead>Lead</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Decisão RB</TableHead>
                 <TableHead>Agenda</TableHead>
                 <TableHead>Envio</TableHead>
                 <TableHead>Motivo</TableHead>
@@ -263,10 +288,11 @@ export function AutomationSimulationPanel({
                   <TableCell>
                     <Badge variant={execution.status === "sent" ? "default" : "outline"}>{execution.status}</Badge>
                   </TableCell>
+                  <TableCell>{formatRbDecision(execution)}</TableCell>
                   <TableCell>{formatDateTime(execution.scheduled_at)}</TableCell>
                   <TableCell>{formatDateTime(execution.sent_at)}</TableCell>
                   <TableCell className="max-w-[260px] truncate">
-                    {execution.completed_reason || execution.last_error || "-"}
+                    {formatExecutionReason(execution)}
                   </TableCell>
                 </TableRow>
               ))}

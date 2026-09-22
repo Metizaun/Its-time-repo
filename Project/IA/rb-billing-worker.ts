@@ -107,6 +107,9 @@ type RunSummary = {
   moved_leads_count: number;
   skipped_without_phone_count: number;
   completed_leads_count: number;
+  rb_dispatch_created_count: number;
+  rb_dispatch_duplicate_count: number;
+  rb_dispatch_failed_count: number;
 };
 
 type WorkerConfig = {
@@ -1040,6 +1043,37 @@ export class RbBillingWorker {
     }
   }
 
+  private async enqueueSameDayDispatch(
+    acesId: number,
+    leadId: string,
+    journey: RbJourneyConfig,
+    debt: GroupedDebt,
+    decisionLocalDate: string,
+  ) {
+    const { data, error } = await this.serviceClient.rpc("enqueue_rb_same_day_dispatch", {
+      p_aces_id: acesId,
+      p_lead_id: leadId,
+      p_funnel_id: journey.funnelId,
+      p_decision_key: debt.key,
+      p_decision_local_date: decisionLocalDate,
+      p_decision_context: {
+        message_kind: journey.rbMessageKind,
+        days_offset: journey.rbDaysOffset,
+        payment_type_ids: debt.paymentTypeIds,
+        titles_count: debt.titlesCount,
+        total_amount: Number(debt.totalAmount.toFixed(2)),
+        next_due_date: debt.nextDueDate,
+        store_emp_id: debt.storeEmpId,
+      },
+    });
+
+    if (error) {
+      throw new Error(`Nao foi possivel criar a decisao diaria RB: ${error.message}`);
+    }
+
+    return asRecord(data);
+  }
+
   private async listRbJourneys(acesId: number, instanceName: string) {
     const { data: funnels, error: funnelError } = await this.serviceClient
       .from("automation_funnels")
@@ -1258,6 +1292,9 @@ export class RbBillingWorker {
       moved_leads_count: 0,
       skipped_without_phone_count: 0,
       completed_leads_count: 0,
+      rb_dispatch_created_count: 0,
+      rb_dispatch_duplicate_count: 0,
+      rb_dispatch_failed_count: 0,
     };
 
     const activeKeysByStageId: Record<string, Set<string>> = {};
@@ -1348,6 +1385,23 @@ export class RbBillingWorker {
             enforcedOwnerId
           );
           await this.syncLeadPaymentTypeTags(lead.id, binding.aces_id, debt.paymentTypeIds);
+
+          const dispatchDecision = await this.enqueueSameDayDispatch(
+            binding.aces_id,
+            lead.id,
+            journeyItem,
+            debt,
+            localDate,
+          );
+          if (dispatchDecision.mode === "same_day") {
+            if (dispatchDecision.duplicate === true) {
+              summary.rb_dispatch_duplicate_count += 1;
+            } else if (dispatchDecision.status === "failed") {
+              summary.rb_dispatch_failed_count += 1;
+            } else if (dispatchDecision.created === true) {
+              summary.rb_dispatch_created_count += 1;
+            }
+          }
 
           if (!existed || lead.stage_id !== journeyItem.triggerStageId) {
             await this.moveLeadToStage(lead.id, journeyItem.triggerStageId, binding.aces_id);

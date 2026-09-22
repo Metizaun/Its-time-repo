@@ -160,6 +160,11 @@ export interface AutomationExecution {
   step_label_snapshot: string | null;
   step_rule_snapshot: AutomationRuleNode | null;
   anchor_at_snapshot: string | null;
+  rb_decision_key: string | null;
+  rb_decision_local_date: string | null;
+  rb_decision_context: JsonLike | null;
+  rb_outcome_code: string | null;
+  rb_outcome_detail: JsonLike | null;
   last_error: string | null;
   completed_reason: string | null;
   claimed_by: string | null;

@@ -16,7 +16,11 @@ CREATE POLICY instance_channels_select
   TO authenticated
   USING (aces_id = public.current_aces_id());
 
-CREATE OR REPLACE VIEW crm.v_lead_details AS
+-- The Instagram columns are appended after the existing CRM contract. Drop
+-- and recreate because CREATE OR REPLACE VIEW cannot reorder existing columns.
+DROP VIEW IF EXISTS crm.v_lead_details;
+
+CREATE VIEW crm.v_lead_details AS
 SELECT
   l.id,
   l.name AS lead_name,

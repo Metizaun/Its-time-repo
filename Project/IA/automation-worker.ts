@@ -1916,15 +1916,25 @@ export function startAutomationWorker() {
     }
   }
 
+  async function expireRbSameDayDispatches() {
+    const { data, error } = await supabase.rpc("expire_rb_same_day_dispatches");
+    if (error) {
+      throw error;
+    }
+
+    const expiredCount = Number(data ?? 0);
+    if (Number.isFinite(expiredCount) && expiredCount > 0) {
+      console.warn(
+        `[automation-worker] ${expiredCount} decisao(oes) RB expiraram sem envio no proprio dia.`,
+      );
+    }
+  }
+
   async function cancelExecution(executionId: string, reason: string) {
-    const { error } = await supabase.from("automation_executions").update({
-      status: "cancelled",
-      cancelled_at: new Date().toISOString(),
-      completed_reason: reason,
-      last_error: reason,
-      claimed_by: null,
-      updated_at: new Date().toISOString(),
-    }).eq("id", executionId).eq("status", "processing");
+    const { error } = await supabase.rpc("rpc_cancel_automation_execution", {
+      p_execution_id: executionId,
+      p_reason: reason,
+    });
     if (error) throw error;
   }
 
@@ -2125,6 +2135,7 @@ export function startAutomationWorker() {
     running = true;
 
     try {
+      await expireRbSameDayDispatches();
       await ensureHolidayCacheForDispatch();
       if (Date.now() - lastFreezeRepairAt > 5 * 60_000) {
         try {

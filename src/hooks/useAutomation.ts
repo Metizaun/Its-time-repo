@@ -51,6 +51,11 @@ export interface AutomationExecution {
   status_snapshot: string | null;
   funnel_name_snapshot: string | null;
   step_label_snapshot: string | null;
+  rb_decision_key: string | null;
+  rb_decision_local_date: string | null;
+  rb_decision_context: Record<string, unknown> | null;
+  rb_outcome_code: string | null;
+  rb_outcome_detail: Record<string, unknown> | null;
   last_error: string | null;
   attempt_count: number;
   created_at: string;
