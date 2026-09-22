@@ -7416,12 +7416,38 @@ export class AgentManager {
       throw new HttpError(500, "Nao foi possivel encerrar o atendimento especializado", transferError);
     }
 
-    await this.upsertLeadState(
-      agent.id,
-      lead.id,
-      this.buildEnabledLeadAiPayload(agent),
-      input.customerConversationId,
-    );
+    // The conversation list (and its Manual filter) reads this persisted
+    // conversation mode, while the AI runtime reads ai_conversation_state.
+    // Keep both records in sync when a human handoff is finalized.
+    if (scopedConversation) {
+      await this.setCustomerConversationInteractionMode(
+        context.acesId,
+        scopedConversation.conversation.id,
+        "ai",
+      );
+    }
+
+    try {
+      await this.upsertLeadState(
+        agent.id,
+        lead.id,
+        this.buildEnabledLeadAiPayload(agent),
+        input.customerConversationId,
+      );
+    } catch (error) {
+      if (scopedConversation) {
+        try {
+          await this.setCustomerConversationInteractionMode(
+            context.acesId,
+            scopedConversation.conversation.id,
+            scopedConversation.conversation.interaction_mode,
+          );
+        } catch (restoreError) {
+          console.error("[crm-ai] Falha ao restaurar o modo da conversa apos erro ao reativar IA:", restoreError);
+        }
+      }
+      throw error;
+    }
     await this.saveMessage({
       leadId: lead.id,
       acesId: context.acesId,
@@ -15790,6 +15816,90 @@ export class AgentManager {
     return data as CustomerConversationRow;
   }
 
+  private async setCustomerConversationInteractionMode(
+    acesId: number,
+    conversationId: string,
+    interactionMode: "ai" | "human",
+  ) {
+    const { data, error } = await this.serviceClient
+      .from("customer_conversations")
+      .update({ interaction_mode: interactionMode })
+      .eq("id", conversationId)
+      .eq("aces_id", acesId)
+      .select("id")
+      .maybeSingle();
+
+    if (error || !data) {
+      throw new HttpError(
+        500,
+        "Nao foi possivel atualizar o modo da conversa",
+        error ?? { conversationId, acesId, interactionMode },
+      );
+    }
+  }
+
+  private async resolveListedConversationInteractionModes(
+    acesId: number,
+    rows: ChatConversationListRow[],
+  ) {
+    const connectionIds = Array.from(new Set(rows.map((row) => row.connection_id)));
+    const conversationIds = Array.from(new Set(rows.map((row) => row.conversation_id)));
+    if (connectionIds.length === 0 || conversationIds.length === 0) {
+      return new Map<string, "ai" | "human">();
+    }
+
+    try {
+      const { data: bindings, error: bindingsError } = await this.agentsClient
+        .from("agent_messaging_connections")
+        .select("agent_id, connection_id")
+        .eq("aces_id", acesId)
+        .eq("is_active", true)
+        .in("connection_id", connectionIds);
+      if (bindingsError) throw bindingsError;
+
+      const activeAgentByConnection = new Map<string, string>();
+      for (const binding of (bindings ?? []) as Array<{ agent_id: string; connection_id: string }>) {
+        activeAgentByConnection.set(binding.connection_id, binding.agent_id);
+      }
+      const agentIds = Array.from(new Set(activeAgentByConnection.values()));
+      if (agentIds.length === 0) return new Map<string, "ai" | "human">();
+
+      const { data: states, error: statesError } = await this.agentsClient
+        .from("ai_conversation_state")
+        .select("agent_id, conversation_id, interaction_mode")
+        .in("agent_id", agentIds)
+        .in("conversation_id", conversationIds);
+      if (statesError) throw statesError;
+
+      const modeByAgentConversation = new Map<string, "ai" | "human">();
+      for (const state of (states ?? []) as Array<{
+        agent_id: string;
+        conversation_id: string;
+        interaction_mode: "ai" | "human";
+      }>) {
+        if (state.interaction_mode === "ai" || state.interaction_mode === "human") {
+          modeByAgentConversation.set(`${state.agent_id}:${state.conversation_id}`, state.interaction_mode);
+        }
+      }
+
+      const modeByConversation = new Map<string, "ai" | "human">();
+      for (const row of rows) {
+        const agentId = activeAgentByConnection.get(row.connection_id);
+        const mode = agentId
+          ? modeByAgentConversation.get(`${agentId}:${row.conversation_id}`)
+          : undefined;
+        if (mode) modeByConversation.set(row.conversation_id, mode);
+      }
+      return modeByConversation;
+    } catch (error) {
+      // This is a read-time compatibility layer for records created before
+      // the conversation mode began being synchronized. The persisted mode is
+      // still a safe fallback if the optional state lookup is unavailable.
+      console.warn("[crm-ai] Falha ao resolver modo efetivo das conversas do chat:", error);
+      return new Map<string, "ai" | "human">();
+    }
+  }
+
   async listChatConversations(context: AuthContext) {
     const accessibleInstances = await this.getAccessibleInstanceNames(context.acesId, context.crmUserId, context.role);
     const { data, error } = await this.serviceClient.rpc("rpc_list_customer_conversations", {
@@ -15797,6 +15907,7 @@ export class AgentManager {
     });
     if (error) throw new HttpError(500, "Nao foi possivel carregar as conversas", error);
     const rows = (data ?? []) as ChatConversationListRow[];
+    const effectiveModes = await this.resolveListedConversationInteractionModes(context.acesId, rows);
     return rows.flatMap((row) => {
       if (
         !isAdminRole(context.role)
@@ -15807,7 +15918,7 @@ export class AgentManager {
         id: row.conversation_id,
         leadId: row.lead_id,
         connectionId: row.connection_id,
-        interactionMode: row.interaction_mode,
+        interactionMode: effectiveModes.get(row.conversation_id) ?? row.interaction_mode,
         status: row.conversation_status,
         lastMessageAt: row.last_message_at,
         lastInboundAt: row.last_inbound_at,
