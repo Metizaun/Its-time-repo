@@ -9559,6 +9559,8 @@ export class AgentManager {
     interactionMode?: "ai" | "human",
     conversationId?: string | null,
   ) {
+    const resolvedInteractionMode = interactionMode
+      ?? (pauseOrigin === "human_webhook" ? "human" : undefined);
     const freezeUntil = new Date(Date.now() + agent.human_pause_minutes * 60_000).toISOString();
     await this.upsertLeadState(agent.id, leadId, {
       freeze_until: freezeUntil,
@@ -9566,8 +9568,15 @@ export class AgentManager {
       pause_origin: pauseOrigin,
       pause_reference: pauseReference ?? null,
       paused_at: new Date().toISOString(),
-      ...(interactionMode ? { interaction_mode: interactionMode } : {}),
+      ...(resolvedInteractionMode ? { interaction_mode: resolvedInteractionMode } : {}),
     }, conversationId);
+    if (conversationId && resolvedInteractionMode) {
+      await this.setCustomerConversationInteractionMode(
+        agent.aces_id,
+        conversationId,
+        resolvedInteractionMode,
+      );
+    }
     return freezeUntil;
   }
 
@@ -15141,11 +15150,14 @@ export class AgentManager {
         message,
       });
 
+      const customerConversationId = savedMessage.customer_conversation_id ?? null;
+
       const aiState = await this.resolveLeadAiState(
         lead.id,
         agent,
         message.instanceName,
-        lead.interaction_mode
+        lead.interaction_mode,
+        customerConversationId,
       );
       let freezeUntil: string | null = null;
       if (agent && aiState.reason !== "manual_off" && aiState.reason !== "human_handoff") {
@@ -15154,11 +15166,13 @@ export class AgentManager {
           lead.id,
           "human_webhook",
           message.messageId ?? message.conversationId ?? null,
+          "human",
+          customerConversationId,
         );
         await this.createRun({
           agentId: agent.id,
           leadId: lead.id,
-          customerConversationId: savedMessage.customer_conversation_id,
+          customerConversationId,
           inputSnapshot: {
             reason: "manual_handoff_from_evolution",
             payload: message.raw,
