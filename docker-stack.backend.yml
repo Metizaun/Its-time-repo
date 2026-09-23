@@ -148,7 +148,7 @@ services:
       restart_policy:
         condition: any
       update_config:
-        order: stop-first
+        order: start-first
         failure_action: rollback
 
   agenda-worker:
@@ -186,7 +186,7 @@ services:
       restart_policy:
         condition: any
       update_config:
-        order: stop-first
+        order: start-first
         failure_action: rollback
 
   media-cleanup-worker:
