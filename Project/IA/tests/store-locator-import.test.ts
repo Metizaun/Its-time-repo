@@ -61,7 +61,7 @@ function createLocatorClient(cacheRows: Array<Record<string, unknown>> = []) {
   const insertedEvents: Array<Record<string, unknown>> = [];
   const cachedWrites: Array<Record<string, unknown>> = [];
   const client = {
-    rpc: async (name: string) => name === "find_nearest_stores"
+    rpc: async (name: string) => name === "find_nearest_stores_for_agent"
       ? { data: NEAREST_STORES, error: null }
       : { data: null, error: { message: "RPC inesperada" } },
     from: (table: string) => {

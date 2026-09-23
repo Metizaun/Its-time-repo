@@ -144,6 +144,7 @@ export type StoreHours = Record<string, Array<{ opensAt: string; closesAt: strin
 
 export type StoreLocatorStore = {
   id: string;
+  folderId: string | null;
   displayName: string;
   addressLine: string;
   addressNumber: string | null;
@@ -163,12 +164,14 @@ export type StoreLocatorStore = {
   geocodedAt: string | null;
   isActive: boolean;
   aiVisible: boolean;
+  isVisibleForAgent: boolean;
   createdAt: string;
   updatedAt: string;
 };
 
 export type StoreLocatorStoreInput = {
   id?: string;
+  folderId?: string | null;
   displayName: string;
   addressLine: string;
   addressNumber?: string | null;
@@ -182,6 +185,14 @@ export type StoreLocatorStoreInput = {
   hoursExceptions?: Array<Record<string, unknown>>;
   hoursNotes?: string | null;
   isActive?: boolean;
+};
+
+export type StoreLocatorFolder = {
+  id: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type LeadStorePreference = {
@@ -347,6 +358,35 @@ export async function listStoreLocatorStores(
   return response.stores ?? [];
 }
 
+export async function listStoreLocatorFolders(agentId: string) {
+  const response = await getCrmBackend<{ folders?: StoreLocatorFolder[] }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/folders`,
+  );
+  return response.folders ?? [];
+}
+
+export async function createStoreLocatorFolder(agentId: string, name: string) {
+  const response = await postCrmBackend<{ folder: StoreLocatorFolder }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/folders`,
+    { name },
+  );
+  return response.folder;
+}
+
+export async function renameStoreLocatorFolder(agentId: string, folderId: string, name: string) {
+  const response = await patchCrmBackend<{ folder: StoreLocatorFolder }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/folders/${encodeURIComponent(folderId)}`,
+    { name },
+  );
+  return response.folder;
+}
+
+export async function deleteStoreLocatorFolder(agentId: string, folderId: string) {
+  return deleteCrmBackend<{ success: boolean }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/folders/${encodeURIComponent(folderId)}`,
+  );
+}
+
 export async function saveStoreLocatorStore(agentId: string, input: StoreLocatorStoreInput) {
   const response = await postCrmBackend<{ store: StoreLocatorStore }>(
     `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores`,
@@ -355,9 +395,18 @@ export async function saveStoreLocatorStore(agentId: string, input: StoreLocator
   return response.store;
 }
 
-export async function deactivateStoreLocatorStore(agentId: string, storeId: string) {
-  const response = await deleteCrmBackend<{ store: StoreLocatorStore }>(
-    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores/${encodeURIComponent(storeId)}`,
+export async function setStoreLocatorStoreVisibility(agentId: string, storeId: string, isVisible: boolean) {
+  const response = await patchCrmBackend<{ store: StoreLocatorStore }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores/${encodeURIComponent(storeId)}/visibility`,
+    { isVisible },
+  );
+  return response.store;
+}
+
+export async function setStoreLocatorStoreFolder(agentId: string, storeId: string, folderId: string | null) {
+  const response = await patchCrmBackend<{ store: StoreLocatorStore }>(
+    `/api/agents/${encodeURIComponent(agentId)}/tools/store_locator/stores/${encodeURIComponent(storeId)}/folder`,
+    { folderId },
   );
   return response.store;
 }

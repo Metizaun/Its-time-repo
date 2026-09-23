@@ -40,9 +40,17 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM agents.agent_tools
     WHERE tool_key = 'ai_audio'
-      AND COALESCE((config->>'selectionRate')::numeric, 0) <> 0.018
+      AND (
+        jsonb_typeof(config->'selectionRate') IS DISTINCT FROM 'number'
+        OR CASE
+          WHEN jsonb_typeof(config->'selectionRate') = 'number'
+            THEN (config->>'selectionRate')::numeric < 0
+              OR (config->>'selectionRate')::numeric > 0.225
+          ELSE false
+        END
+      )
   ) THEN
-    RAISE EXCEPTION 'Audio IA deve manter frequencia fixa em 1,8%%';
+    RAISE EXCEPTION 'Audio IA deve manter frequencia entre 0%% e 22,5%%';
   END IF;
 
   IF EXISTS (

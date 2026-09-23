@@ -288,7 +288,7 @@ export class PipelineClassifier {
   constructor(config: PipelineClassifierConfig) {
     this.gemini = new GoogleGenerativeAI(config.apiKey);
     this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
-    this.openaiModel = config.openaiModel?.trim() || "gpt-5.6-luna";
+    this.openaiModel = config.openaiModel?.trim() || "gpt-6-luna";
     this.models = [
       config.modelName?.trim() || "gemini-3.1-flash-lite",
       ...(config.fallbackModels ?? [])

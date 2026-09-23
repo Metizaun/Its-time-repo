@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(32);
+SELECT plan(35);
 
 SELECT hasnt_table('crm', 'planos', 'tabela crm.planos legada removida');
 SELECT hasnt_table('public', 'billing_usage_events', 'ledger publico legado removido');
@@ -119,6 +119,10 @@ SELECT is((SELECT consumed_brl FROM costs.budget_cycles WHERE aces_id = 9701), 0
 SELECT is((SELECT unit_price_usd FROM costs.price_versions WHERE provider = 'openai' AND model = 'gpt-5.6-luna' AND metric = 'input_text_token' AND valid_until IS NULL ORDER BY valid_from DESC LIMIT 1), 1.0000000000::numeric, 'preco Luna input correto');
 SELECT is((SELECT unit_price_usd FROM costs.price_versions WHERE provider = 'openai' AND model = 'gpt-5.6-luna' AND metric = 'cached_input_text_token' AND valid_until IS NULL ORDER BY valid_from DESC LIMIT 1), 0.1000000000::numeric, 'preco Luna cache correto');
 SELECT is((SELECT unit_price_usd FROM costs.price_versions WHERE provider = 'openai' AND model = 'gpt-5.6-luna' AND metric = 'output_token' AND valid_until IS NULL ORDER BY valid_from DESC LIMIT 1), 6.0000000000::numeric, 'preco Luna output correto');
+
+SELECT is((SELECT unit_price_usd FROM costs.price_versions WHERE provider = 'openai' AND model = 'gpt-6-luna' AND metric = 'input_text_token' AND valid_until IS NULL ORDER BY valid_from DESC LIMIT 1), 0.1000000000::numeric, 'preco GPT-6 Luna input correto');
+SELECT is((SELECT unit_price_usd FROM costs.price_versions WHERE provider = 'openai' AND model = 'gpt-6-luna' AND metric = 'cached_input_text_token' AND valid_until IS NULL ORDER BY valid_from DESC LIMIT 1), 0.0100000000::numeric, 'preco GPT-6 Luna cache correto');
+SELECT is((SELECT unit_price_usd FROM costs.price_versions WHERE provider = 'openai' AND model = 'gpt-6-luna' AND metric = 'output_token' AND valid_until IS NULL ORDER BY valid_from DESC LIMIT 1), 0.5000000000::numeric, 'preco GPT-6 Luna output correto');
 
 SELECT * FROM finish();
 ROLLBACK;

@@ -5067,6 +5067,57 @@ app.get(
 );
 
 app.get(
+  "/api/agents/:id/tools/store_locator/folders",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const folders = await manager.listStoreLocatorFolders(req.authContext!, agentId);
+    res.json({ success: true, folders });
+  }),
+);
+
+app.post(
+  "/api/agents/:id/tools/store_locator/folders",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const folder = await manager.createStoreLocatorFolder(
+      req.authContext!,
+      agentId,
+      typeof req.body?.name === "string" ? req.body.name : "",
+    );
+    res.status(201).json({ success: true, folder });
+  }),
+);
+
+app.patch(
+  "/api/agents/:id/tools/store_locator/folders/:folderId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const folderId = getSingleParam(req.params.folderId);
+    const folder = await manager.renameStoreLocatorFolder(
+      req.authContext!,
+      agentId,
+      folderId,
+      typeof req.body?.name === "string" ? req.body.name : "",
+    );
+    res.json({ success: true, folder });
+  }),
+);
+
+app.delete(
+  "/api/agents/:id/tools/store_locator/folders/:folderId",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const folderId = getSingleParam(req.params.folderId);
+    await manager.deleteStoreLocatorFolder(req.authContext!, agentId, folderId);
+    res.json({ success: true });
+  }),
+);
+
+app.get(
   "/api/agents/:id/tools/store_locator/stores",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -5090,6 +5141,9 @@ app.post(
     const agentId = getSingleParam(req.params.id);
     const store = await manager.saveStoreLocatorStore(req.authContext!, agentId, {
       id: asString(req.body.id) ?? undefined,
+      folderId: req.body && Object.prototype.hasOwnProperty.call(req.body, "folderId")
+        ? (req.body.folderId === null ? null : asString(req.body.folderId))
+        : undefined,
       displayName: String(req.body.displayName ?? ""),
       addressLine: String(req.body.addressLine ?? ""),
       addressNumber: asString(req.body.addressNumber),
@@ -5111,13 +5165,56 @@ app.post(
   }),
 );
 
+app.patch(
+  "/api/agents/:id/tools/store_locator/stores/:storeId/folder",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const storeId = getSingleParam(req.params.storeId);
+    if (req.body?.folderId !== null && typeof req.body?.folderId !== "string") {
+      throw new HttpError(400, "folderId deve ser um UUID ou null");
+    }
+    const folderId = req.body?.folderId === null ? null : asString(req.body?.folderId);
+    if (req.body?.folderId !== null && !folderId) {
+      throw new HttpError(400, "folderId deve ser um UUID ou null");
+    }
+    const store = await manager.setStoreLocatorStoreFolder(
+      req.authContext!,
+      agentId,
+      storeId,
+      folderId,
+    );
+    res.json({ success: true, store });
+  }),
+);
+
+app.patch(
+  "/api/agents/:id/tools/store_locator/stores/:storeId/visibility",
+  authMiddleware,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const agentId = getSingleParam(req.params.id);
+    const storeId = getSingleParam(req.params.storeId);
+    if (typeof req.body?.isVisible !== "boolean") {
+      throw new HttpError(400, "isVisible deve ser booleano");
+    }
+    const store = await manager.setStoreLocatorStoreVisibility(
+      req.authContext!,
+      agentId,
+      storeId,
+      req.body.isVisible,
+    );
+    res.json({ success: true, store });
+  }),
+);
+
 app.delete(
   "/api/agents/:id/tools/store_locator/stores/:storeId",
   authMiddleware,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
     const agentId = getSingleParam(req.params.id);
     const storeId = getSingleParam(req.params.storeId);
-    const store = await manager.deactivateStoreLocatorStore(req.authContext!, agentId, storeId);
+    // Compatibilidade com clientes antigos: DELETE agora oculta apenas para este agente.
+    const store = await manager.setStoreLocatorStoreVisibility(req.authContext!, agentId, storeId, false);
     res.json({ success: true, store });
   }),
 );

@@ -35,6 +35,10 @@ const INSTAGRAM_SET_5_PREFLIGHT_MIGRATION =
   "supabase/migrations/20260827162000_instagram_operations_preflight.sql";
 const STORE_LOCATOR_MIGRATION =
   "supabase/migrations/20260825234924_create_store_locator_foundation.sql";
+const STORE_LOCATOR_AGENT_VISIBILITY_MIGRATION =
+  "supabase/migrations/20260922215152_store_locator_agent_visibility.sql";
+const STORE_LOCATOR_FOLDERS_MIGRATION =
+  "supabase/migrations/20260923123853_store_locator_folders.sql";
 const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
@@ -1307,6 +1311,27 @@ export async function assertRuntimeSchemaCompatibility(
       ["id", "aces_id", "display_name", "address_hash", "location", "geocode_status", "ai_visible", "weekly_hours"],
       "locator.stores",
       STORE_LOCATOR_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "agent_store_visibility",
+      ["aces_id", "agent_id", "store_id", "is_visible"],
+      "locator.agent_store_visibility",
+      STORE_LOCATOR_AGENT_VISIBILITY_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "store_folders",
+      ["id", "aces_id", "name", "sort_order"],
+      "locator.store_folders",
+      STORE_LOCATOR_FOLDERS_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "stores",
+      ["folder_id"],
+      "locator.stores.folder_id",
+      STORE_LOCATOR_FOLDERS_MIGRATION,
     ),
     validateSelectedColumns(
       locatorClient,

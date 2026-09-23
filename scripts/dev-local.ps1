@@ -5,6 +5,68 @@ $logDir = Join-Path $rootDir ".tmp"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
+function Get-ConfiguredLocalSupabaseUrl {
+  $envFile = Join-Path $rootDir ".env.local"
+  if (-not (Test-Path -LiteralPath $envFile)) {
+    return $null
+  }
+
+  $line = Get-Content -LiteralPath $envFile | Where-Object {
+    $_ -match '^\s*VITE_SUPABASE_URL\s*='
+  } | Select-Object -First 1
+
+  if (-not $line) {
+    return $null
+  }
+
+  return (($line -split '=', 2)[1]).Trim().Trim('"').Trim("'").TrimEnd('/')
+}
+
+function Test-LocalSupabaseHealth {
+  param([Parameter(Mandatory = $true)][string]$ApiUrl)
+
+  try {
+    $response = Invoke-WebRequest -Uri "$ApiUrl/auth/v1/health" -UseBasicParsing -TimeoutSec 2
+    return $response.StatusCode -eq 200
+  } catch {
+    return $false
+  }
+}
+
+function Ensure-LocalSupabase {
+  $apiUrl = Get-ConfiguredLocalSupabaseUrl
+  if ([string]::IsNullOrWhiteSpace($apiUrl) -or $apiUrl -notmatch 'https?://(localhost|127\.0\.0\.1):55321$') {
+    return
+  }
+
+  if (Test-LocalSupabaseHealth -ApiUrl $apiUrl) {
+    Write-Host "Local Supabase is already running on $apiUrl."
+    return
+  }
+
+  if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+    throw "npx nao encontrado. Instale o Node.js 22 antes de iniciar o ambiente local."
+  }
+
+  Write-Host "Starting local Supabase on $apiUrl..."
+  & npx supabase start
+  if ($LASTEXITCODE -ne 0) {
+    throw "Falha ao iniciar o Supabase local."
+  }
+
+  $deadline = (Get-Date).AddSeconds(90)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-LocalSupabaseHealth -ApiUrl $apiUrl) {
+      Write-Host "Local Supabase is ready."
+      return
+    }
+
+    Start-Sleep -Milliseconds 750
+  }
+
+  throw "Supabase local nao respondeu em 90s no endpoint $apiUrl/auth/v1/health."
+}
+
 function Test-CrmBackendHealth {
   try {
     $response = Invoke-WebRequest -Uri "http://localhost:3000/health" -UseBasicParsing -TimeoutSec 2
@@ -98,6 +160,7 @@ Set-Location $rootDir
 try {
   $startedDockerStack = $false
 
+  Ensure-LocalSupabase
   Stop-LegacyBackendIfRunning
 
   $process = Get-BackendListenerProcess

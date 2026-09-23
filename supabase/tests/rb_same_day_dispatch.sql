@@ -1,5 +1,9 @@
 -- Integration scenarios for the RB same-day decision dispatcher.
 -- Safe to run against local Supabase only: every fixture is removed at the end.
+BEGIN;
+
+SELECT plan(1);
+
 DO $$
 DECLARE
   v_account_id integer;
@@ -186,3 +190,7 @@ BEGIN
   DELETE FROM crm.accounts WHERE id = v_account_id;
 END;
 $$;
+
+SELECT pass('cenarios de decisao diaria do RB foram executados');
+SELECT * FROM finish();
+ROLLBACK;

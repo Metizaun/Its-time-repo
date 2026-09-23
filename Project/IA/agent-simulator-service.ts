@@ -186,7 +186,7 @@ export class AgentSimulatorService {
     });
     this.openai = config.openaiApiKey ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
     this.gemini = config.geminiApiKey ? new GoogleGenerativeAI(config.geminiApiKey) : null;
-    this.openaiModel = config.openaiModel?.trim() || "gpt-5.6-luna";
+    this.openaiModel = config.openaiModel?.trim() || "gpt-6-luna";
     this.geminiFallbackModel = config.geminiFallbackModel?.trim() || "gemini-2.5-flash";
   }
 
@@ -483,12 +483,25 @@ export class AgentSimulatorService {
       if (tool.key === "store_locator") {
         const { data } = await this.locatorClient
           .from("stores")
-          .select("display_name, city, state")
+          .select("id, display_name, city, state")
           .eq("aces_id", agent.aces_id)
           .eq("is_active", true)
           .eq("ai_visible", true)
           .limit(3);
-        const labels = (data ?? []).map((store) => [store.display_name, store.city, store.state].filter(Boolean).join(" — "));
+        const storeIds = (data ?? []).map((store) => String(store.id));
+        const { data: hidden } = storeIds.length > 0
+          ? await this.locatorClient
+            .from("agent_store_visibility")
+            .select("store_id")
+            .eq("aces_id", agent.aces_id)
+            .eq("agent_id", agent.id)
+            .eq("is_visible", false)
+            .in("store_id", storeIds)
+          : { data: [] };
+        const hiddenStoreIds = new Set((hidden ?? []).map((store) => String(store.store_id)));
+        const labels = (data ?? [])
+          .filter((store) => !hiddenStoreIds.has(String(store.id)))
+          .map((store) => [store.display_name, store.city, store.state].filter(Boolean).join(" — "));
         return { ...generic, status: "read_only" as const, detail: labels.length ? `Consulta segura disponível: ${labels.join("; ")}.` : "Nenhuma filial ativa encontrada para consulta." };
       }
       if (tool.key === "send_media") {

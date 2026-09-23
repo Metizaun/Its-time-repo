@@ -1,21 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Building2, Edit3, Loader2, Plus, Search, Store, X } from "lucide-react";
+import { ArrowLeft, Building2, Edit3, Folder, FolderPlus, Loader2, Pencil, Plus, Search, Store, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useCompanies } from "@/hooks/useCompanies";
 import { formatCnpj } from "@/lib/cnpj";
 import {
-  deactivateStoreLocatorStore,
+  createStoreLocatorFolder,
+  deleteStoreLocatorFolder,
+  listStoreLocatorFolders,
   listStoreLocatorStores,
+  renameStoreLocatorFolder,
   saveStoreLocatorStore,
+  setStoreLocatorStoreFolder,
+  setStoreLocatorStoreVisibility,
   updateAgentTool,
   type AgentTool,
   type StoreHours,
+  type StoreLocatorFolder,
   type StoreLocatorStore,
   type StoreLocatorStoreInput,
 } from "@/services/agentToolsService";
@@ -39,8 +46,9 @@ const DAYS = [
   { key: "sunday", label: "Domingo" },
 ] as const;
 
-function emptyForm(): StoreFormState {
+function emptyForm(folderId: string | null = null): StoreFormState {
   return {
+    folderId,
     displayName: "",
     addressLine: "",
     addressNumber: "",
@@ -60,6 +68,7 @@ function emptyForm(): StoreFormState {
 function storeToForm(store: StoreLocatorStore): StoreFormState {
   return {
     id: store.id,
+    folderId: store.folderId,
     displayName: store.displayName,
     addressLine: store.addressLine,
     addressNumber: store.addressNumber,
@@ -89,8 +98,14 @@ function statusCopy(store: StoreLocatorStore) {
   return "Localização pendente";
 }
 
+function visibilityCopy(store: StoreLocatorStore) {
+  if (!store.isActive) return "Inativa globalmente";
+  if (!store.aiVisible) return statusCopy(store);
+  return store.isVisibleForAgent ? "Disponível para esta IA" : "Oculta para esta IA";
+}
+
 function statusDotClass(store: StoreLocatorStore) {
-  if (!store.isActive) return "bg-[var(--color-gray-400)]";
+  if (!store.isActive || !store.isVisibleForAgent) return "bg-[var(--color-gray-400)]";
   if (store.geocodeStatus === "ready") return "bg-[var(--color-success-500)]";
   if (store.geocodeStatus === "failed") return "bg-[var(--color-danger-500)]";
   return "bg-[var(--color-warning-500)]";
@@ -110,13 +125,21 @@ function hoursSummary(hours: StoreHours) {
 export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: StoreLocatorConfigPanelProps) {
   const [mode, setMode] = useState<"list" | "form">("list");
   const [stores, setStores] = useState<StoreLocatorStore[]>([]);
+  const [folders, setFolders] = useState<StoreLocatorFolder[]>([]);
   const [form, setForm] = useState<StoreFormState>(() => emptyForm());
   const [search, setSearch] = useState("");
   const [companySearch, setCompanySearch] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "inactive" | "pending">("all");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [confirmDeactivateId, setConfirmDeactivateId] = useState<string | null>(null);
+  const [confirmVisibilityId, setConfirmVisibilityId] = useState<string | null>(null);
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [folderDraft, setFolderDraft] = useState("");
+  const [editingFolder, setEditingFolder] = useState<StoreLocatorFolder | null>(null);
+  const [folderToDelete, setFolderToDelete] = useState<StoreLocatorFolder | null>(null);
+  const [savingFolder, setSavingFolder] = useState(false);
+  const [draggedStoreId, setDraggedStoreId] = useState<string | null>(null);
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | "__root__" | null>(null);
 
   const { companies, loading: companiesLoading } = useCompanies();
   const [allowedCompanyIds, setAllowedCompanyIds] = useState<string[]>(
@@ -170,13 +193,15 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
   useEffect(() => {
     let active = true;
     setLoading(true);
-    listStoreLocatorStores(agentId)
-      .then((result) => {
-        if (active) setStores(result);
+    Promise.all([listStoreLocatorStores(agentId), listStoreLocatorFolders(agentId)])
+      .then(([storeResult, folderResult]) => {
+        if (!active) return;
+        setStores(storeResult);
+        setFolders(folderResult);
       })
       .catch((error: unknown) => {
         if (!active) return;
-        toast.error("Não foi possível carregar as filiais", {
+        toast.error("Não foi possível carregar filiais e pastas", {
           description: error instanceof Error ? error.message : undefined,
         });
       })
@@ -202,9 +227,21 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
     });
   }, [search, status, stores]);
 
-  function startCreate() {
-    setForm(emptyForm());
+  function startCreate(folderId: string | null = null) {
+    setForm(emptyForm(folderId));
     setMode("form");
+  }
+
+  function openCreateFolder() {
+    setEditingFolder(null);
+    setFolderDraft("");
+    setFolderDialogOpen(true);
+  }
+
+  function openRenameFolder(folder: StoreLocatorFolder) {
+    setEditingFolder(folder);
+    setFolderDraft(folder.name);
+    setFolderDialogOpen(true);
   }
 
   function startEdit(store: StoreLocatorStore) {
@@ -245,9 +282,11 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
       setMode("list");
       onChanged();
       toast.success(form.id ? "Filial atualizada" : "Filial cadastrada", {
-        description: saved.aiVisible
-          ? "A localização foi validada e já pode ser usada pela IA."
-          : "A filial foi salva, mas a localização precisa ser revisada.",
+        description: !saved.aiVisible
+          ? "A filial foi salva, mas a localização precisa ser revisada."
+          : !saved.isVisibleForAgent
+            ? "A filial foi atualizada, mas continua oculta para esta IA."
+            : "A localização foi validada e já pode ser usada por esta IA.",
       });
     } catch (error) {
       toast.error("Não foi possível salvar a filial", {
@@ -258,21 +297,179 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
     }
   }
 
-  async function deactivate(store: StoreLocatorStore) {
+  async function updateVisibility(store: StoreLocatorStore, isVisible: boolean) {
     setSaving(true);
     try {
-      const updated = await deactivateStoreLocatorStore(agentId, store.id);
+      const updated = await setStoreLocatorStoreVisibility(agentId, store.id, isVisible);
       setStores((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setConfirmDeactivateId(null);
+      setConfirmVisibilityId(null);
       onChanged();
-      toast.success("Filial desativada");
+      toast.success(isVisible ? "Filial reativada para esta IA" : "Filial desativada para esta IA", {
+        description: isVisible
+          ? "As outras IAs não foram alteradas."
+          : "A filial continua disponível para as outras IAs.",
+      });
     } catch (error) {
-      toast.error("Não foi possível desativar a filial", {
+      toast.error(isVisible ? "Não foi possível reativar a filial" : "Não foi possível desativar a filial para esta IA", {
         description: error instanceof Error ? error.message : undefined,
       });
     } finally {
       setSaving(false);
     }
+  }
+
+  async function submitFolder(event: React.FormEvent) {
+    event.preventDefault();
+    const name = folderDraft.trim();
+    if (!name) return;
+    setSavingFolder(true);
+    try {
+      const saved = editingFolder
+        ? await renameStoreLocatorFolder(agentId, editingFolder.id, name)
+        : await createStoreLocatorFolder(agentId, name);
+      setFolders((current) => {
+        const remaining = current.filter((folder) => folder.id !== saved.id);
+        return [...remaining, saved].sort((left, right) => left.name.localeCompare(right.name, "pt-BR"));
+      });
+      setFolderDialogOpen(false);
+      toast.success(editingFolder ? "Pasta renomeada" : "Pasta criada");
+    } catch (error) {
+      toast.error(editingFolder ? "Não foi possível renomear a pasta" : "Não foi possível criar a pasta", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSavingFolder(false);
+    }
+  }
+
+  async function removeFolder() {
+    if (!folderToDelete) return;
+    setSavingFolder(true);
+    try {
+      await deleteStoreLocatorFolder(agentId, folderToDelete.id);
+      setFolders((current) => current.filter((folder) => folder.id !== folderToDelete.id));
+      setStores((current) => current.map((store) => (
+        store.folderId === folderToDelete.id ? { ...store, folderId: null } : store
+      )));
+      setFolderToDelete(null);
+      toast.success("Pasta excluída", { description: "As filiais voltaram para Sem pasta." });
+    } catch (error) {
+      toast.error("Não foi possível excluir a pasta", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSavingFolder(false);
+    }
+  }
+
+  async function moveStore(storeId: string, folderId: string | null) {
+    const store = stores.find((item) => item.id === storeId);
+    if (!store || store.folderId === folderId) return;
+    try {
+      const updated = await setStoreLocatorStoreFolder(agentId, storeId, folderId);
+      setStores((current) => current.map((item) => item.id === updated.id ? updated : item));
+      toast.success(folderId ? "Filial adicionada à pasta" : "Filial removida da pasta");
+    } catch (error) {
+      toast.error("Não foi possível mover a filial", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setDraggedStoreId(null);
+      setDragOverFolderId(null);
+    }
+  }
+
+  function startDragging(event: React.DragEvent, store: StoreLocatorStore) {
+    setDraggedStoreId(store.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", store.id);
+  }
+
+  function dropStore(event: React.DragEvent, folderId: string | null) {
+    event.preventDefault();
+    const storeId = event.dataTransfer.getData("text/plain") || draggedStoreId;
+    setDragOverFolderId(null);
+    if (storeId) void moveStore(storeId, folderId);
+  }
+
+  const folderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    stores.forEach((store) => {
+      if (store.folderId) counts.set(store.folderId, (counts.get(store.folderId) ?? 0) + 1);
+    });
+    return counts;
+  }, [stores]);
+
+  const ungroupedStores = useMemo(
+    () => visibleStores.filter((store) => !store.folderId),
+    [visibleStores],
+  );
+
+  function renderStoreItems(items: StoreLocatorStore[]) {
+    return (
+      <Accordion type="single" collapsible className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--color-surface-1)]">
+        {items.map((store) => (
+          <AccordionItem
+            key={store.id}
+            value={store.id}
+            draggable
+            onDragStart={(event) => startDragging(event, store)}
+            onDragEnd={() => { setDraggedStoreId(null); setDragOverFolderId(null); }}
+            className={`[content-visibility:auto] border-[var(--border-default)] last:border-b-0 ${draggedStoreId === store.id ? "opacity-50" : ""}`}
+          >
+            <AccordionTrigger className="cursor-grab px-4 py-3 text-left hover:no-underline focus-visible:outline-none focus-visible:shadow-focus active:cursor-grabbing">
+              <span className="flex min-w-0 items-center gap-3 pr-3">
+                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusDotClass(store)}`} aria-hidden="true" />
+                <span className="min-w-0">
+                  <strong className="block truncate text-sm font-semibold text-[var(--color-gray-900)]">{store.displayName}</strong>
+                  <span className="mt-0.5 block truncate text-xs font-normal text-[var(--color-gray-500)]">
+                    {store.neighborhood} · {store.city}/{store.state} · {visibilityCopy(store)}
+                  </span>
+                </span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className="px-4">
+              <div className="grid gap-3 rounded-[var(--radius-lg)] bg-[var(--color-bg-subtle)] p-4 text-sm text-[var(--color-gray-700)] sm:grid-cols-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-gray-500)]">Endereço</p>
+                  <p className="mt-1">{store.addressLine}{store.addressNumber ? `, ${store.addressNumber}` : ""}{store.addressComplement ? ` · ${store.addressComplement}` : ""}</p>
+                  <p>{store.neighborhood} · {store.city}/{store.state} · CEP {formatPostalCode(store.postalCode)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-gray-500)]">Contato e horários</p>
+                  <p className="mt-1">{store.phone || "Telefone não informado"}</p>
+                  <p className="mt-1 text-xs leading-relaxed">{hoursSummary(store.weeklyHours)}</p>
+                  {store.hoursNotes ? <p className="mt-1 text-xs">{store.hoursNotes}</p> : null}
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                {confirmVisibilityId === store.id ? (
+                  <>
+                    <span className="mr-auto text-xs text-[var(--color-gray-600)]">Ocultar somente para esta IA? As outras IAs continuarão vendo a filial.</span>
+                    <button type="button" onClick={() => setConfirmVisibilityId(null)} className="h-9 rounded-[var(--radius-md)] px-3 text-xs font-semibold text-[var(--color-gray-600)] focus-visible:outline-none focus-visible:shadow-focus">Cancelar</button>
+                    <button type="button" disabled={saving} onClick={() => void updateVisibility(store, false)} className="h-9 rounded-[var(--radius-md)] border border-[var(--color-danger-300)] px-3 text-xs font-semibold text-[var(--color-danger-700)] focus-visible:outline-none focus-visible:shadow-focus disabled:opacity-60">Confirmar desativação para esta IA</button>
+                  </>
+                ) : (
+                  <>
+                    {store.isActive && store.aiVisible ? (
+                      store.isVisibleForAgent ? (
+                        <button type="button" onClick={() => setConfirmVisibilityId(store.id)} className="h-9 rounded-[var(--radius-md)] px-3 text-xs font-semibold text-[var(--color-gray-600)] focus-visible:outline-none focus-visible:shadow-focus">Desativar para esta IA</button>
+                      ) : (
+                        <button type="button" disabled={saving} onClick={() => void updateVisibility(store, true)} className="h-9 rounded-[var(--radius-md)] px-3 text-xs font-semibold text-[var(--color-primary-600)] focus-visible:outline-none focus-visible:shadow-focus disabled:opacity-60">Reativar para esta IA</button>
+                      )
+                    ) : null}
+                    <button type="button" onClick={() => startEdit(store)} className="inline-flex h-9 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-input)] px-3 text-xs font-semibold text-[var(--color-gray-700)] shadow-sm focus-visible:outline-none focus-visible:shadow-focus">
+                      <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
+                      Editar
+                    </button>
+                  </>
+                )}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    );
   }
 
   return (
@@ -437,7 +634,16 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
             </label>
             <button
               type="button"
-              onClick={startCreate}
+              onClick={openCreateFolder}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-input)] text-[var(--color-primary-600)] shadow-sm transition-[background-color,box-shadow] hover:bg-[var(--color-primary-50)] focus-visible:outline-none focus-visible:shadow-focus active:shadow-inset"
+              aria-label="Criar pasta"
+              title="Criar pasta"
+            >
+              <FolderPlus className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => startCreate()}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary-500)] px-4 text-sm font-semibold text-white shadow-sm transition-[background-color,box-shadow] hover:bg-[var(--color-primary-600)] focus-visible:outline-none focus-visible:shadow-focus active:shadow-inset"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
@@ -448,7 +654,7 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
           {loading ? (
             <div className="flex min-h-48 items-center justify-center text-sm text-[var(--color-gray-500)]" aria-live="polite">
               <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              Carregando filiais
+              Carregando filiais e pastas
             </div>
           ) : visibleStores.length === 0 ? (
             <div className="mt-4 rounded-[var(--radius-xl)] border border-dashed border-[var(--border-default)] bg-[var(--color-bg-subtle)] p-8 text-center">
@@ -457,59 +663,80 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
               <p className="mt-1 text-xs text-[var(--color-gray-500)]">Ajuste os filtros ou cadastre a primeira filial desta Tool.</p>
             </div>
           ) : (
-            <Accordion type="single" collapsible className="mt-4 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--color-surface-1)] shadow-sm">
-              {visibleStores.map((store) => (
-                <AccordionItem key={store.id} value={store.id} className="[content-visibility:auto] border-[var(--border-default)] last:border-b-0">
-                  <AccordionTrigger className="px-4 py-3 text-left hover:no-underline focus-visible:outline-none focus-visible:shadow-focus">
-                    <span className="flex min-w-0 items-center gap-3 pr-3">
-                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusDotClass(store)}`} aria-hidden="true" />
-                      <span className="min-w-0">
-                        <strong className="block truncate text-sm font-semibold text-[var(--color-gray-900)]">{store.displayName}</strong>
-                        <span className="mt-0.5 block truncate text-xs font-normal text-[var(--color-gray-500)]">
-                          {store.neighborhood} · {store.city}/{store.state} · {statusCopy(store)}
+            <Accordion type="multiple" className="mt-4 space-y-2">
+              {folders.map((folder) => {
+                const folderStores = visibleStores.filter((store) => store.folderId === folder.id);
+                const total = folderCounts.get(folder.id) ?? 0;
+                const isDropTarget = dragOverFolderId === folder.id;
+                return (
+                  <AccordionItem
+                    key={folder.id}
+                    value={folder.id}
+                    onDragOver={(event) => { event.preventDefault(); setDragOverFolderId(folder.id); }}
+                    onDragLeave={() => setDragOverFolderId((current) => current === folder.id ? null : current)}
+                    onDrop={(event) => dropStore(event, folder.id)}
+                    className={`overflow-hidden rounded-[var(--radius-xl)] border bg-[var(--color-surface-1)] shadow-sm transition-[border-color,background-color,box-shadow] ${isDropTarget ? "border-[var(--color-primary-400)] bg-[var(--color-primary-50)] shadow-md" : "border-[var(--border-default)]"}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AccordionTrigger className="min-w-0 flex-1 px-4 py-4 text-left hover:no-underline focus-visible:outline-none focus-visible:shadow-focus">
+                        <span className="flex min-w-0 items-center gap-3 pr-3">
+                          <Folder className="h-5 w-5 shrink-0 text-[var(--color-primary-500)]" aria-hidden="true" />
+                          <span className="min-w-0">
+                            <strong className="block truncate text-sm font-semibold text-[var(--color-gray-900)]">{folder.name}</strong>
+                            <span className="mt-0.5 block truncate text-xs font-normal text-[var(--color-gray-500)]">{total} {total === 1 ? "filial" : "filiais"}</span>
+                          </span>
                         </span>
-                      </span>
-                    </span>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4">
-                    <div className="grid gap-3 rounded-[var(--radius-lg)] bg-[var(--color-bg-subtle)] p-4 text-sm text-[var(--color-gray-700)] sm:grid-cols-2">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-gray-500)]">Endereço</p>
-                        <p className="mt-1">{store.addressLine}{store.addressNumber ? `, ${store.addressNumber}` : ""}{store.addressComplement ? ` · ${store.addressComplement}` : ""}</p>
-                        <p>{store.neighborhood} · {store.city}/{store.state} · CEP {formatPostalCode(store.postalCode)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-gray-500)]">Contato e horários</p>
-                        <p className="mt-1">{store.phone || "Telefone não informado"}</p>
-                        <p className="mt-1 text-xs leading-relaxed">{hoursSummary(store.weeklyHours)}</p>
-                        {store.hoursNotes ? <p className="mt-1 text-xs">{store.hoursNotes}</p> : null}
-                      </div>
-                      <div className="sm:col-span-2">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-gray-500)]">Validação da localização</p>
-                        <p className="mt-1">{statusCopy(store)}{store.geocodeAccuracy ? ` · ${store.geocodeAccuracy}` : ""}</p>
-                        {store.geocodeError ? <p className="mt-1 text-xs text-[var(--color-danger-600)]">{store.geocodeError}</p> : null}
-                      </div>
+                      </AccordionTrigger>
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                      {confirmDeactivateId === store.id ? (
-                        <>
-                          <span className="mr-auto text-xs text-[var(--color-gray-600)]">Desativar esta filial sem apagar o histórico?</span>
-                          <button type="button" onClick={() => setConfirmDeactivateId(null)} className="h-9 rounded-[var(--radius-md)] px-3 text-xs font-semibold text-[var(--color-gray-600)] focus-visible:outline-none focus-visible:shadow-focus">Cancelar</button>
-                          <button type="button" disabled={saving} onClick={() => void deactivate(store)} className="h-9 rounded-[var(--radius-md)] border border-[var(--color-danger-300)] px-3 text-xs font-semibold text-[var(--color-danger-700)] focus-visible:outline-none focus-visible:shadow-focus disabled:opacity-60">Confirmar desativação</button>
-                        </>
-                      ) : (
-                        <>
-                          {store.isActive ? <button type="button" onClick={() => setConfirmDeactivateId(store.id)} className="h-9 rounded-[var(--radius-md)] px-3 text-xs font-semibold text-[var(--color-gray-600)] focus-visible:outline-none focus-visible:shadow-focus">Desativar</button> : null}
-                          <button type="button" onClick={() => startEdit(store)} className="inline-flex h-9 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-input)] px-3 text-xs font-semibold text-[var(--color-gray-700)] shadow-sm focus-visible:outline-none focus-visible:shadow-focus">
-                            <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                            Editar
+                    <AccordionContent className="px-3 pb-3 sm:px-4">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-default)] pb-3">
+                        <span className="text-xs text-[var(--color-gray-500)]">Arraste uma filial para esta pasta ou adicione diretamente.</span>
+                        <span className="flex items-center gap-1">
+                          <button type="button" onClick={() => startCreate(folder.id)} className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 text-xs font-semibold text-[var(--color-primary-600)] hover:bg-[var(--color-primary-50)] focus-visible:outline-none focus-visible:shadow-focus" aria-label={`Adicionar filial em ${folder.name}`}>
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                            Adicionar filial
                           </button>
-                        </>
+                          <button type="button" onClick={() => openRenameFolder(folder)} className="grid h-8 w-8 place-items-center rounded-[var(--radius-md)] text-[var(--color-gray-500)] hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-gray-800)] focus-visible:outline-none focus-visible:shadow-focus" aria-label={`Renomear pasta ${folder.name}`} title="Renomear pasta">
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                          <button type="button" onClick={() => setFolderToDelete(folder)} className="grid h-8 w-8 place-items-center rounded-[var(--radius-md)] text-[var(--color-gray-500)] hover:bg-[var(--color-error-50)] hover:text-[var(--color-error-600)] focus-visible:outline-none focus-visible:shadow-focus" aria-label={`Excluir pasta ${folder.name}`} title="Excluir pasta">
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </span>
+                      </div>
+                      {folderStores.length > 0 ? renderStoreItems(folderStores) : (
+                        <div className={`rounded-[var(--radius-lg)] border border-dashed p-6 text-center text-xs ${isDropTarget ? "border-[var(--color-primary-400)] text-[var(--color-primary-700)]" : "border-[var(--border-default)] text-[var(--color-gray-500)]"}`}>
+                          Solte uma filial aqui para adicioná-la à pasta.
+                        </div>
                       )}
+                    </AccordionContent>
+                  </AccordionItem>
+                );
+              })}
+              <AccordionItem
+                value="__root__"
+                onDragOver={(event) => { event.preventDefault(); setDragOverFolderId("__root__"); }}
+                onDragLeave={() => setDragOverFolderId((current) => current === "__root__" ? null : current)}
+                onDrop={(event) => dropStore(event, null)}
+                className={`overflow-hidden rounded-[var(--radius-xl)] border bg-[var(--color-surface-1)] shadow-sm transition-[border-color,background-color,box-shadow] ${dragOverFolderId === "__root__" ? "border-[var(--color-primary-400)] bg-[var(--color-primary-50)] shadow-md" : "border-[var(--border-default)]"}`}
+              >
+                <AccordionTrigger className="px-4 py-4 text-left hover:no-underline focus-visible:outline-none focus-visible:shadow-focus">
+                  <span className="flex min-w-0 items-center gap-3 pr-3">
+                    <Folder className="h-5 w-5 shrink-0 text-[var(--color-gray-400)]" aria-hidden="true" />
+                    <span className="min-w-0">
+                      <strong className="block truncate text-sm font-semibold text-[var(--color-gray-900)]">Sem pasta</strong>
+                      <span className="mt-0.5 block truncate text-xs font-normal text-[var(--color-gray-500)]">{ungroupedStores.length} {ungroupedStores.length === 1 ? "filial" : "filiais"} nesta visualização</span>
+                    </span>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-3 pb-3 sm:px-4">
+                  {ungroupedStores.length > 0 ? renderStoreItems(ungroupedStores) : (
+                    <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--border-default)] p-6 text-center text-xs text-[var(--color-gray-500)]">
+                      Nenhuma filial sem pasta corresponde aos filtros atuais.
                     </div>
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
+                  )}
+                </AccordionContent>
+              </AccordionItem>
             </Accordion>
           )}
         </div>
@@ -530,9 +757,16 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
               <label className="grid gap-1.5"><span className="text-xs font-medium text-[var(--color-gray-700)]">CEP</span><Input required inputMode="numeric" value={formatPostalCode(form.postalCode)} onChange={(event) => updateField("postalCode", event.target.value)} /></label>
             </div>
             <label className="grid gap-1.5"><span className="text-xs font-medium text-[var(--color-gray-700)]">Telefone</span><Input value={form.phone ?? ""} onChange={(event) => updateField("phone", event.target.value)} /></label>
-            <label className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-4 py-3">
-              <span><strong className="block text-sm font-medium text-[var(--color-gray-800)]">Filial ativa</strong><span className="mt-0.5 block text-xs text-[var(--color-gray-500)]">A IA só utiliza filiais ativas com localização validada.</span></span>
-              <Switch checked={form.isActive !== false} onCheckedChange={(checked) => updateField("isActive", checked)} aria-label="Filial ativa" />
+            <label className="grid gap-1.5 sm:col-span-2">
+              <span className="text-xs font-medium text-[var(--color-gray-700)]">Pasta</span>
+              <select
+                value={form.folderId ?? ""}
+                onChange={(event) => updateField("folderId", event.target.value || null)}
+                className="input h-10 px-3 text-sm"
+              >
+                <option value="">Sem pasta</option>
+                {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+              </select>
             </label>
           </fieldset>
 
@@ -560,6 +794,10 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
               })}
             </div>
             <label className="mt-3 grid gap-1.5"><span className="text-xs font-medium text-[var(--color-gray-700)]">Exceções e observações</span><Textarea value={form.hoursNotes ?? ""} onChange={(event) => updateField("hoursNotes", event.target.value)} placeholder="Feriados, horários especiais ou observações úteis" /></label>
+            <label className="mt-4 flex items-center justify-between gap-3">
+              <span><strong className="block text-sm font-medium text-[var(--color-gray-800)]">Filial ativa globalmente</strong><span className="mt-0.5 block text-xs text-[var(--color-gray-500)]">Desliga esta filial para todas as IAs. Para ocultar somente desta IA, use “Desativar para esta IA” na lista.</span></span>
+              <Switch checked={form.isActive !== false} onCheckedChange={(checked) => updateField("isActive", checked)} aria-label="Filial ativa globalmente" />
+            </label>
           </fieldset>
 
           <footer className="sticky bottom-0 flex justify-end gap-2 border-t border-[var(--border-default)] bg-[var(--color-surface-1)] py-4">
@@ -571,6 +809,48 @@ export function StoreLocatorConfigPanel({ agentId, tool, onClose, onChanged }: S
           </footer>
         </form>
       )}
+
+      <Dialog open={folderDialogOpen} onOpenChange={setFolderDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingFolder ? "Renomear pasta" : "Criar pasta"}</DialogTitle>
+            <DialogDescription>
+              {editingFolder ? "Atualize o nome usado para organizar as filiais." : "Crie uma pasta compartilhada para organizar as filiais desta conta."}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitFolder} className="grid gap-4">
+            <label className="grid gap-1.5">
+              <span className="text-xs font-medium text-[var(--color-gray-700)]">Nome da pasta</span>
+              <Input autoFocus required maxLength={100} value={folderDraft} onChange={(event) => setFolderDraft(event.target.value)} placeholder="Ex.: Atacadão dos Óculos" />
+            </label>
+            <DialogFooter>
+              <button type="button" onClick={() => setFolderDialogOpen(false)} disabled={savingFolder} className="h-10 rounded-[var(--radius-md)] px-4 text-sm font-semibold text-[var(--color-gray-600)] focus-visible:outline-none focus-visible:shadow-focus">Cancelar</button>
+              <button type="submit" disabled={savingFolder || !folderDraft.trim()} className="inline-flex h-10 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary-500)] px-4 text-sm font-semibold text-white shadow-primary transition-[background-color,box-shadow] hover:bg-[var(--color-primary-600)] focus-visible:outline-none focus-visible:shadow-focus disabled:cursor-not-allowed disabled:opacity-60">
+                {savingFolder ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <FolderPlus className="h-4 w-4" aria-hidden="true" />}
+                {editingFolder ? "Salvar nome" : "Criar pasta"}
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(folderToDelete)} onOpenChange={(open) => { if (!open) setFolderToDelete(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Excluir pasta?</DialogTitle>
+            <DialogDescription>
+              {folderToDelete ? `A pasta “${folderToDelete.name}” será excluída. As filiais continuarão cadastradas e voltarão para Sem pasta.` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button type="button" onClick={() => setFolderToDelete(null)} disabled={savingFolder} className="h-10 rounded-[var(--radius-md)] px-4 text-sm font-semibold text-[var(--color-gray-600)] focus-visible:outline-none focus-visible:shadow-focus">Cancelar</button>
+            <button type="button" onClick={() => void removeFolder()} disabled={savingFolder} className="inline-flex h-10 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-error-300)] px-4 text-sm font-semibold text-[var(--color-error-600)] hover:bg-[var(--color-error-50)] focus-visible:outline-none focus-visible:shadow-focus disabled:cursor-not-allowed disabled:opacity-60">
+              {savingFolder ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+              Excluir pasta
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

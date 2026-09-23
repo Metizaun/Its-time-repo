@@ -2673,8 +2673,8 @@ export class AgentManager {
   private static readonly INSTANCE_OPERATION_LOCK_SECONDS = 45;
   private static readonly DEFAULT_CUSTOMER_AGENT_MODEL = "gemini-3.1-flash-lite";
   private static readonly DEFAULT_CRM_ANALYSIS_WORKER_MODEL = "gemini-3.1-flash-lite";
-  private static readonly DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.6-luna";
-  private static readonly DEFAULT_OPENAI_CRM_ANALYSIS_MODEL = "gpt-5.6-luna";
+  private static readonly DEFAULT_OPENAI_AGENT_MODEL = "gpt-6-luna";
+  private static readonly DEFAULT_OPENAI_CRM_ANALYSIS_MODEL = "gpt-6-luna";
   private static readonly DEFAULT_GEMINI_FALLBACK_MODELS = [
     "gemini-3.1-flash-lite",
   ];
@@ -4340,13 +4340,12 @@ export class AgentManager {
     if (bindingError) throw new HttpError(500, "Nao foi possivel validar a Tool Busca de filiais", bindingError);
     if (!binding) return;
 
-    const { count, error: storeError } = await this.locatorClient
-      .from("stores")
-      .select("id", { count: "exact", head: true })
-      .eq("aces_id", acesId)
-      .eq("is_active", true)
-      .eq("ai_visible", true);
-    if (storeError) throw new HttpError(500, "Nao foi possivel validar as filiais", storeError);
+    let count = 0;
+    try {
+      count = await this.storeLocator.countVisibleStores(acesId, agentId);
+    } catch (error) {
+      throw new HttpError(500, "Nao foi possivel validar as filiais", error);
+    }
 
     const ready = Boolean(this.storeLocatorEnabled && this.googleMapsApiKey && Number(count ?? 0) > 0);
     const { error: updateError } = await this.agentsClient
@@ -4927,6 +4926,67 @@ export class AgentManager {
     return new HttpError(statusCode, error.message, error.details);
   }
 
+  async listStoreLocatorFolders(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.listFolders(context.acesId);
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async createStoreLocatorFolder(context: AuthContext, agentId: string, name: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.createFolder(context.acesId, context.authUserId, name);
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async renameStoreLocatorFolder(context: AuthContext, agentId: string, folderId: string, name: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.renameFolder(context.acesId, context.authUserId, folderId, name);
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async deleteStoreLocatorFolder(context: AuthContext, agentId: string, folderId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.deleteFolder(context.acesId, folderId);
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
+  async setStoreLocatorStoreFolder(
+    context: AuthContext,
+    agentId: string,
+    storeId: string,
+    folderId: string | null,
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      return await this.storeLocator.setStoreFolder(
+        context.acesId,
+        context.authUserId,
+        agentId,
+        storeId,
+        folderId,
+      );
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
+  }
+
   async listStoreLocatorStores(
     context: AuthContext,
     agentId: string,
@@ -4935,7 +4995,7 @@ export class AgentManager {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
     try {
-      return await this.storeLocator.listStores(context.acesId, input);
+      return await this.storeLocator.listStores(context.acesId, agentId, input);
     } catch (error) {
       throw this.storeLocatorHttpError(error);
     }
@@ -4945,19 +5005,7 @@ export class AgentManager {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
     try {
-      const store = await this.storeLocator.saveStore(context.acesId, context.authUserId, input);
-      await this.syncStoreLocatorReadiness(agentId, context.acesId);
-      return store;
-    } catch (error) {
-      throw this.storeLocatorHttpError(error);
-    }
-  }
-
-  async deactivateStoreLocatorStore(context: AuthContext, agentId: string, storeId: string) {
-    this.ensureAdmin(context);
-    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
-    try {
-      const store = await this.storeLocator.deactivateStore(context.acesId, context.authUserId, storeId);
+      const store = await this.storeLocator.saveStore(context.acesId, context.authUserId, agentId, input);
       await this.syncStoreLocatorReadiness(agentId, context.acesId);
       return store;
     } catch (error) {
@@ -5325,6 +5373,29 @@ export class AgentManager {
     if (error) throw new HttpError(500, "Nao foi possivel desativar a regra de lentes", error);
     await this.refreshPrescriptionToolReadiness(context.acesId, binding.id);
     return { success: true };
+  }
+
+  async setStoreLocatorStoreVisibility(
+    context: AuthContext,
+    agentId: string,
+    storeId: string,
+    isVisible: boolean,
+  ) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    try {
+      const store = await this.storeLocator.setStoreVisibility(
+        context.acesId,
+        context.authUserId,
+        agentId,
+        storeId,
+        isVisible,
+      );
+      await this.syncStoreLocatorReadiness(agentId, context.acesId);
+      return store;
+    } catch (error) {
+      throw this.storeLocatorHttpError(error);
+    }
   }
 
   async listOpticalCatalogProducts(context: AuthContext, agentId: string) {
@@ -12957,7 +13028,7 @@ export class AgentManager {
       }
 
       if (params.decision.action === "other") {
-        const store = await this.storeLocator.recommendAlternative(params.agent.aces_id, params.lead.id);
+        const store = await this.storeLocator.recommendAlternative(params.agent.aces_id, params.agent.id, params.lead.id);
         if (!store) {
           return { status: "empty", message: "Nao ha outra filial entre as alternativas calculadas.", data: {} };
         }
@@ -12973,6 +13044,7 @@ export class AgentManager {
       }
       const confirmed = await this.storeLocator.confirmLatestStore({
         acesId: params.agent.aces_id,
+        agentId: params.agent.id,
         leadId: params.lead.id,
         requestedPreferenceType: params.decision.preferenceType,
         sourceMessageId: params.sourceMessageId,

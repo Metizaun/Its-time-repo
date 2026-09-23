@@ -69,7 +69,7 @@ export class AutomationAiMessageService {
   ) {
     this.openai = config.openaiApiKey?.trim() ? new OpenAI({ apiKey: config.openaiApiKey }) : null;
     this.gemini = config.geminiApiKey?.trim() ? new GoogleGenerativeAI(config.geminiApiKey) : null;
-    this.openaiModel = config.openaiModel?.trim() || "gpt-5.6-luna";
+    this.openaiModel = config.openaiModel?.trim() || "gpt-6-luna";
     this.geminiModels = (config.geminiModels ?? ["gemini-3.1-flash-lite"])
       .map((model) => model.trim()).filter(Boolean);
   }

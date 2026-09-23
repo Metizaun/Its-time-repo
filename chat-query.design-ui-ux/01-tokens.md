@@ -11,7 +11,7 @@
 ```css
 /* Backgrounds Globais */
 --color-bg-base:       #F7F6F4;  /* App shell, page background */
---color-bg-subtle:     #F0EEE9;  /* Sidebar, nav lateral, zebra de tabelas */
+--color-bg-subtle:     #F4F4F5;  /* Sidebar, nav lateral, zebra de tabelas */
 --color-bg-muted:      #E8E5DF;  /* Dividers, empty states */
 --color-bg-inverse:    #1A1A18;  /* Tooltips dark, badges escuros */
 ```

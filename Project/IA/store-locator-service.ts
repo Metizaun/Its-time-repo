@@ -9,6 +9,7 @@ export type StoreHours = Record<string, Array<{ opensAt: string; closesAt: strin
 
 export type StoreInput = {
   id?: string;
+  folderId?: string | null;
   displayName: string;
   addressLine: string;
   addressNumber?: string | null;
@@ -26,6 +27,7 @@ export type StoreInput = {
 
 export type StoreRecord = {
   id: string;
+  folderId: string | null;
   displayName: string;
   addressLine: string;
   addressNumber: string | null;
@@ -46,6 +48,15 @@ export type StoreRecord = {
   geocodedAt: string | null;
   isActive: boolean;
   aiVisible: boolean;
+  isVisibleForAgent: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StoreFolderRecord = {
+  id: string;
+  name: string;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -176,6 +187,7 @@ function safeProviderDetails(error: unknown) {
 function mapStore(row: Record<string, unknown>): StoreRecord {
   return {
     id: String(row.id),
+    folderId: row.folder_id ? String(row.folder_id) : null,
     displayName: String(row.display_name ?? ""),
     addressLine: String(row.address_line ?? ""),
     addressNumber: row.address_number ? String(row.address_number) : null,
@@ -198,6 +210,17 @@ function mapStore(row: Record<string, unknown>): StoreRecord {
     geocodedAt: row.geocoded_at ? String(row.geocoded_at) : null,
     isActive: row.is_active !== false,
     aiVisible: row.ai_visible === true,
+    isVisibleForAgent: row.is_visible_for_agent !== false,
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? ""),
+  };
+}
+
+function mapFolder(row: Record<string, unknown>): StoreFolderRecord {
+  return {
+    id: String(row.id),
+    name: String(row.name ?? ""),
+    sortOrder: Number(row.sort_order ?? 0),
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
   };
@@ -226,7 +249,98 @@ export class StoreLocatorService {
     this.googleClient = googleClient ?? axios.create({ timeout: 15_000 });
   }
 
-  async listStores(acesId: number, input: { search?: string; status?: string } = {}) {
+  async listFolders(acesId: number) {
+    const { data, error } = await this.locatorClient
+      .from("store_folders")
+      .select("*")
+      .eq("aces_id", acesId)
+      .order("sort_order", { ascending: true })
+      .order("name", { ascending: true });
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel carregar as pastas", error);
+    return (data ?? []).map((row) => mapFolder(row as Record<string, unknown>));
+  }
+
+  async createFolder(acesId: number, authUserId: string, name: string) {
+    const trimmedName = name.trim();
+    if (trimmedName.length < 1 || trimmedName.length > 100) {
+      throw new StoreLocatorError("invalid_input", "Informe um nome de pasta entre 1 e 100 caracteres");
+    }
+    const { data, error } = await this.locatorClient
+      .from("store_folders")
+      .insert({ aces_id: acesId, name: trimmedName, created_by: authUserId, updated_by: authUserId })
+      .select("*")
+      .single();
+    if (error) {
+      if (error.code === "23505") throw new StoreLocatorError("invalid_input", "Ja existe uma pasta com esse nome");
+      throw new StoreLocatorError("database_error", "Nao foi possivel criar a pasta", error);
+    }
+    return mapFolder(data as Record<string, unknown>);
+  }
+
+  async renameFolder(acesId: number, authUserId: string, folderId: string, name: string) {
+    const trimmedName = name.trim();
+    if (trimmedName.length < 1 || trimmedName.length > 100) {
+      throw new StoreLocatorError("invalid_input", "Informe um nome de pasta entre 1 e 100 caracteres");
+    }
+    const { data, error } = await this.locatorClient
+      .from("store_folders")
+      .update({ name: trimmedName, updated_by: authUserId })
+      .eq("id", folderId)
+      .eq("aces_id", acesId)
+      .select("*")
+      .maybeSingle();
+    if (error) {
+      if (error.code === "23505") throw new StoreLocatorError("invalid_input", "Ja existe uma pasta com esse nome");
+      throw new StoreLocatorError("database_error", "Nao foi possivel renomear a pasta", error);
+    }
+    if (!data) throw new StoreLocatorError("not_found", "Pasta nao encontrada");
+    return mapFolder(data as Record<string, unknown>);
+  }
+
+  async deleteFolder(acesId: number, folderId: string) {
+    const { data, error } = await this.locatorClient
+      .from("store_folders")
+      .delete()
+      .eq("id", folderId)
+      .eq("aces_id", acesId)
+      .select("id")
+      .maybeSingle();
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel excluir a pasta", error);
+    if (!data) throw new StoreLocatorError("not_found", "Pasta nao encontrada");
+    return { success: true };
+  }
+
+  async setStoreFolder(
+    acesId: number,
+    authUserId: string,
+    agentId: string,
+    storeId: string,
+    folderId: string | null,
+  ) {
+    if (folderId) {
+      const { data: folder, error: folderError } = await this.locatorClient
+        .from("store_folders")
+        .select("id")
+        .eq("id", folderId)
+        .eq("aces_id", acesId)
+        .maybeSingle();
+      if (folderError) throw new StoreLocatorError("database_error", "Nao foi possivel validar a pasta", folderError);
+      if (!folder) throw new StoreLocatorError("not_found", "Pasta nao encontrada");
+    }
+
+    const { data, error } = await this.locatorClient
+      .from("stores")
+      .update({ folder_id: folderId, updated_by: authUserId })
+      .eq("id", storeId)
+      .eq("aces_id", acesId)
+      .select("*")
+      .maybeSingle();
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel mover a filial para a pasta", error);
+    if (!data) throw new StoreLocatorError("not_found", "Filial nao encontrada");
+    return this.mapStoreForAgent(acesId, agentId, data as Record<string, unknown>);
+  }
+
+  async listStores(acesId: number, agentId: string, input: { search?: string; status?: string } = {}) {
     let query = this.locatorClient
       .from("stores")
       .select("*")
@@ -246,10 +360,91 @@ export class StoreLocatorService {
 
     const { data, error } = await query;
     if (error) throw new StoreLocatorError("database_error", "Nao foi possivel carregar as filiais", error);
-    return (data ?? []).map((row) => mapStore(row as Record<string, unknown>));
+    const rows = data ?? [];
+    const hiddenStoreIds = await this.getHiddenStoreIds(acesId, agentId, rows.map((row) => String(row.id)));
+    return rows.map((row) => mapStore({
+      ...(row as Record<string, unknown>),
+      is_visible_for_agent: !hiddenStoreIds.has(String(row.id)),
+    }));
   }
 
-  async saveStore(acesId: number, authUserId: string, input: StoreInput) {
+  private async getHiddenStoreIds(acesId: number, agentId: string, storeIds: string[]) {
+    if (storeIds.length === 0) return new Set<string>();
+    const { data, error } = await this.locatorClient
+      .from("agent_store_visibility")
+      .select("store_id")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("is_visible", false)
+      .in("store_id", storeIds);
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel carregar a visibilidade das filiais", error);
+    return new Set((data ?? []).map((row) => String(row.store_id)));
+  }
+
+  private async mapStoreForAgent(acesId: number, agentId: string, row: Record<string, unknown>) {
+    const hiddenStoreIds = await this.getHiddenStoreIds(acesId, agentId, [String(row.id)]);
+    return mapStore({
+      ...row,
+      is_visible_for_agent: !hiddenStoreIds.has(String(row.id)),
+    });
+  }
+
+  async countVisibleStores(acesId: number, agentId: string) {
+    const { data: stores, error: storesError } = await this.locatorClient
+      .from("stores")
+      .select("id")
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .eq("ai_visible", true);
+    if (storesError) throw new StoreLocatorError("database_error", "Nao foi possivel validar as filiais", storesError);
+    const hiddenStoreIds = await this.getHiddenStoreIds(acesId, agentId, (stores ?? []).map((store) => String(store.id)));
+    return (stores ?? []).filter((store) => !hiddenStoreIds.has(String(store.id))).length;
+  }
+
+  async setStoreVisibility(
+    acesId: number,
+    authUserId: string,
+    agentId: string,
+    storeId: string,
+    isVisible: boolean,
+  ) {
+    const { data: store, error: storeError } = await this.locatorClient
+      .from("stores")
+      .select("*")
+      .eq("id", storeId)
+      .eq("aces_id", acesId)
+      .maybeSingle();
+    if (storeError) throw new StoreLocatorError("database_error", "Nao foi possivel validar a filial", storeError);
+    if (!store) throw new StoreLocatorError("not_found", "Filial nao encontrada");
+
+    if (isVisible) {
+      const { error } = await this.locatorClient
+        .from("agent_store_visibility")
+        .delete()
+        .eq("aces_id", acesId)
+        .eq("agent_id", agentId)
+        .eq("store_id", storeId);
+      if (error) throw new StoreLocatorError("database_error", "Nao foi possivel reativar a filial para esta IA", error);
+    } else {
+      const { error } = await this.locatorClient
+        .from("agent_store_visibility")
+        .upsert({
+          aces_id: acesId,
+          agent_id: agentId,
+          store_id: storeId,
+          is_visible: false,
+          updated_by: authUserId,
+        }, { onConflict: "agent_id,store_id" });
+      if (error) throw new StoreLocatorError("database_error", "Nao foi possivel desativar a filial para esta IA", error);
+    }
+
+    return mapStore({
+      ...(store as Record<string, unknown>),
+      is_visible_for_agent: isVisible,
+    });
+  }
+
+  async saveStore(acesId: number, authUserId: string, agentId: string, input: StoreInput) {
     assertStoreInput(input);
     const addressHash = buildAddressHash(input);
     let current: Record<string, unknown> | null = null;
@@ -287,6 +482,8 @@ export class StoreLocatorService {
       updated_by: authUserId,
     };
 
+    if (input.folderId !== undefined) basePayload.folder_id = input.folderId;
+
     if (!current) basePayload.created_by = authUserId;
     if (addressChanged) {
       Object.assign(basePayload, {
@@ -309,7 +506,7 @@ export class StoreLocatorService {
     const { data: saved, error: saveError } = await write;
     if (saveError) throw new StoreLocatorError("database_error", "Nao foi possivel salvar a filial", saveError);
 
-    if (!addressChanged) return mapStore(saved as Record<string, unknown>);
+    if (!addressChanged) return this.mapStoreForAgent(acesId, agentId, saved as Record<string, unknown>);
 
     try {
       const geocode = await this.geocode(buildStoreAddress(input));
@@ -331,7 +528,7 @@ export class StoreLocatorService {
         .select("*")
         .single();
       if (error) throw new StoreLocatorError("database_error", "A filial foi salva, mas o geocode nao foi persistido", error);
-      return mapStore(data as Record<string, unknown>);
+      return this.mapStoreForAgent(acesId, agentId, data as Record<string, unknown>);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha desconhecida no geocode";
       const { data } = await this.locatorClient
@@ -341,21 +538,8 @@ export class StoreLocatorService {
         .eq("aces_id", acesId)
         .select("*")
         .single();
-      return mapStore((data ?? saved) as Record<string, unknown>);
+      return this.mapStoreForAgent(acesId, agentId, (data ?? saved) as Record<string, unknown>);
     }
-  }
-
-  async deactivateStore(acesId: number, authUserId: string, storeId: string) {
-    const { data, error } = await this.locatorClient
-      .from("stores")
-      .update({ is_active: false, ai_visible: false, updated_by: authUserId })
-      .eq("id", storeId)
-      .eq("aces_id", acesId)
-      .select("*")
-      .maybeSingle();
-    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel desativar a filial", error);
-    if (!data) throw new StoreLocatorError("not_found", "Filial nao encontrada");
-    return mapStore(data as Record<string, unknown>);
   }
 
   async recommend(input: {
@@ -379,7 +563,7 @@ export class StoreLocatorService {
     }
 
     const normalizedLocation = normalizeLocationText(locationText);
-    const reused = await this.tryReuseRecommendation(input.acesId, input.leadId, normalizedLocation);
+    const reused = await this.tryReuseRecommendation(input.acesId, input.agentId, input.leadId, normalizedLocation);
     if (reused) {
       return {
         status: reused.isFavorite ? "reused_favorite" : "reused_recommendation",
@@ -393,8 +577,9 @@ export class StoreLocatorService {
 
     const origin = await this.geocode(`${locationText}, Brasil`);
     const limit = Math.min(Math.max(input.candidateLimit ?? 5, 1), 10);
-    const { data: nearestRows, error: nearestError } = await this.locatorClient.rpc("find_nearest_stores", {
+    const { data: nearestRows, error: nearestError } = await this.locatorClient.rpc("find_nearest_stores_for_agent", {
       p_aces_id: input.acesId,
+      p_agent_id: input.agentId,
       p_latitude: origin.latitude,
       p_longitude: origin.longitude,
       p_limit: limit,
@@ -478,6 +663,7 @@ export class StoreLocatorService {
 
   async confirmStore(input: {
     acesId: number;
+    agentId: string;
     leadId: string;
     storeId: string;
     preferenceType: "favorite" | "secondary";
@@ -492,6 +678,8 @@ export class StoreLocatorService {
       .maybeSingle();
     if (storeError) throw new StoreLocatorError("database_error", "Nao foi possivel validar a filial", storeError);
     if (!store) throw new StoreLocatorError("not_found", "Filial nao encontrada ou inativa");
+    const hiddenStoreIds = await this.getHiddenStoreIds(input.acesId, input.agentId, [input.storeId]);
+    if (hiddenStoreIds.has(input.storeId)) throw new StoreLocatorError("not_found", "Filial nao encontrada para este agente");
 
     const { data, error } = await this.locatorClient.rpc("set_lead_store_preference", {
       p_aces_id: input.acesId,
@@ -550,11 +738,12 @@ export class StoreLocatorService {
     }));
   }
 
-  async recommendAlternative(acesId: number, leadId: string) {
+  async recommendAlternative(acesId: number, agentId: string, leadId: string) {
     const { data: event, error: eventError } = await this.locatorClient
       .from("lead_location_events")
       .select("id,recommended_store_id,candidate_store_ids")
       .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
       .eq("lead_id", leadId)
       .order("captured_at", { ascending: false })
       .limit(1)
@@ -575,6 +764,8 @@ export class StoreLocatorService {
       .maybeSingle();
     if (storeError) throw new StoreLocatorError("database_error", "Nao foi possivel carregar a filial alternativa", storeError);
     if (!store) return null;
+    const hiddenStoreIds = await this.getHiddenStoreIds(acesId, agentId, [nextId]);
+    if (hiddenStoreIds.has(nextId)) return null;
 
     const { error: updateError } = await this.locatorClient
       .from("lead_location_events")
@@ -587,6 +778,7 @@ export class StoreLocatorService {
 
   async confirmLatestStore(input: {
     acesId: number;
+    agentId: string;
     leadId: string;
     requestedPreferenceType: "favorite" | "secondary";
     sourceMessageId?: string | null;
@@ -595,6 +787,7 @@ export class StoreLocatorService {
       .from("lead_location_events")
       .select("recommended_store_id")
       .eq("aces_id", input.acesId)
+      .eq("agent_id", input.agentId)
       .eq("lead_id", input.leadId)
       .order("captured_at", { ascending: false })
       .limit(1)
@@ -618,6 +811,7 @@ export class StoreLocatorService {
 
     return this.confirmStore({
       acesId: input.acesId,
+      agentId: input.agentId,
       leadId: input.leadId,
       storeId,
       preferenceType,
@@ -625,11 +819,12 @@ export class StoreLocatorService {
     });
   }
 
-  private async tryReuseRecommendation(acesId: number, leadId: string, normalizedLocation: string) {
+  private async tryReuseRecommendation(acesId: number, agentId: string, leadId: string, normalizedLocation: string) {
     const { data: event, error: eventError } = await this.locatorClient
       .from("lead_location_events")
       .select("normalized_location_text,recommended_store_id,recommended_store_address_hash,latitude,longitude,route_distance_meters,route_duration_seconds")
       .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
       .eq("lead_id", leadId)
       .order("captured_at", { ascending: false })
       .limit(1)
@@ -662,6 +857,8 @@ export class StoreLocatorService {
       .maybeSingle();
     if (storeError) throw new StoreLocatorError("database_error", "Nao foi possivel reutilizar a filial favorita", storeError);
     if (!store) return null;
+    const hiddenStoreIds = await this.getHiddenStoreIds(acesId, agentId, [storeIdToReuse]);
+    if (hiddenStoreIds.has(storeIdToReuse)) return null;
     if (!favoriteStoreId && String(store.address_hash) !== String(event.recommended_store_address_hash ?? "")) return null;
 
     return { store: {

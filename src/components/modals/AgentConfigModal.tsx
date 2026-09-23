@@ -278,12 +278,23 @@ export function AgentConfigModal({
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
 
-    if (
-      !name.trim()
-      || !systemPrompt.trim()
-      || (effectiveAgentType === "primary" && selectedConnectionIds.length === 0)
-      || (effectiveAgentType === "subagent" && (!selectedParentId || !routingInstruction.trim()))
-    ) {
+    if (!name.trim()) {
+      toast.error("Informe o nome do agente.");
+      return;
+    }
+
+    if (!systemPrompt.trim()) {
+      toast.error("Preencha o prompt do agente.");
+      return;
+    }
+
+    if (effectiveAgentType === "primary" && selectedConnectionIds.length === 0) {
+      toast.error("Selecione ao menos uma conexão atendida antes de salvar.");
+      return;
+    }
+
+    if (effectiveAgentType === "subagent" && (!selectedParentId || !routingInstruction.trim())) {
+      toast.error("Selecione o agente principal e informe quando o subagente deve assumir.");
       return;
     }
 

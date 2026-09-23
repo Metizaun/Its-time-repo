@@ -28,7 +28,7 @@
 ```css
 /* Backgrounds */
 var(--color-bg-base)        /* #F7F6F4 — fundo da página */
-var(--color-bg-subtle)      /* #F0EEE9 — sidebar, nav */
+var(--color-bg-subtle)      /* #F4F4F5 — sidebar, nav */
 var(--color-bg-muted)       /* #E8E5DF — dividers, empty states */
 var(--color-bg-inverse)     /* #1A1A18 — tooltips dark */
 

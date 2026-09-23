@@ -88,6 +88,27 @@ services:
       retries: 3
     restart: always
 
+  media-cleanup-worker:
+    build:
+      context: .
+      dockerfile: Project/IA/Dockerfile
+    container_name: chat-query-media-cleanup-worker
+    command: ["node", "dist/media-cleanup-worker-entry.js"]
+    env_file:
+      - .env.local
+      - Project/IA/.env.local
+    environment:
+      - MEDIA_CLEANUP_WORKER_POLL_MS=${MEDIA_CLEANUP_WORKER_POLL_MS:-86400000}
+      - MEDIA_CLEANUP_WORKER_BATCH_SIZE=${MEDIA_CLEANUP_WORKER_BATCH_SIZE:-100}
+      - NODE_ENV=development
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: always
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     profiles:
