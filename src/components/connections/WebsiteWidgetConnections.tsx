@@ -70,15 +70,14 @@ type EditorState = {
   welcomeMessage: string;
   color: string;
   displayName: string;
-  footerUrl: string;
   avatarUrl: string;
-  footerText: string;
 };
 
 type InstallReveal = {
   snippet: string;
   title: string;
   description: string;
+  configurationIssue: string | null;
 };
 
 type WebsiteWidgetConnectionsProps = {
@@ -98,8 +97,6 @@ const emptyEditor: EditorState = {
   color: DEFAULT_COLOR,
   displayName: "",
   avatarUrl: DEFAULT_AVATAR_URL,
-  footerText: "",
-  footerUrl: "",
 };
 
 function errorMessage(error: unknown) {
@@ -222,8 +219,6 @@ export function WebsiteWidgetConnections({
       color: themeValue(connection, "color", DEFAULT_COLOR),
       displayName: themeValue(connection, "agentName"),
       avatarUrl: themeValue(connection, "avatarUrl", DEFAULT_AVATAR_URL),
-      footerText: themeValue(connection, "footerText"),
-      footerUrl: themeValue(connection, "footerUrl"),
     });
     setEditorOpen(true);
   };
@@ -247,8 +242,6 @@ export function WebsiteWidgetConnections({
           color: editor.color,
           agentName: editor.displayName.trim(),
           avatarUrl: editor.avatarUrl.trim(),
-          footerText: editor.footerText.trim(),
-          footerUrl: editor.footerUrl.trim(),
         },
       };
 
@@ -260,8 +253,10 @@ export function WebsiteWidgetConnections({
         setInstallReveal({
           snippet: connection.embedSnippet,
           title: "Agente no site criado",
-          description:
-            "Cole este código antes do fechamento do body, em cada site autorizado.",
+          description: connection.embedSnippet
+            ? "Cole este código antes do fechamento do body, em cada site autorizado."
+            : "Agente criado. Configure a URL pública do front para gerar o código de instalação.",
+          configurationIssue: connection.configurationIssue,
         });
         toast.success("Agente no site criado");
       }
@@ -303,8 +298,10 @@ export function WebsiteWidgetConnections({
       setInstallReveal({
         snippet: updated.embedSnippet,
         title: "Chave renovada",
-        description:
-          "O código anterior parou de funcionar agora. Substitua nos sites autorizados.",
+        description: updated.embedSnippet
+          ? "O código anterior parou de funcionar agora. Substitua nos sites autorizados."
+          : "A chave foi renovada. Configure a URL pública do front para gerar o novo código.",
+        configurationIssue: updated.configurationIssue,
       });
       toast.success("Chave renovada");
       await refreshConnections();
@@ -436,33 +433,35 @@ export function WebsiteWidgetConnections({
                     </div>
                   ) : null}
 
-                  <div className="space-y-2">
-                    <Label htmlFor={`website-widget-snippet-${connection.id}`}>
-                      Código de instalação
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id={`website-widget-snippet-${connection.id}`}
-                        value={connection.embedSnippet}
-                        readOnly
-                        className="min-w-0 font-mono text-xs"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        onClick={() =>
-                          void copyText(
-                            connection.embedSnippet,
-                            "Código copiado",
-                          )
-                        }
-                        aria-label="Copiar código de instalação"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </Button>
+                  {connection.embedSnippet ? (
+                    <div className="space-y-2">
+                      <Label htmlFor={`website-widget-snippet-${connection.id}`}>
+                        Código de instalação
+                      </Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id={`website-widget-snippet-${connection.id}`}
+                          value={connection.embedSnippet}
+                          readOnly
+                          className="min-w-0 font-mono text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          onClick={() =>
+                            void copyText(
+                              connection.embedSnippet,
+                              "Código copiado",
+                            )
+                          }
+                          aria-label="Copiar código de instalação"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
 
                   <div className="grid gap-3 text-sm sm:grid-cols-2">
                     <div className="sm:col-span-2">
@@ -701,41 +700,6 @@ export function WebsiteWidgetConnections({
               />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="website-widget-footer">Assinatura no rodapé</Label>
-                <Input
-                  id="website-widget-footer"
-                  value={editor.footerText}
-                  onChange={(event) =>
-                    setEditor((current) => ({
-                      ...current,
-                      footerText: event.target.value,
-                    }))
-                  }
-                  placeholder="Deixe vazio para não exibir"
-                  disabled={saving}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="website-widget-footer-link">
-                  Link da assinatura
-                </Label>
-                <Input
-                  id="website-widget-footer-link"
-                  value={editor.footerUrl}
-                  onChange={(event) =>
-                    setEditor((current) => ({
-                      ...current,
-                      footerUrl: event.target.value,
-                    }))
-                  }
-                  placeholder="https://itstime.pro"
-                  disabled={saving}
-                />
-              </div>
-            </div>
-
             <div className="space-y-2">
               <Label htmlFor="website-widget-color">Cor do chat</Label>
               <Input
@@ -789,29 +753,36 @@ export function WebsiteWidgetConnections({
             <DialogTitle>{installReveal?.title}</DialogTitle>
             <DialogDescription>{installReveal?.description}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="website-widget-install">Código de instalação</Label>
-            <div className="flex gap-2">
-              <Input
-                id="website-widget-install"
-                value={installReveal?.snippet ?? ""}
-                readOnly
-                className="min-w-0 font-mono text-xs"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() =>
-                  installReveal &&
-                  void copyText(installReveal.snippet, "Código copiado")
-                }
-                aria-label="Copiar código de instalação"
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
+          {installReveal?.configurationIssue ? (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{installReveal.configurationIssue}</span>
             </div>
-          </div>
+          ) : null}
+          {installReveal?.snippet ? (
+            <div className="space-y-2">
+              <Label htmlFor="website-widget-install">Código de instalação</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="website-widget-install"
+                  value={installReveal.snippet}
+                  readOnly
+                  className="min-w-0 font-mono text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() =>
+                    void copyText(installReveal.snippet, "Código copiado")
+                  }
+                  aria-label="Copiar código de instalação"
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <DialogFooter>
             <Button type="button" onClick={() => setInstallReveal(null)}>
               <Check className="h-4 w-4" />

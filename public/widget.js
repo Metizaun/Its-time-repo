@@ -30,6 +30,7 @@
   var BASE = API_BASE + "/api/public/website-widget/" + encodeURIComponent(WIDGET_KEY);
   var STORAGE_KEY = "itstime-widget:" + WIDGET_KEY;
 
+  var BRAND_FOOTER_TEXT = "Desenvolvido por";
   var DEFAULT_FOOTER_LOGO = "/widget-assets/itstime-mark.png";
   var DEFAULT_FOOTER_BRAND = "Its Time";
   var DEFAULT_FOOTER_URL = "https://itstime.pro";
@@ -239,15 +240,11 @@
   }
 
   function buildFooter() {
-    var theme = state.config.theme;
-    var label = theme.footerText;
-    if (!label) return null;
-
     var footer = element("footer", "footer");
     var content = element("span", "brand");
-    content.appendChild(element("span", null, label));
+    content.appendChild(element("span", null, BRAND_FOOTER_TEXT));
 
-    var logo = assetUrl(theme.footerLogoUrl || DEFAULT_FOOTER_LOGO);
+    var logo = assetUrl(DEFAULT_FOOTER_LOGO);
     if (logo) {
       var img = document.createElement("img");
       img.className = "brand-logo";
@@ -259,24 +256,15 @@
       content.appendChild(img);
     }
 
-    var brand =
-      theme.footerBrand === undefined ? DEFAULT_FOOTER_BRAND : theme.footerBrand;
-    if (brand) content.appendChild(element("span", "brand-name", brand));
+    content.appendChild(element("span", "brand-name", DEFAULT_FOOTER_BRAND));
 
-    var href = theme.footerUrl === undefined ? DEFAULT_FOOTER_URL : theme.footerUrl;
-    // http(s) only. The widget runs inside other people's pages, so a
-    // "javascript:" address coming from configuration must never become a link.
-    if (href && /^https?:\/\//i.test(href)) {
-      var link = document.createElement("a");
-      link.className = "brand-link";
-      link.href = href;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.appendChild(content);
-      footer.appendChild(link);
-    } else {
-      footer.appendChild(content);
-    }
+    var link = document.createElement("a");
+    link.className = "brand-link";
+    link.href = DEFAULT_FOOTER_URL;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.appendChild(content);
+    footer.appendChild(link);
 
     return footer;
   }

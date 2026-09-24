@@ -105,6 +105,37 @@ const MESSAGE_MAX_LENGTH = 2000;
 const DEFAULT_WELCOME = "Oi! Como posso ajudar?";
 const HANDOFF_FALLBACK =
   "Tive um problema para responder agora, mas sua mensagem foi registrada e um atendente vai continuar com voce por este canal.";
+const WEBSITE_WIDGET_BRANDING_THEME = {
+  footerText: "Desenvolvido por",
+  footerLogoUrl: "/widget-assets/itstime-mark.png",
+  footerBrand: "Its Time",
+  footerUrl: "https://itstime.pro",
+};
+
+function normalizedWidgetBaseUrl(value: string | undefined) {
+  const candidate = value?.trim();
+  if (!candidate) return null;
+
+  try {
+    const url = new URL(candidate);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return null;
+  }
+}
+
+function websiteWidgetTheme(value: Record<string, unknown> | null | undefined) {
+  return { ...(value ?? {}), ...WEBSITE_WIDGET_BRANDING_THEME };
+}
 
 export class WebsiteWidgetError extends Error {
   constructor(
@@ -231,7 +262,8 @@ export function embedSnippetFor(
   apiBaseUrl: string | undefined,
   publicKey: string,
 ) {
-  const host = (widgetBaseUrl ?? "").replace(/\/$/, "");
+  const host = normalizedWidgetBaseUrl(widgetBaseUrl);
+  if (!host) return "";
   const api = (apiBaseUrl ?? "").replace(/\/$/, "");
   return `<script src="${host}/widget.js" data-widget-key="${publicKey}" data-api="${api}" async></script>`;
 }
@@ -276,7 +308,7 @@ export class WebsiteWidgetService {
     const connection = await this.requireLiveConnection(publicKey, context);
     return {
       welcomeMessage: connection.welcome_message?.trim() || DEFAULT_WELCOME,
-      theme: connection.theme ?? {},
+      theme: websiteWidgetTheme(connection.theme),
     };
   }
 
@@ -956,10 +988,15 @@ export class WebsiteWidgetService {
         400,
       );
     }
-    return value as Record<string, unknown>;
+    return websiteWidgetTheme(value as Record<string, unknown>);
   }
 
   private toPublicConnection(row: ConnectionRow, agent: AgentRow | null): WebsiteWidgetConnection {
+    const embedSnippet = embedSnippetFor(
+      this.publicBaseUrl,
+      this.apiBaseUrl,
+      row.public_key,
+    );
     const issue = !agent
       ? "Agente removido"
       : agent.agent_type !== "primary"
@@ -970,7 +1007,9 @@ export class WebsiteWidgetService {
             ? "Agente sem instancia"
             : (row.allowed_domains ?? []).length === 0
               ? "Nenhum site autorizado"
-              : null;
+              : !embedSnippet
+                ? "URL pública do front inválida ou ausente"
+                : null;
 
     return {
       id: row.id,
@@ -980,12 +1019,12 @@ export class WebsiteWidgetService {
       agentName: agent?.name ?? null,
       instanceName: row.instance_name,
       welcomeMessage: row.welcome_message,
-      theme: row.theme ?? {},
+      theme: websiteWidgetTheme(row.theme),
       allowedDomains: row.allowed_domains ?? [],
       status: row.status,
       ready: !issue,
       configurationIssue: issue,
-      embedSnippet: embedSnippetFor(this.publicBaseUrl, this.apiBaseUrl, row.public_key),
+      embedSnippet,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

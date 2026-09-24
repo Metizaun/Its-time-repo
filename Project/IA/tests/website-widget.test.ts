@@ -93,3 +93,9 @@ test("monta o codigo de instalacao com a chave e o endereco da API", () => {
     '<script src="https://app.exemplo.com/widget.js" data-widget-key="CHAVE123" data-api="https://api.exemplo.com" async></script>',
   );
 });
+
+test("nao gera snippet relativo se a URL publica do widget estiver ausente ou invalida", () => {
+  for (const widgetBaseUrl of [undefined, "", "   ", "/app"]) {
+    assert.equal(embedSnippetFor(widgetBaseUrl, "https://api.exemplo.com", "CHAVE123"), "");
+  }
+});

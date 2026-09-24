@@ -620,8 +620,9 @@ const websiteWidgetService: WebsiteWidgetService = new WebsiteWidgetService({
   supabaseUrl: requireEnv("SUPABASE_URL"),
   serviceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   publicBaseUrl:
-    process.env.WEBSITE_WIDGET_PUBLIC_URL ??
-    process.env.APP_PUBLIC_URL ??
+    process.env.WEBSITE_WIDGET_PUBLIC_URL?.trim() ||
+    process.env.CRM_FRONTEND_PUBLIC_URL?.trim() ||
+    process.env.APP_PUBLIC_URL?.trim() ||
     process.env.VITE_APP_PUBLIC_URL,
   apiBaseUrl:
     process.env.CRM_BACKEND_PUBLIC_URL ??
