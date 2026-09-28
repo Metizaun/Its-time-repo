@@ -138,6 +138,38 @@ export type OpticalCatalogProduct = {
   isActive: boolean;
 };
 
+export type CommercialCategory = "lenses" | "frames" | "services";
+export type CommercialProduct = {
+  id: string;
+  category: CommercialCategory;
+  catalogGroupId: string | null;
+  catalogGroupName: string | null;
+  lensCategory: "single_vision" | "multifocal" | null;
+  sku: string | null;
+  displayName: string;
+  brand: string | null;
+  treatments: string[];
+  description: string | null;
+  priceCents: number;
+  priceKind: "exact" | "starting_at";
+  currency: "BRL";
+  isActive: boolean;
+  images: Array<{ id: string; fileName: string; previewUrl?: string | null; visible: boolean }>;
+};
+export type CommercialCatalogGroup = {
+  id: string;
+  itemType: CommercialCategory;
+  name: string;
+  sortOrder: number;
+  visible: boolean;
+};
+export type CommercialCatalogState = {
+  products: CommercialProduct[];
+  categories: Record<CommercialCategory, boolean>;
+  catalogGroups: CommercialCatalogGroup[];
+  uncategorizedVisibility: Record<CommercialCategory, boolean>;
+};
+
 export type StoreGeocodeStatus = "pending" | "ready" | "failed" | "needs_review";
 
 export type StoreHours = Record<string, Array<{ opensAt: string; closesAt: string }>>;
@@ -228,14 +260,17 @@ export async function listAgentTemplates() {
   const response = await getCrmBackend<{ templates?: AgentTemplate[] }>(
     "/api/agent-templates"
   );
-  return response.templates ?? [];
+  return (response.templates ?? []).map((template) => ({
+    ...template,
+    tools: template.tools.filter((tool) => tool.key !== "prescription_analyst"),
+  }));
 }
 
 export async function listAgentTools(agentId: string) {
   const response = await getCrmBackend<{ tools?: AgentTool[] }>(
     `/api/agents/${encodeURIComponent(agentId)}/tools`
   );
-  return response.tools ?? [];
+  return (response.tools ?? []).filter((tool) => tool.key !== "prescription_analyst");
 }
 
 export async function updateAgentTool(
@@ -498,6 +533,57 @@ export async function deactivateOpticalCatalogProduct(agentId: string, productId
   return deleteCrmBackend<{ success: boolean }>(
     `/api/agents/${encodeURIComponent(agentId)}/tools/prescription_analyst/catalog/${encodeURIComponent(productId)}`,
   );
+}
+
+const commercialCatalogPath = (agentId: string) => `/api/agents/${encodeURIComponent(agentId)}/tools/commercial_catalog`;
+export function listCommercialCatalog(agentId: string) {
+  return getCrmBackend<CommercialCatalogState>(commercialCatalogPath(agentId));
+}
+export async function saveCommercialProduct(agentId: string, input: Omit<CommercialProduct, "id" | "currency" | "isActive" | "images" | "catalogGroupName"> & { id?: string }) {
+  const response = await postCrmBackend<{ product: CommercialProduct }>(`${commercialCatalogPath(agentId)}/products`, input);
+  return response.product;
+}
+export function deactivateCommercialProduct(agentId: string, productId: string) {
+  return deleteCrmBackend<{ success: boolean }>(`${commercialCatalogPath(agentId)}/products/${encodeURIComponent(productId)}`);
+}
+export function moveCommercialProduct(agentId: string, productId: string, catalogGroupId: string | null) {
+  return patchCrmBackend<{ success: boolean }>(
+    `${commercialCatalogPath(agentId)}/products/${encodeURIComponent(productId)}/group`, { catalogGroupId });
+}
+export function setCommercialCategory(agentId: string, category: CommercialCategory, enabled: boolean) {
+  return postCrmBackend<{ success: boolean }>(`${commercialCatalogPath(agentId)}/categories/${category}`, { enabled });
+}
+export async function createCommercialGroup(agentId: string, itemType: CommercialCategory, name: string) {
+  const response = await postCrmBackend<{ group: CommercialCatalogGroup }>(
+    `${commercialCatalogPath(agentId)}/groups`, { itemType, name });
+  return response.group;
+}
+export async function renameCommercialGroup(agentId: string, groupId: string, name: string) {
+  const response = await patchCrmBackend<{ group: CommercialCatalogGroup }>(
+    `${commercialCatalogPath(agentId)}/groups/${encodeURIComponent(groupId)}`, { name });
+  return response.group;
+}
+export function deleteCommercialGroup(agentId: string, groupId: string) {
+  return deleteCrmBackend<{ success: boolean }>(
+    `${commercialCatalogPath(agentId)}/groups/${encodeURIComponent(groupId)}`);
+}
+export function setCommercialGroupVisibility(agentId: string, groupId: string, enabled: boolean) {
+  return postCrmBackend<{ success: boolean }>(
+    `${commercialCatalogPath(agentId)}/groups/${encodeURIComponent(groupId)}/visibility`, { enabled });
+}
+export function setCommercialUncategorizedVisibility(agentId: string, itemType: CommercialCategory, enabled: boolean) {
+  return postCrmBackend<{ success: boolean }>(
+    `${commercialCatalogPath(agentId)}/uncategorized/${itemType}/visibility`, { enabled });
+}
+export async function uploadCommercialImage(agentId: string, productId: string, input: { fileName: string; mimeType: string; base64: string }) {
+  const response = await postCrmBackend<{ image: { id: string } }>(`${commercialCatalogPath(agentId)}/products/${encodeURIComponent(productId)}/images`, input);
+  return response.image;
+}
+export function setCommercialImageVisibility(agentId: string, imageId: string, enabled: boolean) {
+  return postCrmBackend<{ success: boolean }>(`${commercialCatalogPath(agentId)}/images/${encodeURIComponent(imageId)}/visibility`, { enabled });
+}
+export function deactivateCommercialImage(agentId: string, imageId: string) {
+  return deleteCrmBackend<{ success: boolean }>(`${commercialCatalogPath(agentId)}/images/${encodeURIComponent(imageId)}`);
 }
 
 export async function getForwardingSetup(agentId: string) {

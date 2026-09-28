@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildAgendaAvailabilityAttempts,
+  buildRescheduleAppointmentStep,
   buildCompanyLookupAttempts,
   createAgendaContext,
   isGenericAgendaServiceQuery,
@@ -10,6 +11,7 @@ import {
   parseAgendaRequest,
   readAgendaContext,
   setPresentedAgendaOptions,
+  validateRescheduleRequest,
 } from "../agenda-subworkflow.js";
 
 test("company lookup recovery uses five increasingly broad attempts", () => {
@@ -99,6 +101,133 @@ test("numbered choices are valid for thirty minutes", () => {
     confirmation: "unknown",
   }, new Date("2026-07-27T12:30:01.000Z"));
   assert.equal(expired.selectedOption, null);
+});
+
+test("reschedule selection accepts only the option explicitly present in the customer message", () => {
+  const now = new Date("2026-09-25T12:00:00.000Z");
+  const context = setPresentedAgendaOptions(createAgendaContext(now), [
+    { reference: "1", kind: "appointment", id: "event-1", label: "quinta-feira, 01 de out., 15:00" },
+    { reference: "2", kind: "appointment", id: "event-2", label: "sexta-feira, 02 de out., 09:30" },
+  ], now);
+
+  const explicitChoice = validateRescheduleRequest(context, {
+    intent: "reschedule",
+    optionReference: "2",
+    confirmation: "unknown",
+  }, "Quero o agendamento 2", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(explicitChoice.optionReference, "2");
+
+  const explicitTime = validateRescheduleRequest(setPresentedAgendaOptions(createAgendaContext(now), [
+    { reference: "1", kind: "slot", id: "slot-1", label: "quinta-feira, 01 de out., 09:15" },
+    { reference: "2", kind: "slot", id: "slot-2", label: "quinta-feira, 01 de out., 15:00" },
+  ], now), {
+    intent: "reschedule",
+    optionReference: "2",
+    confirmation: "unknown",
+  }, "Quero o horário das 15h", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(explicitTime.optionReference, "2");
+
+  const ambiguousReply = validateRescheduleRequest(context, {
+    intent: "reschedule",
+    optionReference: "1",
+    confirmation: "unknown",
+  }, "Nao entendi", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(ambiguousReply.optionReference, undefined);
+});
+
+test("reschedule confirmation requires a fresh pending choice and matching yes or no", () => {
+  const now = new Date("2026-09-25T12:00:00.000Z");
+  const presented = setPresentedAgendaOptions(createAgendaContext(now), [
+    { reference: "1", kind: "slot", id: "slot-1", label: "quinta-feira, 01 de out., 09:15" },
+  ], now);
+  const pending = { ...presented, selectedOption: presented.presentedOptions[0] };
+
+  const yesWithoutSelection = validateRescheduleRequest(presented, {
+    intent: "reschedule",
+    confirmation: "yes",
+  }, "Sim", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(yesWithoutSelection.confirmation, "unknown");
+
+  const confirmed = validateRescheduleRequest(pending, {
+    intent: "reschedule",
+    confirmation: "yes",
+  }, "Sim", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(confirmed.confirmation, "yes");
+
+  const rejected = validateRescheduleRequest(pending, {
+    intent: "reschedule",
+    confirmation: "no",
+  }, "Não", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(rejected.confirmation, "no");
+
+  const clarification = validateRescheduleRequest(pending, {
+    intent: "reschedule",
+    confirmation: "no",
+  }, "Nao entendi", new Date("2026-09-25T12:05:00.000Z"));
+  assert.equal(clarification.confirmation, "unknown");
+
+  const expiredConfirmation = validateRescheduleRequest(pending, {
+    intent: "reschedule",
+    confirmation: "yes",
+  }, "Sim", new Date("2026-09-25T12:31:00.000Z"));
+  assert.equal(expiredConfirmation.confirmation, "unknown");
+
+  const expiredOption = validateRescheduleRequest(presented, {
+    intent: "reschedule",
+    optionReference: "1",
+  }, "opção 1", new Date("2026-09-25T12:31:00.000Z"));
+  assert.equal(expiredOption.optionReference, undefined);
+});
+
+test("reschedule asks to confirm one appointment and to choose when there are several", () => {
+  const one = buildRescheduleAppointmentStep([
+    { reference: "1", kind: "appointment", id: "event-1", label: "quinta-feira, 01 de out., 15:00" },
+  ]);
+  assert.equal(one.status, "needs_confirmation");
+  assert.equal(one.selectedOption?.id, "event-1");
+  assert.match(one.message, /15:00/u);
+
+  const multiple = buildRescheduleAppointmentStep([
+    { reference: "1", kind: "appointment", id: "event-1", label: "quinta-feira, 01 de out., 15:00" },
+    { reference: "2", kind: "appointment", id: "event-2", label: "sexta-feira, 02 de out., 09:30" },
+  ]);
+  assert.equal(multiple.status, "needs_input");
+  assert.equal(multiple.selectedOption, null);
+  assert.match(multiple.message, /1\..*2\./u);
+
+  assert.equal(buildRescheduleAppointmentStep([]).status, "empty");
+});
+
+test("Filippe clarification does not select a slot and a later yes only confirms the appointment", () => {
+  const now = new Date("2026-09-25T12:00:00.000Z");
+  const presented = setPresentedAgendaOptions(createAgendaContext(now), [
+    { reference: "1", kind: "appointment", id: "event-1", label: "quinta-feira, 01 de out., 15:00" },
+  ], now);
+  const pendingAppointment = {
+    ...presented,
+    selectedOption: presented.presentedOptions[0],
+  };
+
+  const clarification = validateRescheduleRequest(pendingAppointment, {
+    intent: "reschedule",
+    optionReference: "1",
+    confirmation: "unknown",
+  }, "Nao entendi", new Date("2026-09-25T12:01:00.000Z"));
+  assert.equal(clarification.optionReference, undefined);
+  const afterClarification = mergeAgendaRequest(pendingAppointment, clarification, new Date("2026-09-25T12:01:00.000Z"));
+  assert.equal(afterClarification.appointmentEventId, null);
+
+  const repeatedPrompt = {
+    ...setPresentedAgendaOptions(afterClarification, pendingAppointment.presentedOptions, new Date("2026-09-25T12:02:00.000Z")),
+    selectedOption: pendingAppointment.presentedOptions[0],
+  };
+  const confirmation = validateRescheduleRequest(repeatedPrompt, {
+    intent: "reschedule",
+    confirmation: "yes",
+  }, "Sim", new Date("2026-09-25T12:03:00.000Z"));
+  const afterConfirmation = mergeAgendaRequest(repeatedPrompt, confirmation, new Date("2026-09-25T12:03:00.000Z"));
+  assert.equal(afterConfirmation.appointmentEventId, "event-1");
+  assert.equal(afterConfirmation.selectedOption?.kind, "appointment");
 });
 
 test("changing company clears dependent professional and service choices", () => {

@@ -11,6 +11,11 @@
       "type": "string",
       "format": "uuid"
     },
+    "PublicConnectionId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{48}$",
+      "description": "ID público e estável da conexão Its Time que originou o evento. Use-o para rotear o evento ao grupo cadastrado."
+    },
     "Timestamp": {
       "type": "string",
       "format": "date-time"
@@ -228,9 +233,10 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resource"],
+          "required": ["schemaVersion", "publicConnectionId", "eventId", "eventType", "occurredAt", "resource"],
           "properties": {
             "schemaVersion": { "const": "1.0" },
+            "publicConnectionId": { "$ref": "#/$defs/PublicConnectionId" },
             "eventId": { "$ref": "#/$defs/Uuid" },
             "eventType": { "const": "integration.test" },
             "occurredAt": { "$ref": "#/$defs/Timestamp" },
@@ -241,9 +247,10 @@
         },
         {
           "type": "object",
-          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "required": ["schemaVersion", "publicConnectionId", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
           "properties": {
             "schemaVersion": { "const": "1.0" },
+            "publicConnectionId": { "$ref": "#/$defs/PublicConnectionId" },
             "eventId": { "$ref": "#/$defs/Uuid" },
             "eventType": { "const": "unit.upserted" },
             "occurredAt": { "$ref": "#/$defs/Timestamp" },
@@ -254,9 +261,10 @@
         },
         {
           "type": "object",
-          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "required": ["schemaVersion", "publicConnectionId", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
           "properties": {
             "schemaVersion": { "const": "1.0" },
+            "publicConnectionId": { "$ref": "#/$defs/PublicConnectionId" },
             "eventId": { "$ref": "#/$defs/Uuid" },
             "eventType": { "const": "professional.upserted" },
             "occurredAt": { "$ref": "#/$defs/Timestamp" },
@@ -267,9 +275,10 @@
         },
         {
           "type": "object",
-          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "required": ["schemaVersion", "publicConnectionId", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
           "properties": {
             "schemaVersion": { "const": "1.0" },
+            "publicConnectionId": { "$ref": "#/$defs/PublicConnectionId" },
             "eventId": { "$ref": "#/$defs/Uuid" },
             "eventType": { "const": "availability.upserted" },
             "occurredAt": { "$ref": "#/$defs/Timestamp" },
@@ -280,9 +289,10 @@
         },
         {
           "type": "object",
-          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "required": ["schemaVersion", "publicConnectionId", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
           "properties": {
             "schemaVersion": { "const": "1.0" },
+            "publicConnectionId": { "$ref": "#/$defs/PublicConnectionId" },
             "eventId": { "$ref": "#/$defs/Uuid" },
             "eventType": { "const": "patient.upserted" },
             "occurredAt": { "$ref": "#/$defs/Timestamp" },
@@ -293,9 +303,10 @@
         },
         {
           "type": "object",
-          "required": ["schemaVersion", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
+          "required": ["schemaVersion", "publicConnectionId", "eventId", "eventType", "occurredAt", "resourceVersion", "resource"],
           "properties": {
             "schemaVersion": { "const": "1.0" },
+            "publicConnectionId": { "$ref": "#/$defs/PublicConnectionId" },
             "eventId": { "$ref": "#/$defs/Uuid" },
             "eventType": { "enum": ["appointment.created", "appointment.rescheduled", "appointment.cancelled", "appointment.status_changed"] },
             "occurredAt": { "$ref": "#/$defs/Timestamp" },

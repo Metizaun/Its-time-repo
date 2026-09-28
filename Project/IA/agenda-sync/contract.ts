@@ -149,6 +149,7 @@ export type AgendaOutboundResourceByEvent = {
 
 export type AgendaOutboundEnvelope<T extends AgendaOutboundEventType = AgendaOutboundEventType> = {
   schemaVersion: typeof AGENDA_SCHEMA_VERSION;
+  publicConnectionId: string;
   eventId: string;
   eventType: T;
   occurredAt: string;
@@ -188,6 +189,7 @@ export class AgendaContractError extends Error {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PUBLIC_CONNECTION_ID_PATTERN = /^[0-9a-f]{48}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const MONEY_PATTERN = /^(?:0|[1-9]\d*)\.\d{2}$/;
@@ -229,6 +231,14 @@ function text(value: unknown, field: string, maxLength = 200): string {
   const normalized = value.trim();
   if (normalized.length > maxLength) {
     throw new AgendaContractError(`${field} excede ${maxLength} caracteres`, "too_long", field);
+  }
+  return normalized;
+}
+
+function publicConnectionId(value: unknown) {
+  const normalized = text(value, "publicConnectionId", 48);
+  if (!PUBLIC_CONNECTION_ID_PATTERN.test(normalized)) {
+    throw new AgendaContractError("publicConnectionId deve ter 48 caracteres hexadecimais", "invalid_public_connection_id", "publicConnectionId");
   }
   return normalized;
 }
@@ -570,6 +580,7 @@ export function validateAgendaOutboundEnvelope(input: unknown): AgendaOutboundEn
     : integer(base.envelope.resourceVersion, "resourceVersion", 1);
   return {
     schemaVersion: AGENDA_SCHEMA_VERSION,
+    publicConnectionId: publicConnectionId(base.envelope.publicConnectionId),
     eventId: base.eventId,
     eventType,
     occurredAt: base.occurredAt,

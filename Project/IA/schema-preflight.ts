@@ -999,20 +999,23 @@ async function validateOpticsTemplate(agentsClient: SupabaseClient<any, any, any
     );
   }
 
-  const { count, error: toolsError } = await agentsClient
+  const { data: templateTools, error: toolsError } = await agentsClient
     .from("agent_template_tools")
-    .select("tool_key", { count: "exact", head: true })
+    .select("tool_key")
     .eq("template_key", "optics-consultant")
     .eq("template_version", 1);
   if (toolsError) {
     return buildSchemaFailure("agents.agent_template_tools optics-consultant", AGENTS_TOOLS_BI_MIGRATION, toolsError);
   }
-  return count === 6
+  const installed = new Set((templateTools ?? []).map((tool) => String(tool.tool_key)));
+  const required = ["ai_audio", "forwarding", "send_media", "visagism", "commercial_catalog"];
+  const missing = required.filter((toolKey) => !installed.has(toolKey));
+  return missing.length === 0
     ? null
     : buildManualSchemaFailure(
         "agents.agent_template_tools optics-consultant",
-        AGENTS_TOOLS_BI_MIGRATION,
-        `Esperadas 6 Tools; encontradas ${count ?? 0}`
+        "supabase/migrations/20260924211013_commercial_catalog_and_inbound_media.sql",
+        `Tools obrigatorias ausentes: ${missing.join(", ")}`
       );
 }
 
@@ -2054,6 +2057,62 @@ export async function assertRuntimeSchemaCompatibility(
       ["id", "aces_id", "agent_tool_id", "lens_category", "display_name", "brand", "treatments", "description", "price_cents", "is_active"],
       "crm.optical_catalog_products",
       "supabase/migrations/20260918120000_add_optical_catalog_products.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "commercial_catalog_products",
+      ["id", "aces_id", "category", "catalog_group_id", "display_name", "brand", "sku", "price_cents", "price_kind", "is_active"],
+      "crm.commercial_catalog_products",
+      "supabase/migrations/20260924225706_commercial_catalog_custom_categories.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "commercial_catalog_groups",
+      ["id", "aces_id", "item_type", "name", "sort_order"],
+      "crm.commercial_catalog_groups",
+      "supabase/migrations/20260924225706_commercial_catalog_custom_categories.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "commercial_catalog_images",
+      ["id", "aces_id", "product_id", "storage_path", "is_active"],
+      "crm.commercial_catalog_images",
+      "supabase/migrations/20260924211013_commercial_catalog_and_inbound_media.sql"
+    ),
+    validateSelectedColumns(
+      serviceClient,
+      "inbound_media_analyses",
+      ["id", "aces_id", "lead_id", "message_id", "attachment_id", "status", "kind", "result", "attempt_count"],
+      "crm.inbound_media_analyses",
+      "supabase/migrations/20260924211013_commercial_catalog_and_inbound_media.sql"
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "commercial_catalog_categories",
+      ["aces_id", "agent_id", "category", "is_enabled"],
+      "agents.commercial_catalog_categories",
+      "supabase/migrations/20260924211013_commercial_catalog_and_inbound_media.sql"
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "commercial_catalog_group_visibility",
+      ["aces_id", "agent_id", "catalog_group_id", "is_enabled"],
+      "agents.commercial_catalog_group_visibility",
+      "supabase/migrations/20260924225706_commercial_catalog_custom_categories.sql"
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "commercial_catalog_uncategorized_visibility",
+      ["aces_id", "agent_id", "item_type", "is_enabled"],
+      "agents.commercial_catalog_uncategorized_visibility",
+      "supabase/migrations/20260924225706_commercial_catalog_custom_categories.sql"
+    ),
+    validateSelectedColumns(
+      agentsClient,
+      "commercial_catalog_image_visibility",
+      ["aces_id", "agent_id", "image_id", "is_enabled"],
+      "agents.commercial_catalog_image_visibility",
+      "supabase/migrations/20260924211013_commercial_catalog_and_inbound_media.sql"
     ),
     validateSelectedColumns(
       serviceClient,

@@ -40,7 +40,7 @@ export type AgendaScopeOptions = {
   assignments: Array<{ id: string; location_name: string; is_active: boolean; professional_id: string; professionals?: { name?: string } | null }>;
 };
 export type AgendaConnectionInput = Pick<AgendaConnection, "name" | "outboundUrl" | "scopeMode" | "unitIds" | "assignmentIds" | "defaultTimezone">;
-export type AgendaSecrets = { inboundSecret: string; outboundSecret: string };
+export type AgendaConnectionSetup = { publicConnectionId: string; inboundSecret: string; outboundSecret: string };
 export type AgendaDelivery = Record<string, unknown> & { id: string; event_id: string; outcome: string; created_at: string; http_status?: number | null };
 export type AgendaDeadLetter = Record<string, unknown> & { id: string; event_id: string; event_type: string; sequence: number; dead_lettered_at: string; last_error_message?: string | null };
 export type AgendaAudit = { id: string; actor_id: string | null; action: string; details: Record<string, unknown>; created_at: string };
@@ -61,7 +61,7 @@ export async function getAgendaScopeOptions() {
 }
 
 export async function createAgendaConnection(input: AgendaConnectionInput) {
-  return postCrmBackend<{ connection: AgendaConnection } & AgendaSecrets>(base, input);
+  return postCrmBackend<{ connection: AgendaConnection } & AgendaConnectionSetup>(base, input);
 }
 
 export async function updateAgendaConnection(id: string, input: Partial<AgendaConnectionInput>) {

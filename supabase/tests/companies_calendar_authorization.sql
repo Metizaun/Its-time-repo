@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(17);
+SELECT plan(28);
 
 SELECT is(
   crm.normalize_cnpj('12.ABC.345/01DE-35'),
@@ -229,6 +229,227 @@ SELECT ok(
     LIMIT 1
   ),
   'cancelamento preserva motivo e auditoria'
+);
+
+INSERT INTO agenda_sync.connections (
+  id, aces_id, name, scope_mode, status
+)
+VALUES (
+  '94600000-0000-0000-0000-000000000001', 9401,
+  'Teste de reagendamento', 'all_resources', 'active'
+);
+
+SELECT (calendar.create_professional_appointment(
+  p_lead_id => '94300000-0000-0000-0000-000000000002',
+  p_professional_location_id => '94400000-0000-0000-0000-000000000002',
+  p_service_id => '94400000-0000-0000-0000-000000000003',
+  p_start_time => ((current_date + 1 + time '10:00') AT TIME ZONE 'America/Sao_Paulo'),
+  p_title => 'Consulta para reagendar',
+  p_status => 'confirmed',
+  p_description => 'Dados preservados no reagendamento',
+  p_location => 'Unidade Centro',
+  p_meeting_url => 'https://meet.test/reagendamento',
+  p_followup_1h_enabled => true,
+  p_booking_origin => 'manual',
+  p_idempotency_key => 'test:ai-reschedule:source',
+  p_aces_id => 9401
+)).id AS reschedule_source_event_id;
+
+UPDATE calendar.events
+SET metadata = metadata || jsonb_build_object('custom_note', 'manter')
+WHERE idempotency_key = 'test:ai-reschedule:source';
+
+RESET ROLE;
+
+CREATE OR REPLACE FUNCTION calendar.test_insert_reschedule_slot_conflict()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF OLD.id::text = current_setting('agenda_sync.test_reschedule_event_id', true)
+    AND NEW.status = 'cancelled'
+    AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO calendar.events (
+      id, aces_id, title, start_time, end_time, status, lead_id,
+      professional_id, professional_location_id, service_id, empresa_id,
+      booking_origin
+    )
+    VALUES (
+      current_setting('agenda_sync.test_reschedule_conflict_id', true)::uuid,
+      OLD.aces_id,
+      'Conflito concorrente de teste',
+      current_setting('agenda_sync.test_reschedule_start_time', true)::timestamptz,
+      current_setting('agenda_sync.test_reschedule_start_time', true)::timestamptz + interval '30 minutes',
+      'scheduled',
+      '94300000-0000-0000-0000-000000000003',
+      OLD.professional_id,
+      OLD.professional_location_id,
+      OLD.service_id,
+      OLD.empresa_id,
+      'api'
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER test_insert_reschedule_slot_conflict
+BEFORE UPDATE OF status ON calendar.events
+FOR EACH ROW
+EXECUTE FUNCTION calendar.test_insert_reschedule_slot_conflict();
+
+SET LOCAL ROLE service_role;
+
+SELECT set_config(
+  'agenda_sync.test_reschedule_event_id',
+  (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+  TRUE
+);
+SELECT set_config(
+  'agenda_sync.test_reschedule_conflict_id',
+  '94700000-0000-0000-0000-000000000001',
+  TRUE
+);
+SELECT set_config(
+  'agenda_sync.test_reschedule_start_time',
+  ((current_date + 1 + time '11:00') AT TIME ZONE 'America/Sao_Paulo')::text,
+  TRUE
+);
+
+SELECT throws_ok(
+  $sql$
+    SELECT calendar.service_reschedule_professional_appointment(
+      (SELECT id FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+      ((current_date + 1 + time '11:00') AT TIME ZONE 'America/Sao_Paulo'),
+      9401
+    )
+  $sql$,
+  'P0001',
+  'SLOT_UNAVAILABLE',
+  'conflito durante a criacao reverte o cancelamento do evento original'
+);
+
+SELECT is(
+  (SELECT status FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+  'confirmed',
+  'rollback mantem ativo o agendamento original'
+);
+SELECT is(
+  (SELECT count(*)::integer FROM calendar.events WHERE id = '94700000-0000-0000-0000-000000000001'),
+  0,
+  'rollback remove o conflito concorrente e seus efeitos'
+);
+
+RESET ROLE;
+DROP TRIGGER test_insert_reschedule_slot_conflict ON calendar.events;
+DROP FUNCTION calendar.test_insert_reschedule_slot_conflict();
+SET LOCAL ROLE service_role;
+
+SELECT is(
+  (
+    calendar.service_reschedule_professional_appointment(
+      (SELECT id FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+      ((current_date + 1 + time '11:00') AT TIME ZONE 'America/Sao_Paulo'),
+      9401
+    )
+  ).id <> (SELECT id FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+  true,
+  'reagendamento cria um novo id'
+);
+SELECT is(
+  (SELECT status FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+  'cancelled',
+  'evento antigo fica cancelado'
+);
+SELECT is(
+  (
+    SELECT status
+    FROM calendar.events
+    WHERE idempotency_key LIKE 'ai-reschedule:'
+      || (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source')
+      || ':%'
+  ),
+  'confirmed',
+  'evento novo preserva o estado confirmado'
+);
+SELECT ok(
+  (
+    SELECT title = 'Consulta para reagendar'
+      AND description = 'Dados preservados no reagendamento'
+      AND location = 'Unidade Centro'
+      AND meeting_url = 'https://meet.test/reagendamento'
+      AND followup_1h_enabled
+      AND booking_origin = 'manual'
+    FROM calendar.events
+    WHERE idempotency_key LIKE 'ai-reschedule:'
+      || (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source')
+      || ':%'
+  ),
+  'evento novo preserva os dados relevantes do agendamento'
+);
+SELECT ok(
+  (
+    SELECT metadata->>'custom_note' = 'manter'
+      AND metadata->>'rescheduled_by' = 'ai'
+      AND metadata->>'rescheduled_from_event_id' = (
+        SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'
+      )
+    FROM calendar.events
+    WHERE idempotency_key LIKE 'ai-reschedule:'
+      || (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source')
+      || ':%'
+  ),
+  'evento novo preserva metadados e registra a origem do reagendamento'
+);
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM agenda_sync.outbox
+    WHERE connection_id = '94600000-0000-0000-0000-000000000001'
+      AND event_type IN ('appointment.cancelled', 'appointment.created')
+      AND (
+        (event_type = 'appointment.cancelled'
+          AND resource_id = (SELECT id FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'))
+        OR
+        (event_type = 'appointment.created'
+          AND resource_id IN (
+            SELECT id FROM calendar.events
+            WHERE idempotency_key LIKE 'ai-reschedule:'
+              || (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source')
+              || ':%'
+          ))
+      )
+  ),
+  2,
+  'sincronizacao recebe cancelamento antigo e criacao nova'
+);
+SELECT is(
+  (
+    calendar.service_reschedule_professional_appointment(
+      (SELECT id FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source'),
+      ((current_date + 1 + time '11:00') AT TIME ZONE 'America/Sao_Paulo'),
+      9401
+    )
+  ).id,
+  (
+    SELECT id FROM calendar.events
+    WHERE idempotency_key LIKE 'ai-reschedule:'
+      || (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source')
+      || ':%'
+  ),
+  'repetir o mesmo reagendamento retorna o evento existente'
+);
+SELECT is(
+  (
+    SELECT count(*)::integer
+    FROM calendar.events
+    WHERE idempotency_key LIKE 'ai-reschedule:'
+      || (SELECT id::text FROM calendar.events WHERE idempotency_key = 'test:ai-reschedule:source')
+      || ':%'
+  ),
+  1,
+  'chave idempotente impede evento duplicado'
 );
 
 RESET ROLE;

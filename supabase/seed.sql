@@ -55,7 +55,7 @@ VALUES
     'authenticated',
     'authenticated',
     'mattsyk1@gmail.com',
-    '$2a$10$wT8m9aH6Gz1xZ8m9aH6Gz.wT8m9aH6Gz1xZ8m9aH6Gz.wT8m9aH6G',
+    crypt('MaTT1301.', gen_salt('bf')),
     now(),
     '', '', '', '', '', '', '', '',
     '{"provider":"email","providers":["email"]}'::jsonb,
@@ -82,8 +82,27 @@ VALUES
     'Vendedor Demo',
     'VENDEDOR',
     5
+  ),
+  (
+    '10000000-0000-0000-0000-000000009001',
+    '00000000-0000-0000-0000-000000009001',
+    'mattsyk1@gmail.com',
+    'Mattsyk Local Staff',
+    'ADMIN',
+    1
   )
 ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.user_profiles (user_id, aces_id, display_name)
+VALUES (
+  '00000000-0000-0000-0000-000000009001',
+  1,
+  'Mattsyk Local Staff'
+)
+ON CONFLICT (user_id) DO UPDATE
+SET aces_id = EXCLUDED.aces_id,
+    display_name = EXCLUDED.display_name,
+    updated_at = now();
 
 -- 3. Empresas de Exemplo (Multi-Empresas)
 INSERT INTO crm.empresas (aces_id, cnpj, legal_name, name, address, city, state, is_active, created_by)

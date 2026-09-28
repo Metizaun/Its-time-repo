@@ -4,7 +4,7 @@ tags:
   - project/its-time
   - type/integration-guide
 status: "approved"
-last_updated: 2026-09-15
+last_updated: 2026-09-25
 author: "Equipe Its Time"
 ---
 
@@ -25,15 +25,16 @@ Existem dois webhooks:
 | Parceiro → Its Time | O sistema parceiro faz `POST` no endpoint público do Its Time | Reporta somente o resultado do atendimento: `done` ou `no_show`. |
 
 O parceiro não cria, altera horário, cancela ou configura agendamentos na v1.
-Todos os IDs que aparecem no contrato são UUIDs do Its Time. Mantenha uma
-tabela local para relacionar esses IDs aos registros internos do parceiro.
+IDs de recursos são UUIDs do Its Time; `publicConnectionId` é um identificador
+público de conexão com 48 caracteres hexadecimais. Mantenha uma tabela local
+para relacionar os UUIDs de recursos aos registros internos do parceiro.
 
 ## 2. Início rápido
 
 1. O administrador cria a conexão no painel **Conexões → Integrações → Agenda Universal**.
 2. O administrador cadastra a URL HTTPS pública que receberá os eventos.
 3. O Its Time gera `publicConnectionId`, `inboundSecret` e `outboundSecret`.
-4. O cliente entrega os valores ao Dev por um canal seguro, nunca por código, navegador ou log.
+4. O cliente vincula o `publicConnectionId` à base do grupo no RB antes do teste ou da ativação. Segredos são compartilhados por canal seguro, nunca por código ou log.
 5. O parceiro implementa o webhook receptor, valida a assinatura e responde com `2xx`.
 6. O administrador executa o teste de conexão e ativa a integração.
 7. A ativação envia uma ressincronização inicial antes da operação normal.
@@ -45,9 +46,12 @@ tabela local para relacionar esses IDs aos registros internos do parceiro.
 | `inboundSecret` | Parceiro | Assinar o evento enviado ao Its Time. |
 | `outboundSecret` | Its Time | Assinar o webhook enviado ao parceiro. |
 
-Os segredos são exibidos somente na criação ou rotação. Ao rotacionar, aceite
-temporariamente o segredo anterior durante a janela de transição informada
-pela operação.
+O `publicConnectionId` fica disponível nos detalhes da conexão e também aparece
+na janela de criação. Ele é estável durante a vida da conexão; recriar a conexão
+gera outro ID. Mais de um ID pode ser vinculado à mesma base no RB. O ID não é
+segredo; `inboundSecret` e `outboundSecret` são exibidos somente na criação ou
+rotação. Ao rotacionar um segredo, aceite temporariamente o anterior durante a
+janela de transição informada pela operação.
 
 ## 3. Autenticação HMAC
 
@@ -73,7 +77,10 @@ propriedades alteram os bytes e invalidam a assinatura.
 ## 4. Eventos enviados pelo Its Time
 
 Todos os eventos são enviados para a mesma URL configurada na conexão. O tipo
-fica no campo `eventType`:
+fica no campo `eventType`. Cada evento de saída também inclui
+`publicConnectionId`, o ID da conexão que o originou. O RB usa esse valor para
+selecionar a base do grupo; várias conexões podem apontar para a mesma base.
+Como o campo faz parte do corpo JSON, fica coberto pela assinatura HMAC.
 
 | `eventType` | Uso |
 | --- | --- |
@@ -96,6 +103,7 @@ Envelope ilustrativo:
 ```json
 {
   "schemaVersion": "1.0",
+  "publicConnectionId": "4f5a39c0d310a4b91f8de2c770a1b2c3d4e5f60718293a4b",
   "eventId": "9c0c3d11-1e3e-4a18-8c19-02ab7c4d2001",
   "eventType": "appointment.created",
   "occurredAt": "2026-09-15T15:00:00Z",
@@ -126,6 +134,17 @@ Envelope ilustrativo:
   }
 }
 ```
+
+### Ressincronização inicial
+
+A ativação inicial e a ação **Ressincronizar** enviam um `POST` separado para
+cada recurso, usando os mesmos envelopes dos eventos normais. O snapshot envia,
+nesta ordem, os eventos `unit.upserted`, `professional.upserted`,
+`availability.upserted`, `patient.upserted` e `appointment.created`; em seguida,
+entrega as mudanças capturadas durante o snapshot. Recursos fora do escopo não
+são enviados. Cada evento traz o mesmo `publicConnectionId` da conexão, mas tem
+seu próprio `eventId` e `resourceVersion`. Os exemplos `resync*` no OpenAPI
+mostram os corpos enviados em cada etapa.
 
 Persista `eventId` antes de confirmar o processamento. Se o mesmo evento chegar
 novamente, não aplique a alteração duas vezes; responda `2xx` novamente.

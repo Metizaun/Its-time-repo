@@ -1,0 +1,213 @@
+Em contato com a Aline, coletei algumas informações para iniciar o processo para a IA Bento:
+
+
+
+- Qual é o tipo de operação do cliente?
+
+
+
+DISTRIBUIDORA,LABORATORIO E PERSONALIZAÇÃO DE ITENS
+
+
+
+- Qual é o principal objetivo da IA?
+
+
+
+CONTATOS, DIRECIONAMENTO, CONTATO HUMANIZADO, DÚVIDAS SOBRE VENDAS, TODA A PARTE COMERCIAL, E DUVIDAS SOBRE A PARTE DO LABORATORIO
+
+
+
+- Quais tipos de atendimento a IA deverá realizar?
+
+
+
+CONTATOS, DIRECIONAMENTO, CONTATO HUMANIZADO, MANDAR MENSAGENS QUINZENAL, PARA SABER SOBRE A VENDA E COMPRA, VER CATALOGO, VENDAS E AFINS
+
+
+
+- O que a IA deverá conseguir resolver sozinha?
+
+CONSULTAR, DADOS DE VENDAS, PRODUTOS
+
+PRIMEIRO CONTATO > CADASTRAR O CLIENTE CASO ELE NÃO TENHA CADASTRO, FAZER A VENDA OU DIRECIONAR PARA A DISTRIBUIDORA. E DEPOIS DA VENDA, FAZER O PROXIMO PASSO, QUE É EMITIR A
+
+NOTAS, E MOSTRAR O ANDAMENTO DA VENDA.
+
+
+
+VENDAS PJ, E PESQUISAR SE A PESSOA JA É CLIENTE, E SE NÃO FOR VER A NECESSIDADE DELE, PARA ENTENDER SE PODE OU NÃO SEGUIR COM O ATENDIMENTO.
+
+TER RESTRIÇÃO PARA CLIENTES NORMAIS, NÃO VENDE PARA PESSOA FISICA.
+
+
+
+- O que a IA não poderá resolver ou informar?
+
+VERIFICAR SE É CLIENTE OU NÃO, E DIRECIONAR PARA OS VENDEDORES, VER SOBRE STATUS, DAI SE NÃO CONSEGUIR DIRECIONAMENTO PARA O ATENDIMENTO.
+
+
+
+
+
+- Quais informações a IA precisa coletar do cliente no início do atendimento?
+
+CNPJ, OU CPF SE TIVER CADASTRO, NOME DA LOJA E DONO, TELEFONE ,CASO SEJA CPF INFORMAR A REGIÃO DO CLIENTE
+
+
+
+
+
+- Como o atendimento funciona atualmente, do início até a resolução?
+
+PROSPECÇÃO ATÉ O FIM DA VENDA.
+
+BRINDES E PERSONALIZAÇÃO
+
+
+
+- Quais são os principais motivos que levam um cliente a entrar em contato?
+
+
+
+SE JÁ É CLIENTE PREÇOS E AFINS, E PROXIMIDADE DA DISTRIBUIDORA
+
+SE É CLIENTE NOVO INDICAÇÕES.
+
+
+
+
+
+- Em quais situações a IA deverá encaminhar o atendimento para um humano?
+
+CASO ELE SOLICITAR, OU ELA NÃO TER RESPOSTAS PARA AS PERGUNTAS DO CLIENTE.
+
+
+
+
+
+- Existem diferentes setores ou equipes de atendimento? Quais?
+
+PERSONALIZAÇÃO: LOHANA E HELTON
+
+DISTRIBUIDORA BELEM: RITA  , VANESSA, TAIANE, TAIS JOSY
+
+DISTRIBUIDORA CAMPO GRANDE: JULIA E ROSE.
+
+DISTRIBUIDORA RIBEIRAO PRETO: ANGELICA E SARA
+
+
+
+
+
+- Para qual pessoa, setor ou equipe cada tipo de atendimento deverá ser encaminhado?
+
+ADMIN: ALINE E CESAR.
+
+PERSONALIZAÇÃO: LOHANA E HELTON
+
+DISTRIBUIDORA BELEM: RITA  , VANESSA, TAIANE, TAIS JOSY
+
+DISTRIBUIDORA CAMPO GRANDE: JULIA E ROSE.
+
+DISTRIBUIDORA RIBEIRAO PRETO: ANGELICA E SARA
+
+
+
+
+
+- Existem diferentes unidades/lojas? Como o cliente será direcionado para cada uma?
+
+
+
+CLIENTE COLOCAR QUE QUER FALAR COM DETERMINADA LOJA ELE DIRECIONAR
+
+
+
+
+
+- Existe outra IA, automação ou sistema que participa do atendimento?
+
+CLUBE DE PREMIAÇÃO, CLUBE SPAQUI ESSE É O CLUBE DE BENEFICIOS DA DISTIBUIDORA / FIDELIMAX É A PLATAFORMA
+
+
+
+
+
+- Quais informações comerciais a IA precisa consultar ou informar?
+
+Produtos, preços, promoções, HORARIO COMERCIAL 8 condições etc.
+
+VISITAS, PARA LOJAS OU LABORATORIO, ABRIR AGENDA COM O REPRESENTANTE
+
+
+
+
+
+- Quais informações ou regras precisam estar disponíveis para a IA não fornecer respostas incorretas?
+
+CASO O CLIENTE QUEIRA SABER FORMA DE PAGAMENTO,
+
+
+
+
+
+- Quantos usuários utilizarão o sistema e quem será o responsável pela operação da IA?
+
+
+
+RESPONSAVEIS : ALINE, CESAR
+
+PERSONALIZAÇÃO LOHANA E HELTON
+
+DISTRIBUIDORA BELEM RITA  , VANESSA, TAIANE, TAIS JOSY
+
+CAMPO GRANDE, JULIA E ROSE.
+
+RIBEIRAO ANGELICA E SARA
+
+
+
+
+
+- Qual número de WhatsApp será utilizado e qual tipo de API será utilizada? Oficial, não oficial
+
+Oficial
+
+11- 910481405 IA
+
+
+
+
+
+- Haverá encaminhamento interno entre usuários ou setores? Como deverá funcionar?
+
+CHAT INTERNO, ENTRE OS FUNCIONARIS,E AS LOJAS, E TODA A ROTINA
+
+
+
+
+
+- Haverá disparos ativos? Se sim, qual objetivo, público, mensagem e fluxo após a resposta?
+
+APENAS QUANDO FINALIZAR A COMPRA, PARA OS CLIENTES QUE COMPRARAM.
+
+
+
+
+
+- Existe alguma situação específica que a IA precisa tratar e que ainda não foi mencionada?
+
+RECLAMAÇÕES, OU INSATISFAÇÃO,DEFEITOS E DIRECIONAR PARA OS RESPONSAVEIS
+
+
+
+Seguir com essas informações para criar a Ia, pois o formulário esta voltado para outro ramo que não é o da DSL.
+
+
+
+
+
+
+
+Obrigada.

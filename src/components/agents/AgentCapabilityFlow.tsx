@@ -12,6 +12,7 @@ import {
   Trash2,
   WalletCards,
   MapPinned,
+  ShoppingBag,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -28,6 +29,7 @@ const TOOL_ICONS: Partial<Record<AgentTool["key"], LucideIcon>> = {
   rb_billing: WalletCards,
   visagism: Glasses,
   store_locator: MapPinned,
+  commercial_catalog: ShoppingBag,
 };
 
 type AgentCapabilityFlowProps = {

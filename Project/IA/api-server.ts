@@ -4904,6 +4904,74 @@ app.post("/api/agents/:id/tools/send_media/catalog/assets/:assetId/restore", aut
   res.json(await manager.restoreAgentMedia(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.assetId)));
 }));
 
+app.get("/api/agents/:id/tools/commercial_catalog", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.listCommercialCatalog(req.authContext!, getSingleParam(req.params.id)));
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/products", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const product = await manager.saveCommercialProduct(req.authContext!, getSingleParam(req.params.id), {
+    id: typeof req.body?.id === "string" ? req.body.id : null,
+    category: req.body?.category,
+    catalogGroupId: typeof req.body?.catalogGroupId === "string" ? req.body.catalogGroupId : null,
+    lensCategory: req.body?.lensCategory ?? null,
+    sku: typeof req.body?.sku === "string" ? req.body.sku : null,
+    displayName: String(req.body?.displayName ?? ""),
+    brand: typeof req.body?.brand === "string" ? req.body.brand : null,
+    treatments: Array.isArray(req.body?.treatments) ? req.body.treatments.map(String) : [],
+    description: typeof req.body?.description === "string" ? req.body.description : null,
+    priceCents: Number(req.body?.priceCents),
+    priceKind: req.body?.priceKind === "starting_at" ? "starting_at" : "exact",
+  });
+  res.json({ product });
+}));
+app.delete("/api/agents/:id/tools/commercial_catalog/products/:productId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.deactivateCommercialProduct(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.productId)));
+}));
+app.patch("/api/agents/:id/tools/commercial_catalog/products/:productId/group", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const catalogGroupId = typeof req.body?.catalogGroupId === "string" ? req.body.catalogGroupId : null;
+  res.json(await manager.moveCommercialProduct(req.authContext!, getSingleParam(req.params.id),
+    getSingleParam(req.params.productId), catalogGroupId));
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/categories/:category", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  if (typeof req.body?.enabled !== "boolean") throw new HttpError(400, "enabled deve ser booleano");
+  res.json(await manager.setCommercialCategory(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.category) as "lenses" | "frames" | "services", req.body.enabled === true));
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/groups", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const group = await manager.createCommercialGroup(req.authContext!, getSingleParam(req.params.id),
+    req.body?.itemType, String(req.body?.name ?? ""));
+  res.status(201).json({ group });
+}));
+app.patch("/api/agents/:id/tools/commercial_catalog/groups/:groupId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const group = await manager.renameCommercialGroup(req.authContext!, getSingleParam(req.params.id),
+    getSingleParam(req.params.groupId), String(req.body?.name ?? ""));
+  res.json({ group });
+}));
+app.delete("/api/agents/:id/tools/commercial_catalog/groups/:groupId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.deleteCommercialGroup(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.groupId)));
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/groups/:groupId/visibility", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  if (typeof req.body?.enabled !== "boolean") throw new HttpError(400, "enabled deve ser booleano");
+  res.json(await manager.setCommercialGroupVisibility(req.authContext!, getSingleParam(req.params.id),
+    getSingleParam(req.params.groupId), req.body.enabled));
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/uncategorized/:itemType/visibility", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  if (typeof req.body?.enabled !== "boolean") throw new HttpError(400, "enabled deve ser booleano");
+  res.json(await manager.setCommercialUncategorizedVisibility(req.authContext!, getSingleParam(req.params.id),
+    getSingleParam(req.params.itemType) as "lenses" | "frames" | "services", req.body.enabled));
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/products/:productId/images", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const image = await manager.uploadCommercialImage(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.productId), {
+    fileName: String(req.body?.fileName ?? ""), mimeType: String(req.body?.mimeType ?? ""), base64: String(req.body?.base64 ?? ""),
+  });
+  res.status(201).json({ image });
+}));
+app.post("/api/agents/:id/tools/commercial_catalog/images/:imageId/visibility", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  if (typeof req.body?.enabled !== "boolean") throw new HttpError(400, "enabled deve ser booleano");
+  res.json(await manager.setCommercialImageVisibility(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.imageId), req.body.enabled === true));
+}));
+app.delete("/api/agents/:id/tools/commercial_catalog/images/:imageId", authMiddleware, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  res.json(await manager.deactivateCommercialImage(req.authContext!, getSingleParam(req.params.id), getSingleParam(req.params.imageId)));
+}));
+
 app.get(
   "/api/agents/:id/tools/prescription_analyst/catalog",
   authMiddleware,

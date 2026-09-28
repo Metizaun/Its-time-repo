@@ -58,6 +58,8 @@ A conta é resolvida exclusivamente pela conexão autenticada. `agenda_sync.conn
 
 Qualquer tentativa de enviar `aces_id`, identificadores internos ou empresa de outra conta no corpo é recusada como payload inválido e auditada; o valor nunca é usado para roteamento. Mesma regra já aplicada na cobrança plugável.
 
+Essa restrição vale para o corpo recebido pelo Its Time. Nos eventos enviados ao parceiro, o Its Time inclui `publicConnectionId`, um identificador público e estável da conexão. O RB pode mapear cada ID para uma base de grupo; múltiplas conexões podem apontar para a mesma base. O campo faz parte do corpo assinado e não substitui a autenticação HMAC.
+
 Uma conexão pode cobrir a conta inteira, incluindo locais independentes (`all_resources`), ou somente unidades e locais independentes selecionados (`selected_scope`). No segundo caso, apenas unidades, assignments independentes, profissionais, grades, pacientes e agendamentos relacionados ao escopo vinculado podem ser exportados. As relações ficam em `agenda_sync.connection_units` e `agenda_sync.connection_assignments`; o escopo nunca é inferido do corpo recebido.
 
 ### 2.5 A Agenda Universal vive em Conexões
@@ -124,6 +126,7 @@ Um evento por requisição. Sem lote na v1 — a ordem importa e o lote a torna 
 ```json
 {
   "schemaVersion": "1.0",
+  "publicConnectionId": "4f5a39c0d310a4b91f8de2c770a1b2c3d4e5f60718293a4b",
   "eventId": "9f1c7c4e-2a3b-4d51-9e77-1b5c0a2f8d34",
   "eventType": "appointment.created",
   "occurredAt": "2026-09-11T14:30:00-03:00",
@@ -135,6 +138,7 @@ Um evento por requisição. Sem lote na v1 — a ordem importa e o lote a torna 
 | Campo             | Obrigatório  | Regra                                                                                                                                                                                  |
 | ----------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `schemaVersion`   | sim          | Sempre `"1.0"` na v1.                                                                                                                                                                  |
+| `publicConnectionId` | sim na saída | ID de 48 caracteres hexadecimais da conexão que originou o evento. Permanece estável durante a vida da conexão e identifica o grupo pelo mapeamento mantido pelo parceiro.             |
 | `eventId`         | sim          | UUID único do evento. É também o valor obrigatório do cabeçalho `Idempotency-Key`. Permanece igual em toda retentativa da mesma entrega.                                               |
 | `eventType`       | sim          | Valor do catálogo da seção 4.2. Desconhecido deve ser ignorado com `200`.                                                                                                              |
 | `occurredAt`      | sim          | ISO 8601 com timezone. Registra quando a mudança ocorreu, mas não é usado sozinho para resolver concorrência.                                                                          |

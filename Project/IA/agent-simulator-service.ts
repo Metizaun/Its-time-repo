@@ -3,6 +3,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 
 import { generateCentralStructuredResponse } from "./central-ai-provider.js";
+import { restrictCommercialCatalog, searchCommercialCatalog,
+  type CommercialCategory, type CommercialProduct, type CommercialResult } from "./commercial-catalog.js";
 import { HttpError } from "./sdr-agent-gemini.js";
 import { InternalChatService } from "./internal-chat-service.js";
 
@@ -100,6 +102,10 @@ function asString(value: unknown, fallback = "") {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+function normalizeCatalogText(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -147,6 +153,7 @@ function toolLabel(key: string) {
     prescription_analyst: "Receituário",
     visagism: "Visagismo",
     store_locator: "Buscar filiais",
+    commercial_catalog: "Catálogo comercial",
     send_media: "Enviar mídia",
     rb_billing: "Cobrança",
   };
@@ -255,6 +262,8 @@ export class AgentSimulatorService {
     if (!latestLeadMessage) throw new HttpError(400, "Envie ao menos uma mensagem do lead para iniciar a simulação");
 
     const activeToolKeys = new Set(tools.map((tool) => tool.key));
+    const catalogPreview = activeToolKeys.has("commercial_catalog")
+      ? await this.previewCommercialCatalog(agent, latestLeadMessage.content) : null;
     const conversation = messages
       .map((message) => `${message.role === "lead" ? "Lead" : "Agente"}: ${message.content}`)
       .join("\n");
@@ -276,6 +285,10 @@ export class AgentSimulatorService {
       `Lead fictício: ${JSON.stringify(leadContext)}`,
       `Cenário selecionado: ${asString(input.scenarioKey) || "conversa livre"}`,
       `Ferramentas ativas: ${JSON.stringify(tools.map((tool) => ({ key: tool.key, name: tool.name, description: tool.description })))}`,
+      catalogPreview ? `Catalogo autorizado para esta pergunta: ${JSON.stringify(catalogPreview.products.map((product) => ({
+        name: product.displayName, brand: product.brand, category: product.catalogGroupName,
+        priceCents: product.priceCents, priceKind: product.priceKind, imageCount: product.images.length,
+      }))) }. Use apenas estes dados para falar de itens e precos; nunca afirme estoque.` : null,
       attachments.length > 0
         ? `Anexos temporários no turno atual: ${JSON.stringify(attachments.map((attachment) => ({ kind: attachment.kind, fileName: attachment.fileName, mimeType: attachment.mimeType })))}`
         : null,
@@ -300,10 +313,15 @@ export class AgentSimulatorService {
     });
 
     const toolCalls = generated.parsed.tool_calls.filter((call) => activeToolKeys.has(call.key));
+    if (catalogPreview && /lente|armacao|oculos|servico|catalogo|preco|marca|r\$/i.test(normalizeCatalogText(latestLeadMessage.content))
+      && !toolCalls.some((call) => call.key === "commercial_catalog")) {
+      toolCalls.push({ key: "commercial_catalog", reason: "Consulta de catálogo" });
+    }
     const toolEvents = await Promise.all(toolCalls.map((call) => this.describeToolSimulation(
       agent,
       tools.find((tool) => tool.key === call.key)!,
       call.reason,
+      catalogPreview,
     )));
 
     return {
@@ -471,7 +489,77 @@ export class AgentSimulatorService {
     };
   }
 
-  private async describeToolSimulation(agent: SimulatorAgent, tool: SimulatorTool, reason: string) {
+  private async previewCommercialCatalog(agent: SimulatorAgent, message: string): Promise<CommercialResult> {
+    const [groupsResult, groupAccessResult, uncategorizedResult] = await Promise.all([
+      this.client.from("commercial_catalog_groups").select("id,name").eq("aces_id", agent.aces_id),
+      this.agentsClient.from("commercial_catalog_group_visibility").select("catalog_group_id")
+        .eq("aces_id", agent.aces_id).eq("agent_id", agent.id).eq("is_enabled", true),
+      this.agentsClient.from("commercial_catalog_uncategorized_visibility").select("item_type")
+        .eq("aces_id", agent.aces_id).eq("agent_id", agent.id).eq("is_enabled", true),
+    ]);
+    const accessError = groupsResult.error || groupAccessResult.error || uncategorizedResult.error;
+    if (accessError) throw new HttpError(500, "Falha ao consultar o catálogo no simulador", accessError);
+    const allowedGroups = new Set((groupAccessResult.data ?? []).map((row) => String(row.catalog_group_id)));
+    const allowedUncategorized = new Set((uncategorizedResult.data ?? []).map((row) => String(row.item_type) as CommercialCategory));
+    const groupNames = new Map((groupsResult.data ?? []).map((row) => [String(row.id), String(row.name)]));
+    const rows: Record<string, unknown>[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const { data, error } = await this.client.from("commercial_catalog_products").select("*")
+        .eq("aces_id", agent.aces_id).eq("is_active", true)
+        .order("id").range(offset, offset + 499);
+      if (error) throw new HttpError(500, "Falha ao consultar itens no simulador", error);
+      rows.push(...(data ?? []));
+      if ((data ?? []).length < 500) break;
+    }
+    const products: CommercialProduct[] = rows.map((row) => ({
+      id: String(row.id), category: row.category as CommercialCategory,
+      catalogGroupId: row.catalog_group_id ? String(row.catalog_group_id) : null,
+      catalogGroupName: groupNames.get(String(row.catalog_group_id)) ?? null,
+      lensCategory: row.lens_category === "single_vision" || row.lens_category === "multifocal" ? row.lens_category : null,
+      sku: row.sku ? String(row.sku) : null, displayName: String(row.display_name),
+      brand: row.brand ? String(row.brand) : null,
+      treatments: Array.isArray(row.treatments) ? row.treatments.map(String) : [],
+      description: row.description ? String(row.description) : null,
+      priceCents: Number(row.price_cents), priceKind: row.price_kind === "starting_at" ? "starting_at" : "exact",
+      currency: "BRL", isActive: true, images: [],
+    }));
+    const visibleImageIds = new Set<string>();
+    for (let offset = 0; products.length > 0; offset += 500) {
+      const { data, error } = await this.agentsClient.from("commercial_catalog_image_visibility")
+        .select("image_id").eq("aces_id", agent.aces_id).eq("agent_id", agent.id)
+        .eq("is_enabled", true).order("image_id").range(offset, offset + 499);
+      if (error) throw new HttpError(500, "Falha ao consultar imagens no simulador", error);
+      for (const row of data ?? []) visibleImageIds.add(String(row.image_id));
+      if ((data ?? []).length < 500) break;
+    }
+    const byId = new Map(products.map((product) => [product.id, product]));
+    for (let offset = 0; visibleImageIds.size > 0; offset += 500) {
+      const { data, error } = await this.client.from("commercial_catalog_images")
+        .select("id,product_id,file_name").eq("aces_id", agent.aces_id).eq("is_active", true)
+        .order("id").range(offset, offset + 499);
+      if (error) throw new HttpError(500, "Falha ao consultar imagens no simulador", error);
+      for (const row of data ?? []) if (visibleImageIds.has(String(row.id))) {
+        byId.get(String(row.product_id))?.images.push({ id: String(row.id), fileName: String(row.file_name), visible: true });
+      }
+      if ((data ?? []).length < 500) break;
+    }
+    const visible = restrictCommercialCatalog(products, allowedGroups, allowedUncategorized, visibleImageIds);
+    const normalized = normalizeCatalogText(message);
+    const category: CommercialCategory | null = /armac|oculos/.test(normalized) ? "frames"
+      : /lente/.test(normalized) ? "lenses" : /servic/.test(normalized) ? "services" : null;
+    const brand = [...new Set(visible.map((product) => product.brand).filter((value): value is string => Boolean(value)))]
+      .find((value) => normalized.includes(normalizeCatalogText(value))) ?? null;
+    const groupQuery = [...new Set(visible.map((product) => product.catalogGroupName).filter((value): value is string => Boolean(value)))]
+      .find((value) => normalized.includes(normalizeCatalogText(value))) ?? null;
+    const priceText = message.match(/(?:r\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d{3,6})(?:,\d{2})?/i)?.[0] ?? null;
+    const priceCents = priceText ? Math.round(Number(priceText.replace(/r\$\s*/i, "").replace(/\./g, "").replace(",", ".")) * 100) : null;
+    return searchCommercialCatalog(visible, { action: "search", category, lensCategory: null, brand,
+      query: groupQuery, treatment: null, priceCents: Number.isFinite(priceCents) ? priceCents : null,
+      priceMode: priceText ? /\b(ate|abaixo de|no maximo)\b/.test(normalized) ? "maximum" : "near" : null });
+  }
+
+  private async describeToolSimulation(agent: SimulatorAgent, tool: SimulatorTool, reason: string,
+    catalogPreview: CommercialResult | null = null) {
     const generic = {
       key: tool.key,
       name: tool.name,
@@ -503,6 +591,12 @@ export class AgentSimulatorService {
           .filter((store) => !hiddenStoreIds.has(String(store.id)))
           .map((store) => [store.display_name, store.city, store.state].filter(Boolean).join(" — "));
         return { ...generic, status: "read_only" as const, detail: labels.length ? `Consulta segura disponível: ${labels.join("; ")}.` : "Nenhuma filial ativa encontrada para consulta." };
+      }
+      if (tool.key === "commercial_catalog") {
+        const labels = (catalogPreview?.products ?? []).map((product) =>
+          `${product.displayName} (${(product.priceCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}${product.images.length ? `, ${product.images.length} imagem(ns) liberada(s)` : ""})`);
+        return { ...generic, status: "read_only" as const,
+          detail: labels.length ? `Itens encontrados: ${labels.join("; ")}. Nenhuma imagem foi enviada.` : "Nenhum item autorizado encontrado para esta pergunta." };
       }
       if (tool.key === "send_media") {
         const { data } = await this.agentsClient

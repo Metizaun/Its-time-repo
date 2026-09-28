@@ -15,11 +15,11 @@ SELECT has_index(
   'locator_agent_store_visibility_lookup_idx',
   'visibilidade possui indice por conta e agente'
 );
-SELECT has_index(
-  'locator',
-  'agent_store_visibility',
-  'locator_agent_store_visibility_store_idx',
-  'visibilidade possui indice para cascata por filial'
+SELECT ok(
+  NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'locator'
+    AND tablename = 'agent_store_visibility'
+    AND indexname = 'locator_agent_store_visibility_store_idx'),
+  'visibilidade nao mantem o indice secundario por filial'
 );
 SELECT ok(
   NOT has_table_privilege('anon', 'locator.agent_store_visibility', 'SELECT')

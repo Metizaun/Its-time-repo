@@ -13,7 +13,7 @@ export type AgendaDeliveryRow = {
   event_type: string; envelope: Record<string, unknown>; attempt_count: number;
 };
 
-type DeliveryTarget = { outbound_url: string; status: string };
+type DeliveryTarget = { outbound_url: string; public_id: string; status: string };
 type Credential = { ciphertext: unknown; iv: unknown; auth_tag: unknown; key_version: string };
 export type HttpResult = { status: number; retryAfter?: string; responseExcerpt?: string };
 const webhookHttpsAgent = new https.Agent({ autoSelectFamily: false });
@@ -153,7 +153,7 @@ export class AgendaDeliveryWorker {
     }), Math.max(5_000, Math.floor(leaseMs / 2)));
     try {
       const [{ data: connection, error: connectionError }, { data: credential, error: credentialError }] = await Promise.all([
-        this.agenda.from("connections").select("outbound_url,status").eq("id", row.connection_id)
+        this.agenda.from("connections").select("outbound_url,public_id,status").eq("id", row.connection_id)
           .eq("aces_id", row.aces_id).single(),
         this.agenda.from("credentials").select("ciphertext,iv,auth_tag,key_version")
           .eq("connection_id", row.connection_id).eq("aces_id", row.aces_id).eq("direction", "outbound").single(),
@@ -162,14 +162,16 @@ export class AgendaDeliveryWorker {
       if (credentialError) throw credentialError;
       const target = connection as DeliveryTarget;
       if (!target.outbound_url) throw new Error("AGENDA_OUTBOUND_URL_MISSING");
+      if (!/^[0-9a-f]{48}$/.test(target.public_id)) throw new Error("AGENDA_PUBLIC_CONNECTION_ID_INVALID");
       const encrypted = credential as Credential;
       const secret = new AesGcmSecretCipher(this.config.encryptionKey, this.config.encryptionKeyVersion,
         "AGENDA_SECRETS_ENCRYPTION_KEY", "AGENDA_SECRETS_ENCRYPTION_KEY_VERSION").decrypt({
         ciphertext: fromPostgresBytea(encrypted.ciphertext), iv: fromPostgresBytea(encrypted.iv),
         authTag: fromPostgresBytea(encrypted.auth_tag), keyVersion: encrypted.key_version,
       });
+      const outboundEnvelope = { ...row.envelope, publicConnectionId: target.public_id };
       const result = await (this.config.transport ?? postSignedAgendaWebhook)({
-        url: target.outbound_url, body: Buffer.from(JSON.stringify(row.envelope)), eventId: row.event_id,
+        url: target.outbound_url, body: Buffer.from(JSON.stringify(outboundEnvelope)), eventId: row.event_id,
         secret, timeoutMs: this.config.timeoutMs ?? 10_000,
         maxResponseBytes: this.config.maxResponseBytes ?? 65_536, lookup: this.config.lookup,
       });

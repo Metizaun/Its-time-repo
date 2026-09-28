@@ -361,6 +361,134 @@ export function resolveAgendaOption(
   return semanticMatches.length === 1 ? semanticMatches[0] : null;
 }
 
+function resolveOptionFromCustomerMessage(
+  context: AgendaConversationContext,
+  message: string,
+  now: Date,
+  kind: AgendaPresentedOption["kind"],
+): AgendaPresentedOption | null {
+  const normalized = normalizeAgendaText(message);
+  const optionNumberMatch = normalized.match(/\b(?:opcao|horario|agendamento|evento)(?: numero)? ([1-4])\b/u);
+  const ordinalNames: Record<string, number> = {
+    primeiro: 1,
+    primeira: 1,
+    segundo: 2,
+    segunda: 2,
+    terceiro: 3,
+    terceira: 3,
+    quarto: 4,
+    quarta: 4,
+  };
+  const ordinalMatch = normalized.match(
+    /^(?:quero )?(?:(?:o|a) )?(primeiro|primeira|segundo|segunda|terceiro|terceira|quarto|quarta)(?: (?:opcao|horario|agendamento|evento))?$/u,
+  );
+  const ordinal = Number(optionNumberMatch?.[1]) || ordinalNames[ordinalMatch?.[1] ?? ""];
+  if (ordinal) return resolveAgendaOption(context, String(ordinal), now, kind);
+
+  const compactMessage = normalized.replace(/^(?:quero|escolho|prefiro) /u, "").replace(/^(?:o|a) /u, "");
+  if (!/\d/u.test(compactMessage)) {
+    const directMatch = resolveAgendaOption(context, compactMessage, now, kind);
+    if (directMatch) return directMatch;
+  }
+
+  const timeMatch = message.match(/\b(?:as?\s*)?([01]?\d|2[0-3])(?:(?::|h)\s*([0-5]\d)?)\b/iu)
+    ?? message.match(/\b(?:as|às)\s+([01]?\d|2[0-3])(?:\s*horas?)?\b/iu);
+  if (!timeMatch) return null;
+  const requestedTime = `${timeMatch[1].padStart(2, "0")}:${(timeMatch[2] ?? "00").padStart(2, "0")}`;
+  const timeMatches = context.presentedOptions.filter((option) => {
+    if (option.kind !== kind || !resolveAgendaOption(context, option.reference, now, kind)) return false;
+    const optionTime = option.label.match(/\b([01]\d|2[0-3]):([0-5]\d)\b/u);
+    return optionTime?.[0] === requestedTime;
+  });
+  return timeMatches.length === 1
+    ? resolveAgendaOption(context, timeMatches[0].reference, now, kind)
+    : null;
+}
+
+const AFFIRMATIVE_CONFIRMATIONS = new Set([
+  "sim",
+  "sim por favor",
+  "isso",
+  "confirmo",
+  "pode",
+  "pode ser",
+  "pode confirmar",
+  "esta certo",
+  "e esse",
+  "e esse mesmo",
+  "quero esse",
+  "ok",
+  "certo",
+]);
+const NEGATIVE_CONFIRMATIONS = new Set([
+  "nao",
+  "nao quero",
+  "nao esse",
+  "prefiro outro",
+  "prefiro nao",
+  "quero outro",
+  "melhor outro",
+]);
+
+export function validateRescheduleRequest(
+  contextValue: unknown,
+  request: AgendaRequest,
+  customerMessage: string | null | undefined,
+  now = new Date(),
+): AgendaRequest {
+  if (request.intent !== "reschedule") return request;
+  const context = readAgendaContext(contextValue, now);
+  const normalizedMessage = normalizeAgendaText(customerMessage ?? "");
+  const requestedOption = resolveAgendaOption(context, request.optionReference, now);
+  const messageOption = requestedOption
+    ? resolveOptionFromCustomerMessage(context, customerMessage ?? "", now, requestedOption.kind)
+    : null;
+  const optionReference = requestedOption && messageOption?.id === requestedOption.id
+    ? requestedOption.reference
+    : undefined;
+
+  let confirmation = request.confirmation ?? "unknown";
+  if (confirmation !== "unknown") {
+    const pendingOption = context.selectedOption
+      ? resolveAgendaOption(context, context.selectedOption.reference, now, context.selectedOption.kind)
+      : null;
+    const customerConfirmed = confirmation === "yes"
+      ? AFFIRMATIVE_CONFIRMATIONS.has(normalizedMessage)
+      : NEGATIVE_CONFIRMATIONS.has(normalizedMessage);
+    if (!pendingOption || pendingOption.id !== context.selectedOption?.id || !customerConfirmed) {
+      confirmation = "unknown";
+    }
+  }
+
+  return { ...request, optionReference, confirmation };
+}
+
+export function buildRescheduleAppointmentStep(options: AgendaPresentedOption[]): {
+  status: "empty" | "needs_input" | "needs_confirmation";
+  message: string;
+  selectedOption: AgendaPresentedOption | null;
+} {
+  if (!options.length) {
+    return {
+      status: "empty",
+      message: "Não encontrei agendamentos ativos para alterar.",
+      selectedOption: null,
+    };
+  }
+  if (options.length === 1) {
+    return {
+      status: "needs_confirmation",
+      message: `Encontrei seu agendamento para ${options[0].label}. É esse que você quer alterar?`,
+      selectedOption: options[0],
+    };
+  }
+  return {
+    status: "needs_input",
+    message: `Encontrei mais de um agendamento. Qual deles você quer alterar? ${options.map((option) => `${option.reference}. ${option.label}`).join(" ")}`,
+    selectedOption: null,
+  };
+}
+
 export function mergeAgendaRequest(
   current: AgendaConversationContext,
   request: AgendaRequest,

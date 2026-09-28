@@ -172,9 +172,9 @@ try {
 
   if ($backendAlreadyDocker) {
     Write-Host "CRM backend Docker stack is already running on http://localhost:3000."
-    & docker compose up -d --build collection-worker
+    & docker compose up -d --build backend collection-worker
     if ($LASTEXITCODE -ne 0) {
-      throw "Falha ao iniciar o collection-worker local."
+      throw "Falha ao atualizar o backend e o collection-worker locais."
     }
   } else {
     Write-Host "Starting CRM backend via Docker Compose on http://localhost:3000..."

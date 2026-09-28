@@ -6,6 +6,7 @@ import { isIP } from "node:net";
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import OpenAI, { toFile } from "openai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { restrictCommercialCatalog, searchCommercialCatalog, type CommercialCategory, type CommercialProduct, type CommercialRequest, type CommercialResult } from "./commercial-catalog.js";
 import type { RbVisagismService } from "./rb-visagism-service.js";
 import {
   StoreLocatorError,
@@ -68,6 +69,7 @@ import {
 } from "./phone-normalization.js";
 import {
   buildAgendaAvailabilityAttempts,
+  buildRescheduleAppointmentStep,
   buildCompanyLookupAttempts,
   createAgendaContext,
   isGenericAgendaServiceQuery,
@@ -75,6 +77,7 @@ import {
   parseAgendaRequest,
   readAgendaContext,
   setPresentedAgendaOptions,
+  validateRescheduleRequest,
   type AgendaConversationContext,
   type AgendaPresentedOption,
   type AgendaRequest,
@@ -600,7 +603,7 @@ export type PrescriptionExtraction = NormalizedPrescription & {
   isPrescription: boolean;
 };
 
-export type OpticsImageKind = "prescription" | "face" | "product" | "document" | "other";
+export type OpticsImageKind = "prescription" | "face" | "product" | "payment_receipt" | "invoice" | "document" | "other";
 
 export type FaceAnalysis = {
   faceShape: string | null;
@@ -615,6 +618,17 @@ export type OpticsImageAnalysis = {
   evidence: string[];
   prescription: PrescriptionExtraction | null;
   face: FaceAnalysis | null;
+  document: {
+    summary: string | null;
+    amount: string | null;
+    date: string | null;
+    payer: string | null;
+    payee: string | null;
+    payerTaxId: string | null;
+    payeeTaxId: string | null;
+    transactionId: string | null;
+    invoiceNumber: string | null;
+  } | null;
 };
 
 type VisagismLeadAnswerRow = {
@@ -1146,6 +1160,7 @@ type StructuredModelResponse = {
     reason: string;
     confidence: number;
   };
+  forwarding_facts: ForwardingFactCandidate[];
   lead_verification: {
     checked: boolean;
     reason: string;
@@ -1165,6 +1180,31 @@ type StructuredModelResponse = {
   agenda_request: AgendaRequest;
   store_locator: StoreLocatorDecision;
   optical_catalog_request: OpticalCatalogDecision;
+  commercial_catalog_request: CommercialRequest;
+};
+
+type ForwardingFactSource = "lead_message" | "agent_configuration" | "tool_result" | "previous_handoff";
+
+type ForwardingFactCandidate = {
+  label: string;
+  value: string;
+  source: ForwardingFactSource;
+  evidence: string;
+};
+
+type VerifiedForwardingFact = Omit<ForwardingFactCandidate, "evidence">;
+
+type ForwardingEvidenceSource = {
+  source: Exclude<ForwardingFactSource, "previous_handoff">;
+  content: string;
+};
+
+type ForwardingReplyContext = {
+  phase: "opening" | "followup";
+  sourceAgentName?: string;
+  facts: VerifiedForwardingFact[];
+  topicSummary?: string;
+  nextStep?: string;
 };
 
 type AgendaExecutionResult = {
@@ -1325,6 +1365,116 @@ export function shouldFreezeAfterHandoff(
   return handoff.mode !== "external_notification" && (shouldPause || handoff.triggered);
 }
 
+export function shouldSuppressSourceReplyAfterAgentForwarding(
+  handoff: Pick<HandoffExecutionResult, "triggered" | "mode">,
+) {
+  return handoff.triggered && handoff.mode === "agent";
+}
+
+function normalizeForwardingText(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function filterVerifiedForwardingFacts(
+  candidates: unknown,
+  evidenceSources: ForwardingEvidenceSource[],
+  inheritedFacts: VerifiedForwardingFact[] = [],
+): VerifiedForwardingFact[] {
+  if (!Array.isArray(candidates)) return inheritedFacts.slice(0, 12);
+  const inherited = new Set(inheritedFacts.map((fact) => `${normalizeForwardingText(fact.label)}\u0000${normalizeForwardingText(fact.value)}`));
+  const verified: VerifiedForwardingFact[] = [...inheritedFacts];
+  const seen = new Set(inherited);
+
+  for (const candidate of candidates) {
+    const record = asRecord(candidate);
+    const label = asString(record.label);
+    const value = asString(record.value);
+    const evidence = asString(record.evidence);
+    const source = record.source;
+    if (!label || !value || !evidence || !["lead_message", "agent_configuration", "tool_result", "previous_handoff"].includes(String(source))) continue;
+    const key = `${normalizeForwardingText(label)}\u0000${normalizeForwardingText(value)}`;
+    if (seen.has(key)) continue;
+
+    const evidenceContainsValue = normalizeForwardingText(evidence).includes(normalizeForwardingText(value));
+    const isVerified = source === "previous_handoff"
+      ? inherited.has(key)
+      : evidenceContainsValue && evidenceSources.some((item) => item.source === source && item.content.includes(evidence));
+    if (!isVerified) continue;
+
+    verified.push({
+      label: truncateText(label, 100),
+      value: truncateText(value, 500),
+      source: source as ForwardingFactSource,
+    });
+    seen.add(key);
+    if (verified.length >= 12) break;
+  }
+
+  return verified;
+}
+
+export function buildForwardingContextSnapshot(facts: VerifiedForwardingFact[]): JsonRecord {
+  return {
+    verified_facts: facts.slice(0, 12).map(({ label, value, source }) => ({ label, value, source })),
+  };
+}
+
+export function readForwardingContextFacts(snapshot: unknown): VerifiedForwardingFact[] {
+  const facts = asRecord(snapshot).verified_facts;
+  if (!Array.isArray(facts)) return [];
+  const normalized: VerifiedForwardingFact[] = [];
+  for (const item of facts) {
+    const record = asRecord(item);
+    const label = asString(record.label);
+    const value = asString(record.value);
+    const source = ["lead_message", "agent_configuration", "tool_result", "previous_handoff"].includes(String(record.source))
+      ? record.source as ForwardingFactSource
+      : null;
+    if (!label || !value || !source) continue;
+    normalized.push({ label: truncateText(label, 100), value: truncateText(value, 500), source });
+    if (normalized.length === 12) break;
+  }
+  return normalized;
+}
+
+function isOnlyGenericForwardingGreeting(blocks: string[], fallback: string) {
+  if (blocks.length === 0) return true;
+  const normalizedFallback = normalizeForwardingText(fallback);
+  if (blocks.length === 1 && normalizeForwardingText(blocks[0]) === normalizedFallback) return true;
+
+  const genericGreeting = /^(?:(?:oi|ola|bom dia|boa tarde|boa noite)[,! .]*)?(?:(?:sou|aqui e) [\p{L}0-9 .'-]+[.! ]*)?(?:tudo bem\??[.! ]*)?(?:(?:como posso (?:te )?ajudar|em que posso ajudar)\??[.! ]*)?$/u;
+  return blocks.every((block) => genericGreeting.test(normalizeForwardingText(block)));
+}
+
+export async function generateForwardingOpeningWithRetry(
+  generate: (attempt: 1 | 2) => Promise<string[]>,
+  fallback: string,
+): Promise<{ blocks: string[]; attempts: number; usedFallback: boolean }> {
+  for (const attempt of [1, 2] as const) {
+    try {
+      const blocks = (await generate(attempt)).map((block) => block.trim()).filter(Boolean).slice(0, 3);
+      if (!isOnlyGenericForwardingGreeting(blocks, fallback)) {
+        return { blocks, attempts: attempt, usedFallback: false };
+      }
+    } catch (error) {
+      if (attempt === 2) {
+        console.warn("[crm-ai] Falha ao gerar abertura contextual do encaminhamento:", error);
+      }
+    }
+  }
+  return { blocks: [fallback], attempts: 2, usedFallback: true };
+}
+
+export async function generateAndDeliverForwardingOpening(
+  generate: (attempt: 1 | 2) => Promise<string[]>,
+  fallback: string,
+  deliver: (blocks: string[]) => Promise<unknown>,
+) {
+  const opening = await generateForwardingOpeningWithRetry(generate, fallback);
+  await deliver(opening.blocks);
+  return opening;
+}
+
 function deriveChatSystemKind(message: Pick<MessageRow, "source_type" | "content">): ChatSystemKind | null {
   if (message.source_type !== "system") {
     return null;
@@ -1377,7 +1527,7 @@ function asBoolean(value: unknown): boolean | null {
       return true;
     }
 
-    if (["false", "0", "no", "nao", "não"].includes(normalized)) {
+    if (["false", "0", "no", "nao", "nÃƒÂ£o"].includes(normalized)) {
       return false;
     }
   }
@@ -1852,15 +2002,15 @@ const PRESCRIPTION_BLOCKING_ERROR_CODES = new Set<string>([]);
 export const PRESCRIPTION_MIN_CONFIDENCE: PrescriptionConfidence = 0;
 
 /**
- * Contrato canônico do receituário: 0 = low, 1 = medium, 2 = high.
- * Os formatos antigos são aceitos somente na entrada para não quebrar runs
- * já gerados por modelos que retornavam strings ou números entre 0 e 1.
+ * Contrato canÃƒÂ´nico do receituÃƒÂ¡rio: 0 = low, 1 = medium, 2 = high.
+ * Os formatos antigos sÃƒÂ£o aceitos somente na entrada para nÃƒÂ£o quebrar runs
+ * jÃƒÂ¡ gerados por modelos que retornavam strings ou nÃƒÂºmeros entre 0 e 1.
  */
 export function normalizePrescriptionConfidence(value: unknown): PrescriptionConfidence {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
     if (normalized === "low" || normalized === "baixa" || normalized === "baixo") return 0;
-    if (normalized === "medium" || normalized === "media" || normalized === "médio" || normalized === "medio") return 1;
+    if (normalized === "medium" || normalized === "media" || normalized === "mÃƒÂ©dio" || normalized === "medio") return 1;
     if (normalized === "high" || normalized === "alta" || normalized === "alto") return 2;
     const numeric = Number(normalized);
     if (Number.isFinite(numeric)) value = numeric;
@@ -2055,7 +2205,7 @@ export function enforceAgendaCompanyAddress(
   const addressRequested = /\b(endereco|localizacao|onde fica|como chegar|cep)\b/u.test(normalizedLeadMessage);
   const falseMissingAddress = reply.reply_blocks.some((block) => {
     const normalizedBlock = normalizeAsciiText(block);
-    return /endere[cç]o|localiza[cç][aã]o/u.test(block)
+    return /\b(endereco|localizacao)\b/u.test(normalizedBlock)
       && /nao (?:foi )?(?:disponibilizad[oa]|informad[oa]|cadastrad[oa])|indisponivel/u.test(normalizedBlock);
   });
   if (!addressRequested && !falseMissingAddress) return reply;
@@ -2131,7 +2281,7 @@ function leadMessageNeedsFollowupTimeClarification(value: string) {
     /\b(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?\b/.test(text) ||
     /\b(?:meio dia|meia noite)\b/.test(text);
   const hasClearPeriod =
-    /\b(?:pela manha|de manha|manha|pela tarde|de tarde|tarde|a noite|de noite|noite|depois das|apos as|ap[oó]s as)\b/.test(
+    /\b(?:pela manha|de manha|manha|pela tarde|de tarde|tarde|a noite|de noite|noite|depois das|apos as|ap[oÃƒÂ³]s as)\b/.test(
       text
     );
 
@@ -2258,11 +2408,13 @@ function parseStructuredJson(text: string): StructuredModelResponse {
   const cleaned = text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
   const parsed = JSON.parse(cleaned) as Partial<StructuredModelResponse>;
   const attendanceSummary = asRecord(parsed.attendance_summary);
+  const forwardingFacts = Array.isArray(parsed.forwarding_facts) ? parsed.forwarding_facts : [];
   const leadVerification = asRecord(parsed.lead_verification);
   const nativeFollowup = asRecord(parsed.native_followup);
   const visagism = asRecord(parsed.visagism);
   const storeLocator = asRecord(parsed.store_locator);
   const opticalCatalog = asRecord(parsed.optical_catalog_request);
+  const commercialCatalog = asRecord(parsed.commercial_catalog_request);
 
   return {
     reply_blocks: Array.isArray(parsed.reply_blocks)
@@ -2292,6 +2444,21 @@ function parseStructuredJson(text: string): StructuredModelResponse {
       reason: attendanceSummary.reason ? String(attendanceSummary.reason) : "",
       confidence: clampConfidence(attendanceSummary.confidence),
     },
+    forwarding_facts: forwardingFacts
+      .map((item) => {
+        const record = asRecord(item);
+        const source = ["lead_message", "agent_configuration", "tool_result", "previous_handoff"].includes(String(record.source))
+          ? record.source as ForwardingFactSource
+          : "lead_message";
+        return {
+          label: record.label ? truncateText(String(record.label).trim(), 100) : "",
+          value: record.value ? truncateText(String(record.value).trim(), 500) : "",
+          source,
+          evidence: record.evidence ? truncateText(String(record.evidence).trim(), 500) : "",
+        };
+      })
+      .filter((fact) => fact.label && fact.value && fact.evidence)
+      .slice(0, 12),
     lead_verification: {
       checked: leadVerification.checked === false ? false : true,
       reason: leadVerification.reason ? String(leadVerification.reason) : "",
@@ -2344,6 +2511,20 @@ function parseStructuredJson(text: string): StructuredModelResponse {
         : opticalCatalog.lensCategory === "single_vision" ? "single_vision" : null,
       treatment: asString(opticalCatalog.treatment),
       query: asString(opticalCatalog.query),
+    },
+    commercial_catalog_request: {
+      action: commercialCatalog.action === "search" ? "search" : "none",
+      category: ["lenses", "frames", "services"].includes(String(commercialCatalog.category))
+        ? commercialCatalog.category as CommercialCategory : null,
+      lensCategory: commercialCatalog.lensCategory === "single_vision" || commercialCatalog.lensCategory === "multifocal"
+        ? commercialCatalog.lensCategory : null,
+      brand: asString(commercialCatalog.brand),
+      query: asString(commercialCatalog.query),
+      treatment: asString(commercialCatalog.treatment),
+      priceCents: Number.isInteger(commercialCatalog.priceCents) && Number(commercialCatalog.priceCents) >= 0
+        ? Number(commercialCatalog.priceCents) : null,
+      priceMode: commercialCatalog.priceMode === "near" || commercialCatalog.priceMode === "maximum"
+        ? commercialCatalog.priceMode : null,
     },
   };
 }
@@ -2399,7 +2580,7 @@ export function parseOpticsImageAnalysis(text: string): OpticsImageAnalysis {
   const parsed = asRecord(JSON.parse(cleaned));
   const rawKind = asString(parsed.kind);
   const kind: OpticsImageKind =
-    rawKind === "prescription" || rawKind === "face" || rawKind === "product" || rawKind === "document"
+    rawKind === "prescription" || rawKind === "face" || rawKind === "product" || rawKind === "payment_receipt" || rawKind === "invoice" || rawKind === "document"
       ? rawKind
       : parsed.is_prescription === true
         ? "prescription"
@@ -2408,6 +2589,7 @@ export function parseOpticsImageAnalysis(text: string): OpticsImageAnalysis {
     ? asRecord(parsed.prescription)
     : parsed;
   const faceRecord = asRecord(parsed.face);
+  const documentRecord = asRecord(parsed.document);
 
   return {
     kind,
@@ -2433,6 +2615,19 @@ export function parseOpticsImageAnalysis(text: string): OpticsImageAnalysis {
               : [],
           }
         : null,
+    document: kind === "payment_receipt" || kind === "invoice" || kind === "document"
+      ? {
+          summary: asString(documentRecord.summary),
+          amount: asString(documentRecord.amount),
+          date: asString(documentRecord.date),
+          payer: asString(documentRecord.payer),
+          payee: asString(documentRecord.payee),
+          payerTaxId: asString(documentRecord.payer_tax_id),
+          payeeTaxId: asString(documentRecord.payee_tax_id),
+          transactionId: asString(documentRecord.transaction_id),
+          invoiceNumber: asString(documentRecord.invoice_number),
+        }
+      : null,
   };
 }
 
@@ -2572,6 +2767,12 @@ function resolveMessagingSource(sourceType?: string): MessagingSource {
 function isTransientGeminiError(error: unknown) {
   const message = extractExternalErrorMessage(error) ?? (error instanceof Error ? error.message : "");
   return /\b(429|500|503|504)\b/i.test(message) || /high demand|temporar|try again later|unavailable|timeout/i.test(message);
+}
+
+export function shouldRetryInboundMediaRead(error: unknown, attempt: number) {
+  return attempt < 3 && !isAiBudgetBlockedError(error)
+    && (isTransientGeminiError(error) || error instanceof SyntaxError
+      || (error instanceof Error && error.message === "Falha ao baixar o anexo para leitura"));
 }
 
 export function isTransientVisagismError(error: unknown) {
@@ -4197,6 +4398,7 @@ export class AgentManager {
       tools: (templateTools ?? [])
         .filter(
           (binding) =>
+            binding.tool_key !== "prescription_analyst" &&
             binding.template_key === template.template_key &&
             Number(binding.template_version) === Number(template.version)
         )
@@ -4886,7 +5088,7 @@ export class AgentManager {
 
     const rbBillingReady = (await this.getRbBillingState(context.acesId)).ready;
     return (bindings ?? [])
-      .filter((binding) => binding.tool_key !== "rb_billing" || rbBillingReady)
+      .filter((binding) => binding.tool_key !== "prescription_analyst" && (binding.tool_key !== "rb_billing" || rbBillingReady))
       .map((binding) => {
       const definition = definitionMap.get(
         `${String(binding.tool_key)}:${Number(binding.tool_version)}`
@@ -5130,7 +5332,7 @@ export class AgentManager {
 
     const isRbBillingTool = toolKey === "rb_billing";
     if (isRbBillingTool && input.config !== undefined) {
-      throw new HttpError(422, "A Tool CobranÃ§a RB Ã© configurada no Administrativo");
+      throw new HttpError(422, "A Tool CobranÃƒÆ’Ã‚Â§a RB ÃƒÆ’Ã‚Â© configurada no Administrativo");
     }
 
     const nextConfig =
@@ -5398,6 +5600,340 @@ export class AgentManager {
     }
   }
 
+  private mapCommercialProduct(row: Record<string, unknown>, groupName: string | null = null): CommercialProduct {
+    return {
+      id: String(row.id), category: row.category as CommercialCategory,
+      catalogGroupId: asString(row.catalog_group_id), catalogGroupName: groupName,
+      lensCategory: row.lens_category === "single_vision" || row.lens_category === "multifocal" ? row.lens_category : null,
+      sku: asString(row.sku), displayName: String(row.display_name), brand: asString(row.brand),
+      treatments: Array.isArray(row.treatments) ? row.treatments.map(String) : [],
+      description: asString(row.description), priceCents: Number(row.price_cents),
+      priceKind: row.price_kind === "starting_at" ? "starting_at" : "exact",
+      currency: "BRL", isActive: row.is_active === true, images: [],
+    };
+  }
+
+  private async fetchCommercialProductRows(acesId: number, categories?: string[]) {
+    const rows: Record<string, unknown>[] = [];
+    for (let offset = 0; ; offset += 500) {
+      let query = this.serviceClient.from("commercial_catalog_products").select("*")
+        .eq("aces_id", acesId).eq("is_active", true).order("id").range(offset, offset + 499);
+      if (categories) query = query.in("category", categories);
+      const { data, error } = await query;
+      if (error) throw new HttpError(500, "Nao foi possivel consultar produtos comerciais", error);
+      rows.push(...(data ?? []));
+      if ((data ?? []).length < 500) break;
+    }
+    return rows;
+  }
+
+  private async fetchCommercialImageRows(acesId: number) {
+    const rows: Record<string, unknown>[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const { data, error } = await this.serviceClient.from("commercial_catalog_images")
+        .select("*").eq("aces_id", acesId).eq("is_active", true).order("id").range(offset, offset + 499);
+      if (error) throw new HttpError(500, "Nao foi possivel consultar imagens comerciais", error);
+      rows.push(...(data ?? []));
+      if ((data ?? []).length < 500) break;
+    }
+    return rows;
+  }
+
+  private async fetchCommercialVisibleImageIds(acesId: number, agentId: string, imageIds?: string[]) {
+    const visible = new Set<string>();
+    const batches = imageIds
+      ? Array.from({ length: Math.ceil(imageIds.length / 100) }, (_, index) => imageIds.slice(index * 100, (index + 1) * 100))
+      : [null];
+    for (const batch of batches) {
+      for (let offset = 0; ; offset += 500) {
+        let query = this.agentsClient.from("commercial_catalog_image_visibility")
+          .select("image_id").eq("aces_id", acesId).eq("agent_id", agentId)
+          .eq("is_enabled", true).order("image_id").range(offset, offset + 499);
+        if (batch) query = query.in("image_id", batch);
+        const { data, error } = await query;
+        if (error) throw new HttpError(500, "Nao foi possivel validar visibilidade de imagens", error);
+        for (const row of data ?? []) visible.add(String(row.image_id));
+        if ((data ?? []).length < 500) break;
+      }
+    }
+    return visible;
+  }
+
+  async listCommercialCatalog(context: AuthContext, agentId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const [productRows, categoriesResult, imageRows, enabledImages, groupsResult,
+      groupVisibilityResult, uncategorizedResult] = await Promise.all([
+      this.fetchCommercialProductRows(context.acesId),
+      this.agentsClient.from("commercial_catalog_categories").select("category,is_enabled").eq("aces_id", context.acesId).eq("agent_id", agentId),
+      this.fetchCommercialImageRows(context.acesId),
+      this.fetchCommercialVisibleImageIds(context.acesId, agentId),
+      this.serviceClient.from("commercial_catalog_groups").select("id,item_type,name,sort_order")
+        .eq("aces_id", context.acesId).order("sort_order").order("name"),
+      this.agentsClient.from("commercial_catalog_group_visibility").select("catalog_group_id,is_enabled")
+        .eq("aces_id", context.acesId).eq("agent_id", agentId),
+      this.agentsClient.from("commercial_catalog_uncategorized_visibility").select("item_type,is_enabled")
+        .eq("aces_id", context.acesId).eq("agent_id", agentId),
+    ]);
+    const error = categoriesResult.error || groupsResult.error || groupVisibilityResult.error || uncategorizedResult.error;
+    if (error) throw new HttpError(500, "Nao foi possivel listar o catalogo comercial", error);
+    const groupNames = new Map((groupsResult.data ?? []).map((row) => [String(row.id), String(row.name)]));
+    const products = productRows.map((row: Record<string, unknown>) => this.mapCommercialProduct(
+      row, groupNames.get(String(row.catalog_group_id)) ?? null,
+    ));
+    const byId = new Map(products.map((product) => [product.id, product]));
+    for (const row of imageRows) {
+      const product = byId.get(String(row.product_id));
+      if (!product) continue;
+      const signed = await this.serviceClient.storage.from("commercial-catalog").createSignedUrl(String(row.storage_path), this.chatSignedDownloadTtlSeconds);
+      product.images.push({ id: String(row.id), fileName: String(row.file_name), previewUrl: signed.data?.signedUrl ?? null, visible: enabledImages.has(String(row.id)) });
+    }
+    const enabledGroups = new Set((groupVisibilityResult.data ?? [])
+      .filter((row) => row.is_enabled === true).map((row) => String(row.catalog_group_id)));
+    return { products, categories: { lenses: false, frames: false, services: false,
+      ...Object.fromEntries((categoriesResult.data ?? []).map((row) => [row.category, row.is_enabled === true])) },
+      catalogGroups: (groupsResult.data ?? []).map((row) => ({ id: String(row.id),
+        itemType: row.item_type as CommercialCategory, name: String(row.name), sortOrder: Number(row.sort_order),
+        visible: enabledGroups.has(String(row.id)) })),
+      uncategorizedVisibility: { lenses: false, frames: false, services: false,
+        ...Object.fromEntries((uncategorizedResult.data ?? []).map((row) => [row.item_type, row.is_enabled === true])) } };
+  }
+
+  async saveCommercialProduct(context: AuthContext, agentId: string, input: {
+    id?: string | null; category: CommercialCategory; lensCategory?: "single_vision" | "multifocal" | null;
+    catalogGroupId?: string | null;
+    sku?: string | null; displayName: string; brand?: string | null; treatments?: string[];
+    description?: string | null; priceCents: number; priceKind: "exact" | "starting_at";
+  }) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (!["lenses", "frames", "services"].includes(input.category) || !input.displayName.trim()
+      || !Number.isSafeInteger(input.priceCents) || input.priceCents < 0) throw new HttpError(400, "Produto ou preco invalido");
+    if (input.category === "lenses" && input.lensCategory
+      && input.lensCategory !== "single_vision" && input.lensCategory !== "multifocal") {
+      throw new HttpError(400, "Tipo de lente invalido");
+    }
+    if (input.catalogGroupId) {
+      const { data: group, error: groupError } = await this.serviceClient.from("commercial_catalog_groups")
+        .select("id").eq("id", input.catalogGroupId).eq("aces_id", context.acesId)
+        .eq("item_type", input.category).maybeSingle();
+      if (groupError) throw new HttpError(500, "Nao foi possivel validar a categoria", groupError);
+      if (!group) throw new HttpError(400, "Categoria nao pertence a este tipo ou conta");
+    }
+    const payload = { aces_id: context.acesId, category: input.category,
+      ...(input.catalogGroupId === undefined ? {} : { catalog_group_id: input.catalogGroupId }),
+      lens_category: input.category === "lenses" ? input.lensCategory ?? null : null,
+      sku: input.category === "services" ? null : input.sku?.trim() || null,
+      display_name: input.displayName.trim(),
+      brand: input.category === "services" ? null : input.brand?.trim() || null,
+      treatments: input.category === "lenses"
+        ? [...new Set((input.treatments ?? []).map((item) => item.trim()).filter(Boolean))] : [],
+      description: input.description?.trim() || null, price_cents: input.priceCents,
+      price_kind: input.priceKind === "starting_at" ? "starting_at" : "exact" };
+    const result = input.id
+      ? await this.serviceClient.from("commercial_catalog_products").update(payload).eq("id", input.id).eq("aces_id", context.acesId).select("*").single()
+      : await this.serviceClient.from("commercial_catalog_products").insert(payload).select("*").single();
+    if (result.error) throw new HttpError(result.error.code === "23505" ? 409 : 500, "Nao foi possivel salvar o produto", result.error);
+    return this.mapCommercialProduct(result.data);
+  }
+
+  async deactivateCommercialProduct(context: AuthContext, agentId: string, productId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data, error } = await this.serviceClient.from("commercial_catalog_products")
+      .update({ is_active: false }).eq("id", productId).eq("aces_id", context.acesId).select("id").maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel desativar o produto", error);
+    if (!data) throw new HttpError(404, "Produto nao encontrado");
+    return { success: true };
+  }
+
+  async moveCommercialProduct(context: AuthContext, agentId: string, productId: string, catalogGroupId: string | null) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data: product, error: productError } = await this.serviceClient.from("commercial_catalog_products")
+      .select("id,category").eq("id", productId).eq("aces_id", context.acesId).eq("is_active", true).maybeSingle();
+    if (productError) throw new HttpError(500, "Nao foi possivel localizar o item", productError);
+    if (!product) throw new HttpError(404, "Item nao encontrado");
+    if (catalogGroupId) {
+      const { data: group, error: groupError } = await this.serviceClient.from("commercial_catalog_groups")
+        .select("id").eq("id", catalogGroupId).eq("aces_id", context.acesId)
+        .eq("item_type", product.category).maybeSingle();
+      if (groupError) throw new HttpError(500, "Nao foi possivel validar a categoria", groupError);
+      if (!group) throw new HttpError(400, "Categoria nao pertence a este tipo ou conta");
+    }
+    const { error } = await this.serviceClient.from("commercial_catalog_products")
+      .update({ catalog_group_id: catalogGroupId }).eq("id", productId).eq("aces_id", context.acesId);
+    if (error) throw new HttpError(500, "Nao foi possivel mover o item", error);
+    return { success: true };
+  }
+
+  async setCommercialCategory(context: AuthContext, agentId: string, category: CommercialCategory, enabled: boolean) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (!["lenses", "frames", "services"].includes(category)) throw new HttpError(400, "Categoria invalida");
+    const { error } = await this.agentsClient.from("commercial_catalog_categories").upsert({
+      aces_id: context.acesId, agent_id: agentId, category, is_enabled: enabled,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "aces_id,agent_id,category" });
+    if (error) throw new HttpError(500, "Nao foi possivel alterar a categoria", error);
+    return { success: true };
+  }
+
+  async createCommercialGroup(context: AuthContext, agentId: string, itemType: CommercialCategory, name: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const cleanName = name.trim();
+    if (!["lenses", "frames", "services"].includes(itemType) || !cleanName || cleanName.length > 100) {
+      throw new HttpError(400, "Tipo ou nome de categoria invalido");
+    }
+    const { data, error } = await this.serviceClient.from("commercial_catalog_groups")
+      .insert({ aces_id: context.acesId, item_type: itemType, name: cleanName })
+      .select("id,item_type,name,sort_order").single();
+    if (error) throw new HttpError(error.code === "23505" ? 409 : 500, "Nao foi possivel criar a categoria", error);
+    return { id: String(data.id), itemType: data.item_type as CommercialCategory,
+      name: String(data.name), sortOrder: Number(data.sort_order), visible: false };
+  }
+
+  async renameCommercialGroup(context: AuthContext, agentId: string, groupId: string, name: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const cleanName = name.trim();
+    if (!cleanName || cleanName.length > 100) throw new HttpError(400, "Nome de categoria invalido");
+    const { data, error } = await this.serviceClient.from("commercial_catalog_groups")
+      .update({ name: cleanName }).eq("id", groupId).eq("aces_id", context.acesId)
+      .select("id,item_type,name,sort_order").maybeSingle();
+    if (error) throw new HttpError(error.code === "23505" ? 409 : 500, "Nao foi possivel renomear a categoria", error);
+    if (!data) throw new HttpError(404, "Categoria nao encontrada");
+    return { id: String(data.id), itemType: data.item_type as CommercialCategory,
+      name: String(data.name), sortOrder: Number(data.sort_order) };
+  }
+
+  async deleteCommercialGroup(context: AuthContext, agentId: string, groupId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { error } = await this.serviceClient.rpc("delete_commercial_catalog_group",
+      { p_aces_id: context.acesId, p_group_id: groupId });
+    if (error) throw new HttpError(error.code === "23503" ? 409 : error.code === "P0002" ? 404 : 500,
+      error.code === "23503" ? "Mova ou desative os itens antes de excluir a categoria" : "Nao foi possivel excluir a categoria", error);
+    return { success: true };
+  }
+
+  async setCommercialGroupVisibility(context: AuthContext, agentId: string, groupId: string, enabled: boolean) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data: group, error: groupError } = await this.serviceClient.from("commercial_catalog_groups")
+      .select("id").eq("id", groupId).eq("aces_id", context.acesId).maybeSingle();
+    if (groupError) throw new HttpError(500, "Nao foi possivel validar a categoria", groupError);
+    if (!group) throw new HttpError(404, "Categoria nao encontrada");
+    const { error } = await this.agentsClient.from("commercial_catalog_group_visibility").upsert({
+      aces_id: context.acesId, agent_id: agentId, catalog_group_id: groupId,
+      is_enabled: enabled, updated_at: new Date().toISOString(),
+    }, { onConflict: "aces_id,agent_id,catalog_group_id" });
+    if (error) throw new HttpError(500, "Nao foi possivel alterar a categoria", error);
+    return { success: true };
+  }
+
+  async setCommercialUncategorizedVisibility(context: AuthContext, agentId: string,
+    itemType: CommercialCategory, enabled: boolean) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    if (!["lenses", "frames", "services"].includes(itemType)) throw new HttpError(400, "Tipo invalido");
+    const { error } = await this.agentsClient.from("commercial_catalog_uncategorized_visibility").upsert({
+      aces_id: context.acesId, agent_id: agentId, item_type: itemType,
+      is_enabled: enabled, updated_at: new Date().toISOString(),
+    }, { onConflict: "aces_id,agent_id,item_type" });
+    if (error) throw new HttpError(500, "Nao foi possivel alterar Sem categoria", error);
+    return { success: true };
+  }
+
+  async uploadCommercialImage(context: AuthContext, agentId: string, productId: string,
+    input: { fileName: string; mimeType: string; base64: string }) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data: product } = await this.serviceClient.from("commercial_catalog_products")
+      .select("id").eq("id", productId).eq("aces_id", context.acesId).eq("is_active", true).maybeSingle();
+    if (!product) throw new HttpError(404, "Produto nao encontrado");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(input.mimeType)) throw new HttpError(400, "Formato de imagem invalido");
+    const buffer = Buffer.from(input.base64.replace(/^data:[^;]+;base64,/, ""), "base64");
+    if (!buffer.length || buffer.length > 10 * 1024 * 1024) throw new HttpError(400, "Imagem vazia ou acima de 10 MB");
+    const id = randomUUID();
+    const fileName = sanitizeStorageFileName(input.fileName || `produto-${id}.jpg`);
+    const storagePath = `${context.acesId}/${productId}/${id}/${fileName}`;
+    const { error: uploadError } = await this.serviceClient.storage.from("commercial-catalog")
+      .upload(storagePath, buffer, { contentType: input.mimeType, upsert: false });
+    if (uploadError) throw new HttpError(500, "Nao foi possivel armazenar a imagem", uploadError);
+    const { data, error } = await this.serviceClient.from("commercial_catalog_images").insert({
+      id, aces_id: context.acesId, product_id: productId, storage_path: storagePath,
+      mime_type: input.mimeType, file_name: fileName, file_size: buffer.length,
+    }).select("id").single();
+    if (error) {
+      await this.serviceClient.storage.from("commercial-catalog").remove([storagePath]);
+      throw new HttpError(500, "Nao foi possivel registrar a imagem", error);
+    }
+    return data;
+  }
+
+  async setCommercialImageVisibility(context: AuthContext, agentId: string, imageId: string, enabled: boolean) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data: image } = await this.serviceClient.from("commercial_catalog_images")
+      .select("id").eq("id", imageId).eq("aces_id", context.acesId).eq("is_active", true).maybeSingle();
+    if (!image) throw new HttpError(404, "Imagem nao encontrada");
+    const { error } = await this.agentsClient.from("commercial_catalog_image_visibility").upsert({
+      aces_id: context.acesId, agent_id: agentId, image_id: imageId, is_enabled: enabled,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "aces_id,agent_id,image_id" });
+    if (error) throw new HttpError(500, "Nao foi possivel alterar a imagem", error);
+    return { success: true };
+  }
+
+  async deactivateCommercialImage(context: AuthContext, agentId: string, imageId: string) {
+    this.ensureAdmin(context);
+    await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
+    const { data, error } = await this.serviceClient.from("commercial_catalog_images")
+      .update({ is_active: false }).eq("id", imageId).eq("aces_id", context.acesId).select("id").maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel desativar a imagem", error);
+    if (!data) throw new HttpError(404, "Imagem nao encontrada");
+    return { success: true };
+  }
+
+  private async getVisibleCommercialProducts(agent: AgentRow): Promise<CommercialProduct[]> {
+    const binding = await this.getEnabledAgentTool(agent, "commercial_catalog");
+    if (!binding) return [];
+    const [productRows, groupResult, groupVisibilityResult, uncategorizedResult] = await Promise.all([
+      this.fetchCommercialProductRows(agent.aces_id),
+      this.serviceClient.from("commercial_catalog_groups").select("id,name").eq("aces_id", agent.aces_id),
+      this.agentsClient.from("commercial_catalog_group_visibility").select("catalog_group_id")
+        .eq("aces_id", agent.aces_id).eq("agent_id", agent.id).eq("is_enabled", true),
+      this.agentsClient.from("commercial_catalog_uncategorized_visibility").select("item_type")
+        .eq("aces_id", agent.aces_id).eq("agent_id", agent.id).eq("is_enabled", true),
+    ]);
+    if (groupResult.error || groupVisibilityResult.error || uncategorizedResult.error) {
+      throw new HttpError(500, "Nao foi possivel consultar a visibilidade do catalogo",
+        groupResult.error || groupVisibilityResult.error || uncategorizedResult.error);
+    }
+    const groupNames = new Map((groupResult.data ?? []).map((row) => [String(row.id), String(row.name)]));
+    const allowedGroupIds = new Set((groupVisibilityResult.data ?? []).map((row) => String(row.catalog_group_id)));
+    const allowedUncategorizedTypes = new Set((uncategorizedResult.data ?? [])
+      .map((row) => String(row.item_type) as CommercialCategory));
+    const products = productRows.map((row: Record<string, unknown>) => this.mapCommercialProduct(
+      row, groupNames.get(String(row.catalog_group_id)) ?? null,
+    ));
+    if (products.length === 0) return [];
+    const productIds = new Set(products.map((product) => product.id));
+    const imageRows = (await this.fetchCommercialImageRows(agent.aces_id)).filter((image) => productIds.has(String(image.product_id)));
+    const visibleIds = await this.fetchCommercialVisibleImageIds(
+      agent.aces_id, agent.id, imageRows.map((image) => String(image.id)),
+    );
+    const byId = new Map(products.map((product) => [product.id, product]));
+    for (const image of imageRows) {
+      if (visibleIds.has(String(image.id))) byId.get(String(image.product_id))?.images.push({
+        id: String(image.id), fileName: String(image.file_name), visible: true,
+      });
+    }
+    return restrictCommercialCatalog(products, allowedGroupIds, allowedUncategorizedTypes, visibleIds);
+  }
+
   async listOpticalCatalogProducts(context: AuthContext, agentId: string) {
     this.ensureAdmin(context);
     await this.getAgentForAccount(agentId, context.acesId, context.crmUserId, context.role);
@@ -5446,6 +5982,19 @@ export class AgentManager {
         .eq("id", input.id).eq("aces_id", context.acesId).eq("agent_tool_id", binding.id).select("*").single()
       : await this.serviceClient.from("optical_catalog_products").insert(payload).select("*").single();
     if (result.error) throw new HttpError(500, "Nao foi possivel salvar o produto", result.error);
+    const { error: catalogError } = await this.serviceClient.from("commercial_catalog_products").upsert({
+      aces_id: context.acesId,
+      category: "lenses",
+      lens_category: input.lensCategory,
+      display_name: displayName,
+      brand: input.brand?.trim() || null,
+      treatments,
+      description: input.description?.trim() || null,
+      price_cents: input.priceCents,
+      is_active: input.isActive,
+      legacy_optical_product_id: result.data.id,
+    }, { onConflict: "legacy_optical_product_id" });
+    if (catalogError) throw new HttpError(500, "Lente salva no cadastro antigo, mas nao sincronizada com o catalogo comercial", catalogError);
     await this.refreshPrescriptionToolReadiness(context.acesId, binding.id, true);
     return this.mapOpticalCatalogProduct(result.data);
   }
@@ -5458,6 +6007,9 @@ export class AgentManager {
       .update({ is_active: false })
       .eq("id", productId).eq("aces_id", context.acesId).eq("agent_tool_id", binding.id);
     if (error) throw new HttpError(500, "Nao foi possivel desativar o produto", error);
+    const { error: catalogError } = await this.serviceClient.from("commercial_catalog_products")
+      .update({ is_active: false }).eq("aces_id", context.acesId).eq("legacy_optical_product_id", productId);
+    if (catalogError) throw new HttpError(500, "Lente desativada no cadastro antigo, mas nao no catalogo comercial", catalogError);
     return { success: true };
   }
 
@@ -5849,7 +6401,7 @@ export class AgentManager {
     const binding = await this.getAgentToolBinding(context.acesId, agentId, "rb_billing");
     const rbBillingState = await this.getRbBillingState(context.acesId);
     if (!rbBillingState.ready) {
-      throw new HttpError(409, "Ative a CobranÃ§a RB e cadastre as credenciais no Administrativo antes de configurar a Tool");
+      throw new HttpError(409, "Ative a CobranÃƒÆ’Ã‚Â§a RB e cadastre as credenciais no Administrativo antes de configurar a Tool");
     }
     
     const { data: account } = await this.serviceClient
@@ -8213,6 +8765,7 @@ export class AgentManager {
     primaryModelName: string,
     prompt: string | Array<string | { inlineData: { mimeType: string; data: string } }>,
     temperature = 0.4,
+    maxRetries = this.geminiMaxRetries,
   ) {
     const models = this.getGeminiModelCandidates(primaryModelName);
     let lastError: unknown = null;
@@ -8220,7 +8773,7 @@ export class AgentManager {
     for (const [modelIndex, modelName] of models.entries()) {
       const model = this.getModel(modelName, temperature);
 
-      for (let attempt = 1; attempt <= this.geminiMaxRetries; attempt += 1) {
+      for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
         try {
           const result = await model.generateContent(prompt);
           return {
@@ -8231,7 +8784,7 @@ export class AgentManager {
           };
         } catch (error) {
           lastError = error;
-          const canRetry = isTransientGeminiError(error) && attempt < this.geminiMaxRetries;
+          const canRetry = isTransientGeminiError(error) && attempt < maxRetries;
           const canFallback = isTransientGeminiError(error) && modelIndex < models.length - 1;
 
           console.warn("[crm-ai] Falha ao gerar conteudo com Gemini:", {
@@ -10841,32 +11394,37 @@ export class AgentManager {
     if (params.channelProvider === "website") {
       return { succeeded: false, error: "O chat do site aceita somente texto" };
     }
-    const binding = await this.getEnabledAgentTool(params.agent, "send_media");
-    if (!binding) {
-      return { succeeded: false, error: "Tool Enviar midia nao esta ativa" };
-    }
-
-    const { data: asset, error: assetError } = await this.agentsClient
-      .from("tool_media_assets")
-      .select("*")
-      .eq("aces_id", params.agent.aces_id)
-      .eq("agent_tool_id", binding.id)
-      .eq("asset_key", params.assetKey)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (assetError) {
-      throw new HttpError(500, "Nao foi possivel carregar o material selecionado", assetError);
-    }
+    let binding = await this.getEnabledAgentTool(params.agent, "send_media");
+    const { data: asset, error: assetError } = binding
+      ? await this.agentsClient.from("tool_media_assets").select("*")
+          .eq("aces_id", params.agent.aces_id).eq("agent_tool_id", binding.id)
+          .eq("asset_key", params.assetKey).eq("is_active", true).maybeSingle()
+      : { data: null, error: null };
+    if (assetError) throw new HttpError(500, "Nao foi possivel carregar o material selecionado", assetError);
     let resolvedAsset: JsonRecord | null = asset as JsonRecord | null;
-    if (!resolvedAsset && isUuid(params.assetKey)) {
+    if (!resolvedAsset && binding && isUuid(params.assetKey)) {
       const { data: modern, error: modernError } = await this.agentsClient.from("media_assets").select("*")
         .eq("id", params.assetKey).eq("aces_id", params.agent.aces_id).eq("agent_id", params.agent.id)
         .eq("send_enabled", true).not("analysis_completed_at", "is", null).maybeSingle();
       if (modernError) throw new HttpError(500, "Nao foi possivel carregar a foto selecionada", modernError);
       resolvedAsset = modern as JsonRecord | null;
     }
+    if (!resolvedAsset && isUuid(params.assetKey)) {
+      const catalogBinding = await this.getEnabledAgentTool(params.agent, "commercial_catalog");
+      if (catalogBinding) {
+        const allowed = (await this.getVisibleCommercialProducts(params.agent))
+          .some((product) => product.images.some((image) => image.id === params.assetKey));
+        if (allowed) {
+          const { data: image, error: imageError } = await this.serviceClient.from("commercial_catalog_images")
+            .select("*").eq("aces_id", params.agent.aces_id).eq("id", params.assetKey).eq("is_active", true).maybeSingle();
+          if (imageError) throw new HttpError(500, "Nao foi possivel carregar a imagem comercial", imageError);
+          resolvedAsset = image as JsonRecord | null;
+          binding = catalogBinding;
+        }
+      }
+    }
     if (!resolvedAsset) return { succeeded: false, error: "Material nao encontrado ou desativado" };
+    if (!binding) return { succeeded: false, error: "Ferramenta de midia nao ativa" };
 
     const toolRunId = randomUUID();
     const idempotencyKey = `${params.runId}:send_media:${params.assetKey}`;
@@ -10876,7 +11434,7 @@ export class AgentManager {
       agent_id: params.agent.id,
       agent_tool_id: binding.id,
       lead_id: params.lead.id,
-      tool_key: "send_media",
+      tool_key: binding.tool_key,
       status: "running",
       idempotency_key: idempotencyKey,
       attempt_count: 1,
@@ -10910,7 +11468,7 @@ export class AgentManager {
       const attachmentId = randomUUID();
       const configuredName = asString(resolvedAsset.file_name);
       const fileName = sanitizeStorageFileName(
-        configuredName ?? `${String(asset.asset_key)}.${downloaded.extension}`
+        configuredName ?? `${params.assetKey}.${downloaded.extension}`
       );
       storagePath = buildAttachmentStoragePath({
         acesId: params.agent.aces_id,
@@ -11233,6 +11791,16 @@ export class AgentManager {
     notification: string;
     sourceMessageId: string | null;
     forwardingDestinationId?: string | null;
+    opening?: {
+      messages: MessageRow[];
+      analysis: StructuredModelResponse;
+      evidenceSources: ForwardingEvidenceSource[];
+      inheritedFacts: VerifiedForwardingFact[];
+      customerConversationId?: string | null;
+      agenda: AgendaExecutionResult;
+      storeLocator: JsonRecord;
+      commercialCatalog: CommercialResult;
+    };
   }): Promise<HandoffExecutionResult> {
     const targetAgent = await this.getAgentById(params.targetAgentId);
     if (targetAgent.aces_id !== params.sourceAgent.aces_id) {
@@ -11244,6 +11812,14 @@ export class AgentManager {
     if (!targetAgent.is_active) {
       throw new HttpError(409, "O agente de destino esta desativado");
     }
+
+    const verifiedFacts = params.opening
+      ? filterVerifiedForwardingFacts(
+          params.opening.analysis.forwarding_facts,
+          params.opening.evidenceSources,
+          params.opening.inheritedFacts,
+        )
+      : [];
 
     const { data: reverseSession, error: reverseError } = await this.agentsClient
       .from("agent_transfer_sessions")
@@ -11304,12 +11880,7 @@ export class AgentManager {
         target_agent_id: targetAgent.id,
         source_message_id: params.sourceMessageId,
         status: "active",
-        context_snapshot: {
-          reason: params.reason,
-          source_agent_name: params.sourceAgent.name,
-          target_agent_name: targetAgent.name,
-          notification: truncateText(params.notification, 1200),
-        },
+        context_snapshot: buildForwardingContextSnapshot(verifiedFacts),
         cooldown_until: new Date(Date.now() + 30 * 60_000).toISOString(),
       });
 
@@ -11372,15 +11943,58 @@ export class AgentManager {
       ? `Ola, ${leadName}! Sou ${targetAgent.name}. Recebi seu atendimento de ${params.sourceAgent.name} e vou continuar com voce por aqui.`
       : `Ola! Sou ${targetAgent.name}. Recebi seu atendimento de ${params.sourceAgent.name} e vou continuar com voce por aqui.`;
 
+    const openingAnalysis = params.opening
+      ? {
+          ...params.opening.analysis,
+          should_handoff: false,
+          should_pause: false,
+          handoff_reason: "",
+          forwarding_facts: verifiedFacts.map((fact) => ({ ...fact, evidence: "" })),
+        }
+      : null;
+    let openingBlocks = [introduction];
     try {
-      await this.sendReplyBlocks({
-        agent: targetAgent,
-        lead: params.lead,
-        blocks: [introduction],
-        sourceType: "ai",
-        runId: `transfer:${sessionId}`,
-        hasMediaAttachment: true,
-      });
+      const openingParams = params.opening;
+      const opening = await generateAndDeliverForwardingOpening(
+        async (attempt) => {
+          if (!openingAnalysis || !openingParams) return [introduction];
+          const generated = await this.generateAgentReply(
+            targetAgent,
+            params.lead,
+            openingParams.messages,
+            openingAnalysis,
+            `transfer:${sessionId}:opening:${attempt}`,
+            openingParams.customerConversationId,
+            {
+              nativeFollowupShouldSchedule: false,
+              nativeFollowupNeedsClarification: false,
+              handoffTriggered: false,
+              visagism: {},
+              agenda: openingParams.agenda,
+              storeLocator: openingParams.storeLocator,
+              commercialCatalog: openingParams.commercialCatalog,
+              forwardingContext: {
+                phase: "opening",
+                sourceAgentName: params.sourceAgent.name,
+                facts: verifiedFacts,
+                topicSummary: openingParams.analysis.attendance_summary.text,
+                nextStep: params.reason,
+              },
+            },
+          );
+          return generated.parsed.reply_blocks;
+        },
+        introduction,
+        (blocks) => this.sendReplyBlocks({
+          agent: targetAgent,
+          lead: params.lead,
+          blocks,
+          sourceType: "ai",
+          runId: `transfer:${sessionId}:delivery`,
+          hasMediaAttachment: true,
+        }),
+      );
+      openingBlocks = opening.blocks;
     } catch (error) {
       await this.agentsClient
         .from("agent_transfer_sessions")
@@ -11411,7 +12025,7 @@ export class AgentManager {
         tool_key: "forwarding",
         status: "succeeded",
       },
-    });
+    }).catch((error) => console.warn("[crm-ai] Encaminhamento concluido, mas o evento BI nao foi salvo:", error));
     const routingIdempotencyKey = params.sourceMessageId
       ? `agent-forwarding:${params.sourceMessageId}:${targetAgent.id}`
       : null;
@@ -11449,7 +12063,7 @@ export class AgentManager {
       targetPhone: null,
       targetAgentId: targetAgent.id,
       reason: params.reason,
-      notification: introduction,
+      notification: openingBlocks.join("\n"),
     };
   }
 
@@ -11769,6 +12383,16 @@ export class AgentManager {
     response: StructuredModelResponse,
     messages: MessageRow[],
     customerConversationId?: string | null,
+    opening?: {
+      messages: MessageRow[];
+      analysis: StructuredModelResponse;
+      evidenceSources: ForwardingEvidenceSource[];
+      inheritedFacts: VerifiedForwardingFact[];
+      customerConversationId?: string | null;
+      agenda: AgendaExecutionResult;
+      storeLocator: JsonRecord;
+      commercialCatalog: CommercialResult;
+    },
   ): Promise<HandoffExecutionResult> {
     const config = await this.getHandoffConfig(agent);
     const reason =
@@ -11810,6 +12434,7 @@ export class AgentManager {
         notification: summary,
         sourceMessageId,
         forwardingDestinationId: destination.id,
+        opening,
       });
     }
 
@@ -12128,7 +12753,7 @@ export class AgentManager {
       minute: "2-digit",
       hour12: false,
     }).format(date);
-    return `${dateLabel}, ${timeLabel} — ${professionalName}`;
+    return `${dateLabel}, ${timeLabel} Ã¢â‚¬â€ ${professionalName}`;
   }
 
   private async listAgendaDirectory(
@@ -12308,6 +12933,42 @@ export class AgentManager {
     };
   }
 
+  private async resolveActiveIncomingAgentTransferFacts(agent: AgentRow, leadId: string): Promise<VerifiedForwardingFact[]> {
+    const { data, error } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .select("context_snapshot")
+      .eq("aces_id", agent.aces_id)
+      .eq("lead_id", leadId)
+      .eq("target_agent_id", agent.id)
+      .eq("status", "active")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new HttpError(500, "Nao foi possivel carregar os fatos do encaminhamento", error);
+
+    return readForwardingContextFacts(data?.context_snapshot);
+  }
+
+  private async finishActiveIncomingAgentTransfers(agent: AgentRow, leadId: string) {
+    const { data, error } = await this.agentsClient
+      .from("agent_transfer_sessions")
+      .select("id")
+      .eq("aces_id", agent.aces_id)
+      .eq("lead_id", leadId)
+      .eq("target_agent_id", agent.id)
+      .eq("status", "active");
+    if (error) throw new HttpError(500, "Nao foi possivel concluir o contexto do encaminhamento", error);
+    const endedAt = new Date().toISOString();
+    for (const session of data ?? []) {
+      const { error: updateError } = await this.agentsClient
+        .from("agent_transfer_sessions")
+        .update({ status: "completed", ended_at: endedAt, updated_at: endedAt })
+        .eq("id", String(session.id))
+        .eq("status", "active");
+      if (updateError) throw new HttpError(500, "Nao foi possivel concluir o contexto do encaminhamento", updateError);
+    }
+  }
+
   private async findSubagentByKey(parent: AgentRow, key: string | null) {
     if (!key) return null;
     const available = await this.listActiveSubagents(parent);
@@ -12330,7 +12991,7 @@ export class AgentManager {
       const { data, error } = await this.agentsClient
         .from("agent_transfer_sessions")
         .update({
-          context_snapshot: { ...params.context, reason: params.reason },
+          context_snapshot: { ...asRecord(params.activeSession.context_snapshot), ...params.context, reason: params.reason },
           updated_at: new Date().toISOString(),
         })
         .eq("id", params.activeSession.id)
@@ -12396,14 +13057,26 @@ export class AgentManager {
     lead: LeadRow;
     request: AgendaRequest;
     storedContext: unknown;
+    customerMessage?: string | null;
     runId: string;
     customerConversationId?: string | null;
   }): Promise<AgendaExecutionResult> {
     const now = new Date();
     let company: JsonRecord | null = null;
+    const validatedRequest = validateRescheduleRequest(
+      params.storedContext,
+      params.request,
+      params.customerMessage,
+      now,
+    );
+    const declinedAppointmentId = validatedRequest.intent === "reschedule"
+      && validatedRequest.confirmation === "no"
+      && readAgendaContext(params.storedContext, now).selectedOption?.kind === "appointment"
+      ? readAgendaContext(params.storedContext, now).selectedOption?.id ?? null
+      : null;
     let context = mergeAgendaRequest(
       readAgendaContext(params.storedContext, now),
-      params.request,
+      validatedRequest,
       now,
     );
     const result = (
@@ -12413,12 +13086,18 @@ export class AgentManager {
       completed = false,
     ): AgendaExecutionResult => ({
       status,
-      intent: params.request.intent,
+      intent: validatedRequest.intent,
       message,
       data: company ? { ...data, company } : data,
       context,
       completed,
     });
+    let originalAppointment: JsonRecord | null = null;
+    let completedReschedule: {
+      appointment: unknown;
+      selectedSlot: AgendaPresentedOption;
+      message: string;
+    } | null = null;
 
     if (params.request.intent === "none") return result("ignored", "Nenhuma acao de agenda identificada.");
 
@@ -12482,7 +13161,7 @@ export class AgentManager {
             kind: "company",
             id: String(match.company_id),
             companyId: String(match.company_id),
-            label: [match.trade_name, match.city, match.state].filter(Boolean).join(" â€” "),
+            label: [match.trade_name, match.city, match.state].filter(Boolean).join(" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "),
           }));
           if (options.length) {
             context = setPresentedAgendaOptions(context, options, now);
@@ -12500,7 +13179,7 @@ export class AgentManager {
             kind: "company",
             id: String(match.company_id),
             companyId: String(match.company_id),
-            label: [match.trade_name, match.city, match.state].filter(Boolean).join(" — "),
+            label: [match.trade_name, match.city, match.state].filter(Boolean).join(" Ã¢â‚¬â€ "),
           }));
           context = setPresentedAgendaOptions(context, options, now);
           context.selectedOption = context.presentedOptions[0] ?? null;
@@ -12555,7 +13234,7 @@ export class AgentManager {
             kind: "company",
             id: String(item.company_id),
             companyId: String(item.company_id),
-            label: [item.trade_name, item.city, item.state].filter(Boolean).join(" — "),
+            label: [item.trade_name, item.city, item.state].filter(Boolean).join(" Ã¢â‚¬â€ "),
           }));
           context = setPresentedAgendaOptions(context, options, now);
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
@@ -12568,6 +13247,11 @@ export class AgentManager {
 
       if (params.request.intent === "reschedule") {
         const calendarClient = this.serviceClient.schema("calendar");
+        if (declinedAppointmentId) {
+          context.appointmentEventId = null;
+          context.selectedOption = null;
+          context.confirmation = "unknown";
+        }
         if (!context.appointmentEventId) {
           const { data: events, error } = await calendarClient
             .from("events")
@@ -12580,7 +13264,10 @@ export class AgentManager {
             .limit(4);
           if (error) throw buildSupabaseOperationError(error, "Nao foi possivel consultar os agendamentos");
           const timezone = (await this.getCalendarCapabilities(params.agent)).timezone;
-          const options = (events ?? []).map((event, index): AgendaPresentedOption => ({
+          const availableEvents = (events ?? []).filter((event) =>
+            !declinedAppointmentId || String(event.id) !== declinedAppointmentId,
+          );
+          const options = availableEvents.map((event, index): AgendaPresentedOption => ({
             reference: String(index + 1),
             kind: "appointment",
             id: String(event.id),
@@ -12597,12 +13284,17 @@ export class AgentManager {
             ),
           }));
           context = setPresentedAgendaOptions(context, options, now);
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
-          return result(options.length ? "needs_input" : "empty", "Selecione o agendamento que deseja reagendar.", { options });
+          const selectionStep = buildRescheduleAppointmentStep(context.presentedOptions);
+          context.selectedOption = selectionStep.selectedOption;
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
+          if (!options.length && declinedAppointmentId) {
+            return result("needs_input", "Tudo bem. Nao alterei o agendamento. Nao ha outro agendamento ativo para escolher.");
+          }
+          return result(selectionStep.status, selectionStep.message, { options: context.presentedOptions });
         }
         const { data: appointment, error } = await calendarClient
           .from("events")
-          .select("id, professional_id, professional_location_id, service_id, empresa_id")
+          .select("id, title, start_time, end_time, professional_id, professional_location_id, service_id, empresa_id, metadata")
           .eq("aces_id", params.agent.aces_id)
           .eq("lead_id", params.lead.id)
           .eq("id", context.appointmentEventId)
@@ -12615,6 +13307,15 @@ export class AgentManager {
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("empty", "O agendamento selecionado nao esta mais disponivel para reagendamento.");
         }
+        const appointmentTimezone = (await this.getCalendarCapabilities(params.agent)).timezone;
+        originalAppointment = {
+          ...appointment,
+          label: this.formatAgendaSlotLabel(
+            String(appointment.start_time),
+            asString(asRecord(appointment.metadata).professional_name) ?? String(appointment.title),
+            appointmentTimezone,
+          ),
+        };
         context.companyId = appointment.empresa_id ? String(appointment.empresa_id) : null;
         context.professionalId = String(appointment.professional_id);
         context.professionalLocationId = String(appointment.professional_location_id);
@@ -12637,7 +13338,7 @@ export class AgentManager {
           companyId: entry.companyId,
           professionalId: entry.professionalId,
           professionalLocationId: entry.professionalLocationId,
-          label: entry.specialty ? `${entry.professionalName} — ${entry.specialty}` : entry.professionalName,
+          label: entry.specialty ? `${entry.professionalName} Ã¢â‚¬â€ ${entry.specialty}` : entry.professionalName,
         }));
 
       if (params.request.intent === "company_info" || params.request.intent === "professionals" || params.request.intent === "price") {
@@ -12757,7 +13458,9 @@ export class AgentManager {
           },
         });
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
-        return result("empty", "Nenhum profissional ou servico ativo corresponde aos filtros.");
+        return result("empty", params.request.intent === "reschedule"
+          ? "Nao consegui consultar horarios para esse agendamento. Ele continua ativo no horario atual."
+          : "Nenhum profissional ou servico ativo corresponde aos filtros.");
       }
 
       const uniqueServices = [...new Map(eligibleDirectory.map((entry) => [entry.serviceId, entry])).values()];
@@ -12823,12 +13526,15 @@ export class AgentManager {
           },
         });
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
-        return result("empty", "A unidade escolhida foi mantida, mas nao ha horarios nas cinco consultas realizadas.", {
+        return result("empty", params.request.intent === "reschedule"
+          ? "Nao encontrei horarios disponiveis para mudar seu agendamento. Ele continua ativo no horario atual."
+          : "A unidade escolhida foi mantida, mas nao ha horarios nas cinco consultas realizadas.", {
           attemptCount: availabilityAttemptsUsed,
+          originalAppointment,
         });
       }
 
-      if (!context.dateFrom) {
+      if (!context.dateFrom && params.request.intent !== "reschedule") {
         const dates = [...new Set(slots.map((slot) => this.localIsoDate(capabilities.timezone, new Date(String(slot.slot_start)))))];
         const options = dates.slice(0, 3).map((date, index): AgendaPresentedOption => ({
           reference: String(index + 1),
@@ -12867,12 +13573,37 @@ export class AgentManager {
       }));
 
       const selectedSlotCandidate = context.selectedOption?.kind === "slot" ? context.selectedOption : null;
-      const selectedSlot = selectedSlotCandidate?.companyId
+      const selectedSlotRow = selectedSlotCandidate
+        ? slots.find((slot) =>
+          String(slot.professional_id) === selectedSlotCandidate.professionalId
+          && String(slot.service_id) === selectedSlotCandidate.serviceId
+          && String(slot.slot_start) === selectedSlotCandidate.startTime,
+        ) ?? null
+        : null;
+      const selectedSlot = selectedSlotCandidate && selectedSlotRow
+        ? {
+          ...selectedSlotCandidate,
+          companyId: selectedSlotRow.empresa_id ? String(selectedSlotRow.empresa_id) : selectedSlotCandidate.companyId,
+          professionalLocationId: eligibleDirectory.find((entry) =>
+            entry.professionalId === String(selectedSlotRow.professional_id)
+            && entry.serviceId === String(selectedSlotRow.service_id),
+          )?.professionalLocationId ?? selectedSlotCandidate.professionalLocationId,
+          startTime: String(selectedSlotRow.slot_start),
+          label: this.formatAgendaSlotLabel(
+            String(selectedSlotRow.slot_start),
+            capabilities.professionalsRepresentLocations
+              ? asString(company?.name) ?? "unidade selecionada"
+              : String(selectedSlotRow.professional_name),
+            capabilities.timezone,
+          ),
+        }
+        : null;
+      const scopedSelectedSlot = selectedSlot?.companyId
         && context.companyId
-        && selectedSlotCandidate.companyId !== context.companyId
+        && selectedSlot.companyId !== context.companyId
         ? null
-        : selectedSlotCandidate;
-      if (params.request.intent === "availability" || !selectedSlot) {
+        : selectedSlot;
+      if (params.request.intent === "availability" || !scopedSelectedSlot) {
         context = setPresentedAgendaOptions(context, options, now);
         await this.enqueueBiEvent({
           acesId: params.agent.aces_id,
@@ -12882,20 +13613,39 @@ export class AgentManager {
           payload: { lead_id: params.lead.id, agent_id: params.agent.id, option_count: options.length },
         });
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
-        return result("succeeded", "Apresente somente os horarios retornados.", { options });
+        return result(
+          params.request.intent === "reschedule" ? "needs_input" : "succeeded",
+          params.request.intent === "reschedule"
+            ? `Estes horarios estao disponiveis: ${options.map((option) => `${option.reference}. ${option.label}`).join(" ")} Qual prefere?`
+            : "Apresente somente os horarios retornados.",
+          { options, originalAppointment },
+        );
       }
 
-      if (!selectedSlot || !selectedSlot.professionalLocationId || !selectedSlot.serviceId || !selectedSlot.startTime) {
+      if (!scopedSelectedSlot || !scopedSelectedSlot.professionalLocationId || !scopedSelectedSlot.serviceId || !scopedSelectedSlot.startTime) {
         context = setPresentedAgendaOptions(context, options, now);
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
-        return result("needs_input", "Solicite a escolha de um dos horarios retornados.", { options });
+        return result("needs_input", `Escolha um destes horarios: ${options.map((option) => `${option.reference}. ${option.label}`).join(" ")}`, {
+          options,
+          originalAppointment,
+        });
+      }
+      if (params.request.intent === "reschedule" && context.confirmation === "no") {
+        const alternatives = options.filter((option) => option.id !== scopedSelectedSlot.id);
+        context = setPresentedAgendaOptions(context, alternatives.length ? alternatives : options, now);
+        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
+        return result("needs_input", `Tudo bem. Nao alterei o agendamento. Escolha outro horario: ${context.presentedOptions.map((option) => `${option.reference}. ${option.label}`).join(" ")}`, {
+          options: context.presentedOptions,
+          originalAppointment,
+        });
       }
       if (context.confirmation !== "yes") {
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
         return result("needs_confirmation", params.request.intent === "reschedule"
-          ? "Confirme o novo horario antes de reagendar."
+          ? `Posso trocar ${originalAppointment?.label ?? "seu agendamento atual"} por ${scopedSelectedSlot.label}. Confirma?`
           : "Confirme empresa, profissional, servico, data e horario antes de criar.", {
-          selected: selectedSlot,
+          selected: scopedSelectedSlot,
+          originalAppointment,
         });
       }
       if (params.request.intent === "reschedule" && context.appointmentEventId) {
@@ -12903,22 +13653,36 @@ export class AgentManager {
           .schema("calendar")
           .rpc("service_reschedule_professional_appointment", {
             p_event_id: context.appointmentEventId,
-            p_start_time: selectedSlot.startTime,
+            p_start_time: scopedSelectedSlot.startTime,
             p_aces_id: params.agent.aces_id,
           });
         if (appointmentError) {
           const message = extractSupabaseErrorMessage(appointmentError) ?? "";
           if (message.includes("SLOT_UNAVAILABLE")) {
-            context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== selectedSlot.id), now);
-        await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
-            return result("conflict", "O horario deixou de estar disponivel; preserve as preferencias e ofereca novas opcoes.", {
+            context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== scopedSelectedSlot.id), now);
+            await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
+            return result("conflict", `Esse horario deixou de estar disponivel. Escolha outro: ${context.presentedOptions.map((option) => `${option.reference}. ${option.label}`).join(" ")}`, {
               options: context.presentedOptions,
+              originalAppointment,
             });
           }
           throw appointmentError;
         }
+        const successMessage = `Pronto, reagendei para ${scopedSelectedSlot.label}.`;
+        completedReschedule = {
+          appointment,
+          selectedSlot: scopedSelectedSlot,
+          message: successMessage,
+        };
         await this.saveAgendaContext(params.agent.id, params.lead.id, null, params.customerConversationId);
-        return { ...result("succeeded", "Agendamento reagendado e revalidado com sucesso.", { appointment }, true), context: createAgendaContext(now) };
+        return {
+          ...result("succeeded", successMessage, {
+            appointment,
+            originalAppointment,
+            selected: scopedSelectedSlot,
+          }, true),
+          context: createAgendaContext(now),
+        };
       }
       const { data: appointment, error: appointmentError } = await this.retryAgendaRead(
         "criacao idempotente do agendamento",
@@ -12927,9 +13691,9 @@ export class AgentManager {
             .schema("calendar")
             .rpc("create_professional_appointment", {
               p_lead_id: params.lead.id,
-              p_professional_location_id: selectedSlot.professionalLocationId,
-              p_service_id: selectedSlot.serviceId,
-              p_start_time: selectedSlot.startTime,
+              p_professional_location_id: scopedSelectedSlot.professionalLocationId,
+              p_service_id: scopedSelectedSlot.serviceId,
+              p_start_time: scopedSelectedSlot.startTime,
               p_title: null,
               p_opportunity_id: null,
               p_status: "scheduled",
@@ -12938,7 +13702,7 @@ export class AgentManager {
               p_meeting_url: null,
               p_followup_1h_enabled: false,
               p_booking_origin: "ai",
-              p_idempotency_key: `agenda:${params.runId}:${selectedSlot.id}`,
+              p_idempotency_key: `agenda:${params.runId}:${scopedSelectedSlot.id}`,
               p_aces_id: params.agent.aces_id,
             });
           const message = extractSupabaseErrorMessage(response.error) ?? "";
@@ -12951,7 +13715,7 @@ export class AgentManager {
       if (appointmentError) {
         const message = extractSupabaseErrorMessage(appointmentError) ?? "";
         if (message.includes("SLOT_UNAVAILABLE")) {
-          context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== selectedSlot.id), now);
+          context = setPresentedAgendaOptions(context, options.filter((option) => option.id !== scopedSelectedSlot.id), now);
         await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
           return result("conflict", "O horario deixou de estar disponivel; preserve as preferencias e ofereca novas opcoes.", {
             options: context.presentedOptions,
@@ -12969,6 +13733,17 @@ export class AgentManager {
       await this.saveAgendaContext(params.agent.id, params.lead.id, null, params.customerConversationId);
       return { ...result("succeeded", "Agendamento criado e revalidado com sucesso.", { appointment }, true), context: createAgendaContext(now) };
     } catch (error) {
+      if (completedReschedule) {
+        await this.saveAgendaContext(params.agent.id, params.lead.id, null, params.customerConversationId).catch(() => undefined);
+        return {
+          ...result("succeeded", completedReschedule.message, {
+            appointment: completedReschedule.appointment,
+            originalAppointment,
+            selected: completedReschedule.selectedSlot,
+          }, true),
+          context: createAgendaContext(now),
+        };
+      }
       console.error("[crm-ai] Falha no subworkflow da Agenda:", error);
       await this.enqueueBiEvent({
         acesId: params.agent.aces_id,
@@ -13073,6 +13848,7 @@ export class AgentManager {
     messages: MessageRow[],
     runId: string,
     customerConversationId?: string | null,
+    forwardingFacts: VerifiedForwardingFact[] = [],
   ): Promise<CentralAiExecutionResult<StructuredModelResponse>> {
     const handoffConfig = await this.getHandoffConfig(agent);
     const subagents = agent.agent_type === "primary"
@@ -13111,11 +13887,13 @@ export class AgentManager {
       "Sua tarefa nao e responder ao lead. Sua tarefa e analisar a conversa, sugerir decisoes estruturadas e auditar o motivo.",
       "O modelo do agente de atendimento e separado deste worker; nao use este worker para controlar o tom final da resposta enviada ao lead.",
       "",
-      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, lead_verification, native_followup, visagism, agenda_request, store_locator, optical_catalog_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
+      "Retorne JSON puro com as chaves: reply_blocks, stage_decision, tag_decisions, attendance_summary, forwarding_facts, lead_verification, native_followup, visagism, agenda_request, store_locator, optical_catalog_request, commercial_catalog_request, confidence, reason, should_apply_stage, should_pause, should_handoff, handoff_reason, forwarding_destination_key, subagent_key, return_to_parent e complete_after_reply.",
       "reply_blocks deve ser sempre [] neste worker. A resposta ao lead sera gerada em chamada separada pelo modelo do agente de atendimento.",
       "stage_decision deve conter stage_id e reason.",
       "tag_decisions deve ser uma lista de objetos com tag_id, should_apply, reason e confidence. Use apenas ids de tags disponiveis e nunca crie tags novas.",
       "attendance_summary deve conter text, reason e confidence. text deve resumir o ultimo atendimento em ate 700 caracteres.",
+      "forwarding_facts deve conter no maximo 12 fatos objetivos para continuidade entre IAs, cada um com label, value, source e evidence. Extraia apenas fatos explicitamente informados pelo cliente, presentes na configuracao do agente ou retornados por ferramenta bem-sucedida. Nao inclua inferencias nem afirmacoes sem fonte confiavel.",
+      "source deve ser lead_message, agent_configuration, tool_result ou previous_handoff. evidence deve ser um trecho literal e curto da mensagem, configuracao ou resultado que comprova o fato. Para fatos recebidos de um encaminhamento anterior, copie exatamente label e value e use source=previous_handoff.",
       "lead_verification deve conter checked=true quando a conversa foi analisada.",
       "native_followup e uma ferramenta nativa e oculta de retorno do agente; ela existe para todos os agentes e nao depende de configuracao do usuario.",
       "native_followup deve conter should_schedule, needs_clarification, scheduled_at, requested_text, message_text, confidence e reason.",
@@ -13136,7 +13914,7 @@ export class AgentManager {
       "Datas devem usar YYYY-MM-DD. period deve ser morning, afternoon ou evening. confirmation deve ser unknown, yes ou no.",
       "Extraia somente dados informados ou inequivocamente referenciados. Nao invente IDs, datas, horarios, profissionais ou precos.",
       "Expressoes como 'o segundo' devem ir em optionReference sem tentar adivinhar seu valor; o backend resolve contra as opcoes apresentadas.",
-      "Se o cliente mudar empresa, profissional ou servico, preencha o novo valor; o backend limpará as escolhas dependentes.",
+      "Se o cliente mudar empresa, profissional ou servico, preencha o novo valor; o backend limparÃƒÂ¡ as escolhas dependentes.",
       "Falha de busca, empresa ambigua, agenda vazia ou erro temporario da Agenda nunca justificam handoff humano por si so; o subworkflow possui recuperacao automatica.",
       "Quando uma unidade ja foi escolhida, preserve essa empresa e cidade. Nao sugira outra unidade sem pedido ou autorizacao explicita do cliente.",
       "Para assuntos sem relacao com empresa ou agenda, use agenda_request.intent=none.",
@@ -13146,8 +13924,10 @@ export class AgentManager {
       "A primeira filial confirmada e favorite. Uma segunda filial pedida e confirmada usa secondary. Nunca substitua a favorita por uma secundaria sem pedido explicito de troca.",
       "Se nao houver pedido de busca, alternativa ou confirmacao de filial, use store_locator.action=none, locationText=null, confirmation=unknown e preferenceType=favorite.",
       "Nunca calcule distancia, rota ou escolha de filial por conta propria; o backend executa essa decisao de forma deterministica.",
-      "optical_catalog_request deve conter action, lensCategory, treatment e query.",
-      "Use action=search para perguntas sobre lentes, armacoes, tratamentos de lente, preco, valor, orcamento ou opcoes comerciais de otica. Use lensCategory=multifocal ou single_vision apenas se o cliente citar claramente; caso contrario use null. treatment deve copiar somente o tratamento explicitamente pedido, como filtro azul, antirreflexo ou fotossensivel. query resume o pedido comercial do lead. Para outros assuntos use action=none e campos nulos.",
+      "optical_catalog_request e legado: use sempre action=none e campos nulos.",
+      "commercial_catalog_request deve conter action, category, lensCategory, brand, query, treatment, priceCents e priceMode.",
+      "Use commercial_catalog_request.action=search para perguntas sobre lentes, armacoes, servicos, marcas, categorias, precos ou orcamentos. category=lenses, frames ou services quando clara; para marca de armacao use frames. Extraia brand literalmente. query deve conter somente modelo, codigo, nome de categoria ou termo especifico do produto; nao copie a pergunta inteira. treatment so quando citado explicitamente. lensCategory so para lentes e apenas quando o cliente a citar claramente.",
+      "Converta o preco pedido em centavos. Para 'na faixa de R$ 1500' use priceCents=150000 e priceMode=near. Para 'ate R$ 1500' use priceMode=maximum. Sem preco informado, use null. Para outros assuntos use action=none e os demais campos nulos.",
       "A ausencia de produto, tratamento ou correspondencia comercial nunca justifica handoff humano. O catalogo devolve alternativas para o agente continuar a conversa.",
       "Aplique etapa apenas se houver confianca alta e se a etapa fizer sentido no funil existente.",
       "Aplique tags apenas quando a conversa bater claramente com o campo quando_usar da tag.",
@@ -13203,6 +13983,9 @@ export class AgentManager {
       })))}`,
       "",
       `Historico recente:\n${conversation}`,
+      forwardingFacts.length > 0
+        ? `Fatos confirmados recebidos de encaminhamento anterior: ${JSON.stringify(forwardingFacts)}`
+        : null,
     ].join("\n");
 
     return this.generateCentralModelResponse({
@@ -13287,17 +14070,17 @@ export class AgentManager {
 
       return [
         "",
-        "Dados de Cobrança (Registro Base):",
+        "Dados de CobranÃƒÂ§a (Registro Base):",
         storeLabel ? `- Loja/Empresa Credora: ${storeLabel}` : null,
         storeCnpj ? `- CNPJ da Loja: ${formatCnpj(storeCnpj)}` : null,
-        storeLocation ? `- Endereço da Loja: ${storeLocation}` : null,
+        storeLocation ? `- EndereÃƒÂ§o da Loja: ${storeLocation}` : null,
         storePhone ? `- Telefone da Loja: ${storePhone}` : null,
         `- Saldo Devedor Total: R$ ${totalAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-        `- Quantidade de Títulos: ${titlesCount}`,
-        `- Situação do Vencimento: ${dateText}`,
+        `- Quantidade de TÃƒÂ­tulos: ${titlesCount}`,
+        `- SituaÃƒÂ§ÃƒÂ£o do Vencimento: ${dateText}`,
         `- Chave PIX da Empresa Devedora: ${pixKey}`,
         storeLabel
-          ? "- Quando o lead perguntar de qual loja ou empresa é a cobrança, responda com o nome e o endereço acima. Nunca diga que possui apenas o CNPJ."
+          ? "- Quando o lead perguntar de qual loja ou empresa ÃƒÂ© a cobranÃƒÂ§a, responda com o nome e o endereÃƒÂ§o acima. Nunca diga que possui apenas o CNPJ."
           : null,
         "",
       ]
@@ -13309,44 +14092,23 @@ export class AgentManager {
     }
   }
 
-  private async executeOpticalCatalogSearch(params: {
-    agent: AgentRow;
-    lead: LeadRow;
-    decision: OpticalCatalogDecision;
-    opticalProfile: JsonRecord;
-    runId: string;
-  }): Promise<OpticalCatalogSearchResult> {
-    const ignored: OpticalCatalogSearchResult = {
-      status: "ignored", requestedCategory: null, requestedTreatment: null, products: [],
-    };
+  private async executeCommercialCatalogSearch(params: {
+    agent: AgentRow; lead: LeadRow; decision: CommercialRequest; runId: string;
+  }): Promise<CommercialResult> {
+    const ignored: CommercialResult = { status: "ignored", products: [], request: params.decision };
     if (params.decision.action === "none") return ignored;
-    const { data: binding, error: bindingError } = await this.agentsClient.from("agent_tools")
-      .select("id").eq("aces_id", params.agent.aces_id).eq("agent_id", params.agent.id)
-      .eq("tool_key", "prescription_analyst").eq("is_enabled", true).eq("readiness", "ready").maybeSingle();
-    if (bindingError || !binding) return ignored;
-    const { data, error } = await this.serviceClient.from("optical_catalog_products")
-      .select("*").eq("aces_id", params.agent.aces_id).eq("agent_tool_id", binding.id).eq("is_active", true);
-    if (error) {
-      console.error("[optical-catalog] Falha ao consultar catalogo:", error);
-      return { ...ignored, status: "empty", requestedCategory: params.decision.lensCategory, requestedTreatment: params.decision.treatment };
-    }
-    const profileCategory = params.opticalProfile.lens_type === "multifocal"
-      ? "multifocal"
-      : params.opticalProfile.lens_type === "monofocal" || params.opticalProfile.lens_type === "single_vision"
-        ? "single_vision" : null;
-    const result = searchOpticalCatalog(
-      (data ?? []).map((row: Record<string, unknown>) => this.mapOpticalCatalogProduct(row)),
-      params.decision,
-      profileCategory,
-    );
-    const toolRunId = randomUUID();
+    const binding = await this.getEnabledAgentTool(params.agent, "commercial_catalog");
+    if (!binding) return ignored;
+    const products = await this.getVisibleCommercialProducts(params.agent);
+    const result = searchCommercialCatalog(products, params.decision);
     await this.agentsClient.from("agent_tool_runs").insert({
-      id: toolRunId, aces_id: params.agent.aces_id, agent_id: params.agent.id, agent_tool_id: binding.id,
-      lead_id: params.lead.id, tool_key: "optical_catalog", status: "succeeded",
-      idempotency_key: `optical_catalog:${params.runId}:${params.agent.id}`,
-      attempt_count: 1, provider: "internal", input_snapshot: { request: params.decision, profile_category: profileCategory },
-      output_snapshot: { result }, started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
-    }).then(({ error: runError }) => { if (runError) console.warn("[optical-catalog] Auditoria nao registrada:", runError); });
+      aces_id: params.agent.aces_id, agent_id: params.agent.id, agent_tool_id: binding.id,
+      lead_id: params.lead.id, tool_key: "commercial_catalog", status: "succeeded",
+      idempotency_key: `commercial_catalog:${params.runId}:${params.agent.id}`,
+      attempt_count: 1, provider: "internal", input_snapshot: { request: params.decision },
+      output_snapshot: { product_ids: result.products.map((product) => product.id) },
+      started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+    }).then(({ error }) => { if (error && error.code !== "23505") console.warn("[commercial-catalog] Auditoria nao registrada:", error); });
     return result;
   }
 
@@ -13364,10 +14126,15 @@ export class AgentManager {
       visagism: JsonRecord;
       agenda: AgendaExecutionResult;
       storeLocator: JsonRecord;
-      opticalCatalog: OpticalCatalogSearchResult;
+      commercialCatalog: CommercialResult;
+      forwardingContext?: ForwardingReplyContext;
     }
   ): Promise<CentralAiExecutionResult<ReplyModelResponse>> {
     const mediaAssets = await this.listAvailableMediaAssets(agent);
+    mediaAssets.push(...executionContext.commercialCatalog.products.flatMap((product) => product.images.map((item) => ({
+      asset_key: item.id, display_name: `${product.displayName} - ${item.fileName}`,
+      description: `Imagem do produto ${product.displayName}.`, usage_instruction: "Enviar apenas se o cliente pedir ou se ajudar a mostrar esta opcao.",
+    }))));
     const conversation = messages
       .map((message) => {
         const role =
@@ -13375,7 +14142,9 @@ export class AgentManager {
             ? "Cliente (Lead)"
             : message.source_type === "human"
             ? "Atendente Humano"
-            : "Você (Consultor IA)";
+            : executionContext.forwardingContext?.phase === "opening"
+            ? `IA de origem (${executionContext.forwardingContext.sourceAgentName ?? "agente anterior"})`
+            : "VocÃƒÂª (Consultor IA)";
         return `${role}: ${truncateText(message.content, 2000)}`;
       })
       .join("\n");
@@ -13408,7 +14177,7 @@ export class AgentManager {
       "",
       "Voce e o agente de atendimento que responde ao lead pelo WhatsApp.",
       "ATENCAO A MEMORIA E AS REGRAS DE SAUDACAO:",
-      "- Verifique atentamente o Historico recente. Se Voce (Consultor IA) ou um Atendente Humano JA deu boas-vindas ou cumprimentou o cliente nesta conversa, E ESTRITAMENTE PROIBIDO repetir saudações (ex: Nao diga 'Ola', 'Tudo bem?', 'Como posso te ajudar?' novamente). Responda diretamente ao cliente.",
+      "- Verifique atentamente o Historico recente. Se Voce (Consultor IA) ou um Atendente Humano JA deu boas-vindas ou cumprimentou o cliente nesta conversa, E ESTRITAMENTE PROIBIDO repetir saudaÃƒÂ§ÃƒÂµes (ex: Nao diga 'Ola', 'Tudo bem?', 'Como posso te ajudar?' novamente). Responda diretamente ao cliente.",
       "- A analise operacional do CRM ja foi feita por um worker interno. Nao altere etapa, tags, resumo, check ou follow-up.",
       "Retorne JSON puro apenas com as chaves reply_blocks e media_asset_key.",
       "reply_blocks deve ser uma lista de 0 a 3 mensagens curtas, naturais e prontas para envio no WhatsApp.",
@@ -13416,10 +14185,20 @@ export class AgentManager {
       "Escolha um material apenas quando o lead pedir ou quando ele for claramente util para a resposta. Nunca invente URL ou chave.",
       "Se nao houver resposta util ou segura para enviar agora, retorne {\"reply_blocks\":[]}.",
       "Se houver handoff humano acionado, prefira nao responder ao lead, a menos que a propria conversa exija uma confirmacao curta.",
+      executionContext.forwardingContext?.phase === "opening"
+        ? `Esta e uma abertura ativa logo apos o encaminhamento. Voce e ${agent.name}, a IA de destino; apresente-se como tal e diferencie-se de ${executionContext.forwardingContext.sourceAgentName ?? "a IA de origem"}. Use o historico de origem somente para entender o assunto e dar continuidade com uma mensagem util, sem reproduzir a transcricao. Evite uma saudacao generica sem mencionar o assunto ou proximo passo.`
+        : null,
+      executionContext.forwardingContext?.phase === "opening"
+        ? "Use somente os fatos confirmados abaixo ou informacoes das suas proprias fontes configuradas. O resumo e a proxima etapa servem apenas para orientar o assunto; nao os trate como prova de dados. Se faltar um dado necessario, pergunte ao cliente em vez de supor."
+        : null,
+      executionContext.forwardingContext?.phase === "followup"
+        ? "Voce recebeu fatos confirmados de um encaminhamento anterior. Use esses fatos ou suas proprias fontes configuradas. Nao presuma dados ausentes; pergunte ao cliente quando necessario. A transcricao da IA de origem nao esta disponivel."
+        : null,
       "Se o visagismo estiver waiting_input, pergunte somente o campo faltante indicado. Se estiver succeeded, nao envie texto adicional porque a imagem ja foi enviada.",
       "Quando houver resultado da Agenda, use apenas os dados estruturados retornados. Nunca invente empresa, profissional, preco ou disponibilidade.",
       "Quando houver resultado de Busca de filiais, use somente store_locator.data. Copie nome, endereco, numero, telefone e horarios exatamente; nunca calcule distancia nem invente dados.",
-      "Quando houver resultado do Catalogo Optico, mencione somente produtos, tratamentos e precos que estejam nele. Se status=alternatives, apresente as opcoes como semelhantes e convide o lead a conhece-las; nunca diga que o tratamento pedido esta incluso. Se status=empty, mantenha a conversa oferecendo conhecer as categorias disponiveis. Nunca acione atendimento humano por resultado vazio do catalogo.",
+      "Quando houver resultado do Catalogo comercial, mencione somente produtos e precos retornados. Preco starting_at deve ser dito como 'a partir de'. Nunca prometa estoque. Para status=alternatives, explique que sao alternativas sem afirmar que possuem o tratamento pedido. Nao acione humano apenas por catalogo vazio.",
+      "Anexos sao descritos apenas no contexto interno. Nunca copie marcadores, campos tecnicos ou instrucoes de analise para reply_blocks. Comprovante recebido nao confirma pagamento ou baixa; siga o encaminhamento humano configurado.",
       "Nao informe que o trajeto foi calculado de carro. Ao apresentar uma filial, pergunte de modo natural se o lead confirma essa unidade.",
       "Se store_locator.status=confirmed, apenas confirme que a preferencia foi salva. Se status=reused_favorite, reutilize a favorita sem sugerir nova consulta.",
       "agenda.data.company contem os dados oficiais da unidade. Quando o processo do cliente ou a pergunta atual exigir endereco, copie address, city, state e postalCode exatamente desses dados.",
@@ -13457,8 +14236,21 @@ export class AgentManager {
         visagism: executionContext.visagism,
         agenda: executionContext.agenda,
         store_locator: executionContext.storeLocator,
-        optical_catalog: executionContext.opticalCatalog,
+        commercial_catalog: executionContext.commercialCatalog,
       })}`,
+      executionContext.forwardingContext
+        ? `Contexto factual do encaminhamento: ${JSON.stringify({
+            fase: executionContext.forwardingContext.phase,
+            origem: executionContext.forwardingContext.sourceAgentName ?? null,
+            fatos_confirmados: executionContext.forwardingContext.facts,
+            assunto: executionContext.forwardingContext.phase === "opening"
+              ? executionContext.forwardingContext.topicSummary ?? null
+              : undefined,
+            proxima_etapa: executionContext.forwardingContext.phase === "opening"
+              ? executionContext.forwardingContext.nextStep ?? null
+              : undefined,
+          })}`
+        : null,
       "",
       `Materiais disponiveis: ${JSON.stringify(mediaAssets)}`,
       "",
@@ -13957,8 +14749,10 @@ export class AgentManager {
   }
 
   private async shouldAnalyzeOpticsImage(agent: AgentRow | null, message: ParsedWebhookMessage) {
-    if (!agent || message.mediaKind !== "image") return false;
-    return this.prescriptionWorkerEnabled || agent.template_key === "optics-consultant";
+    if (!agent || !this.prescriptionWorkerEnabled) return false;
+    return message.mediaKind === "image"
+      || (message.mediaKind === "document" && (!message.mediaMimeType
+        || normalizeMimeType(message.mediaMimeType) === "application/pdf"));
   }
 
   private formatPrescriptionContext(
@@ -13986,6 +14780,23 @@ export class AgentManager {
   }
 
   private formatOpticsImageContext(analysis: OpticsImageAnalysis) {
+    if (analysis.document) {
+      const document = analysis.document;
+      return [
+        analysis.kind === "payment_receipt" ? "Comprovante de pagamento recebido (pagamento ainda nao confirmado)."
+          : analysis.kind === "invoice" ? "Nota fiscal recebida." : "Documento recebido.",
+        document.summary,
+        document.amount ? `Valor legivel: ${document.amount}.` : null,
+        document.date ? `Data legivel: ${document.date}.` : null,
+        document.payer ? `Pagador: ${document.payer}.` : null,
+        document.payee ? `Recebedor: ${document.payee}.` : null,
+        document.payerTaxId ? `Documento do pagador: ${document.payerTaxId}.` : null,
+        document.payeeTaxId ? `Documento do recebedor: ${document.payeeTaxId}.` : null,
+        document.transactionId ? `ID da transacao: ${document.transactionId}.` : null,
+        document.invoiceNumber ? `Numero da nota: ${document.invoiceNumber}.` : null,
+        "Aplique somente tags configuradas pelo cliente. Nao afirme que o pagamento foi compensado.",
+      ].filter(Boolean).join(" ");
+    }
     if (analysis.kind === "face" && analysis.face) {
       return [
         "[ANALISE_DE_IMAGEM_OTICA]",
@@ -14008,277 +14819,164 @@ export class AgentManager {
     const nonPrescriptionInstruction =
       analysis.kind === "product"
         ? "instrucao=esta imagem nao e uma receita/receituario oftalmologico, parece ser um produto (ex.: armacao, oculos, lente). Nunca pergunte se e para leitura de receituario. Comente o que for relevante ou pergunte com naturalidade o que a pessoa gostaria de saber sobre o item, de acordo com o que ela pediu na mensagem."
-        : "instrucao=esta imagem nao e uma receita/receituario oftalmologico (ex.: pode ser um documento, comprovante, boleto ou foto nao relacionada). Nunca pergunte se e para leitura de receituario nem tente extrair grau dela. Responda de acordo com o que a pessoa pediu na mensagem; se o motivo do envio nao estiver claro, pergunte com naturalidade do que se trata.";
-    return [
-      "[ANALISE_DE_IMAGEM_OTICA]",
-      `kind=${analysis.kind}`,
-      analysis.evidence.length > 0 ? `evidencias=${analysis.evidence.join("; ")}` : null,
-      nonPrescriptionInstruction,
-      "[/ANALISE_DE_IMAGEM_OTICA]",
-    ].filter((line): line is string => Boolean(line)).join("\n");
+        : "O tipo do anexo nao foi identificado com seguranca. Responda conforme a mensagem do cliente e nao invente dados da imagem.";
+    return [analysis.evidence.join("; "), nonPrescriptionInstruction].filter(Boolean).join(" ");
   }
 
   private async processPrescriptionImage(
     agent: AgentRow,
     lead: LeadRow,
     message: ParsedWebhookMessage
-  ) {
+  ): Promise<OpticsImageAnalysis | null> {
     if (!message.messageId || !(await this.shouldAnalyzeOpticsImage(agent, message))) return null;
-
-    const binding = (await this.getEnabledAgentTool(agent, "prescription_analyst")) ?? {
-      id: "default_prescription_tool_binding",
-      agent_id: agent.id,
-      tool_key: "prescription_analyst",
-      is_active: true,
-    };
-    const occurrenceKey = `message:${message.messageId}`;
-    const idempotencyKey = `prescription:${lead.id}:${occurrenceKey}`;
-    const { data: existing } = await this.agentsClient
-      .from("agent_tool_runs")
-      .select("id, status, output_snapshot")
-      .eq("aces_id", agent.aces_id)
-      .eq("idempotency_key", idempotencyKey)
-      .maybeSingle();
-    if (existing) {
-      const context = asString(asRecord(existing.output_snapshot).agent_context);
-      if (context) {
-        await this.serviceClient.from("message_history").update({ content: context })
-          .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
-      }
-      return context;
-    }
-
     const { data: attachment, error: attachmentError } = await this.serviceClient
       .from("message_attachments")
       .select("id, storage_bucket, storage_path, mime_type")
       .eq("aces_id", agent.aces_id)
       .eq("lead_id", lead.id)
       .eq("message_id", message.messageId)
-      .eq("kind", "image")
+      .eq("kind", message.mediaKind)
       .limit(1)
       .maybeSingle();
-    if (attachmentError) throw new HttpError(500, "Nao foi possivel carregar o receituario", attachmentError);
+    if (attachmentError) throw new HttpError(500, "Nao foi possivel consultar o anexo", attachmentError);
     if (!attachment) return null;
+    const mimeType = String(attachment.mime_type);
+    if (!mimeType.startsWith("image/") && mimeType !== "application/pdf") return null;
 
-    const toolRunId = randomUUID();
-    const startedAt = new Date();
-    const { error: runError } = await this.agentsClient.from("agent_tool_runs").insert({
-      id: toolRunId,
-      aces_id: agent.aces_id,
-      agent_id: agent.id,
-      agent_tool_id: binding.id,
-      lead_id: lead.id,
-      tool_key: "prescription_analyst",
-      status: "running",
-      idempotency_key: idempotencyKey,
-      attempt_count: 1,
-      provider: "google",
-      model: this.prescriptionWorkerModel,
-      input_snapshot: { occurrence_key: occurrenceKey, source_message_id: message.messageId, source_attachment_id: attachment.id },
-      started_at: startedAt.toISOString(),
-    });
-    if (runError) throw new HttpError(500, "Nao foi possivel iniciar a leitura do receituario", runError);
+    const { data: previous, error: previousError } = await this.serviceClient
+      .from("inbound_media_analyses")
+      .select("status, result, attempt_count")
+      .eq("aces_id", agent.aces_id)
+      .eq("attachment_id", attachment.id)
+      .maybeSingle();
+    if (previousError) throw new HttpError(500, "Nao foi possivel consultar a analise do anexo", previousError);
+    const cached = asRecord(previous?.result).analysis as OpticsImageAnalysis | undefined;
+    if (previous?.status === "succeeded" && cached?.kind) return cached;
+    const unreadable: OpticsImageAnalysis = {
+      kind: "other", evidence: ["Anexo recebido; leitura automatica indisponivel."],
+      prescription: null, face: null, document: null,
+    };
+    if (previous?.status === "failed") return unreadable;
 
-    try {
-      const { data: file, error: downloadError } = await this.serviceClient.storage
-        .from(String(attachment.storage_bucket))
-        .download(String(attachment.storage_path));
-      if (downloadError || !file) throw new HttpError(500, "Nao foi possivel baixar o receituario", downloadError);
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const prompt = [
-        "Voce e um worker optico multimodal. Analise esta imagem uma unica vez e retorne somente JSON valido.",
-        "Classifique kind como prescription, face, product, document ou other e inclua evidence como lista curta.",
-        "A foto pode estar em condicoes ruins: girada, de lado, de ponta cabeca, com sombra, dobra ou reflexo. Antes de classificar, considere a imagem em todas as rotacoes possiveis e faca o possivel para ler mesmo com qualidade imperfeita.",
-        "Se a imagem contiver uma receita/receituario oftalmologico (impresso ou manuscrito), classifique kind=prescription e extraia TODOS os dados presentes, mesmo que parciais. Nao classifique como other ou document apenas por causa de baixa qualidade, rotacao ou letra manuscrita: tente ler antes de desistir.",
-        "Se kind=prescription, preencha prescription com confidence, od_sphere, od_cylinder, od_axis, oe_sphere, oe_cylinder, oe_axis, addition, distance_pd, near_pd, patient_name, prescriber_name, prescriber_registration, prescription_date, expires_at e observations.",
-        "confidence DEVE ser sempre um numero inteiro do contrato canonico: 0 = low (baixa), 1 = medium (media), 2 = high (alta). Nunca retorne confidence como texto e nunca use valores decimais.",
-        "Nao invente valores ilegiveis: use null apenas no campo especifico que nao deu para ler, mas preencha normalmente todos os demais campos legiveis da mesma receita. Normalize graus com sinal e ponto decimal, eixos entre 0 e 180 e datas YYYY-MM-DD.",
-        "Se a imagem estiver rotacionada, cortada ou com algum trecho ilegivel, registre isso em observations (ex: 'imagem rotacionada, eixo OE ilegivel') em vez de zerar a extracao inteira.",
-        "Se kind=face, preencha face com face_shape, summary, hair, skin_tone e visual_features. Nao diagnostique nem infira atributos sensiveis.",
-        "Para campos que nao pertencem ao kind identificado, use null.",
-      ].join("\n");
-      await requireAiBudget(this.serviceClient, agent.aces_id);
-      const { result, modelName, usedFallback, attempt } = await this.generateGeminiContent(
-        this.prescriptionWorkerModel,
-        [prompt, { inlineData: { mimeType: String(attachment.mime_type || "image/jpeg"), data: buffer.toString("base64") } }]
-      );
-      const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
-      await tryRecordAiUsage(this.serviceClient, {
-        idempotencyKey: `tool_run:${toolRunId}:prescription:${attempt}`,
-        acesId: agent.aces_id,
-        featureKey: "prescription_analyst",
-        provider: "google_gemini",
-        model: modelName,
-        lineItems: geminiUsageLineItems(usage),
-        toolRunId,
-        agentId: agent.id,
-        leadId: lead.id,
-        instanceName: agent.instance_name,
-        metadata: { used_fallback_model: usedFallback, generation_attempt: attempt },
-      });
-      const rawText = result.response.text();
-      const analysis = parseOpticsImageAnalysis(rawText);
-      if (analysis.kind !== "prescription" || !analysis.prescription) {
-        const agentContext = this.formatOpticsImageContext(analysis);
-        await this.serviceClient.from("message_history").update({ content: agentContext })
-          .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
-        await this.agentsClient.from("agent_tool_runs").update({
-          status: "cancelled",
-          output_snapshot: {
-            image_analysis: analysis,
-            agent_context: agentContext,
-            raw_model_response: rawText,
-            model_name: modelName,
-            used_fallback_model: usedFallback,
-            generation_attempt: attempt,
-          },
-          completed_at: new Date().toISOString(),
-        }).eq("id", toolRunId).eq("aces_id", agent.aces_id);
-        await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
+    const prompt = [
+      "Voce analisa um anexo enviado por um cliente. Retorne somente JSON valido.",
+      "Classifique kind como prescription, payment_receipt, invoice, face, product, document ou other.",
+      "Comprovante de Pix, transferencia, deposito ou pagamento e payment_receipt. Nota fiscal e invoice.",
+      "Para payment_receipt, invoice ou document, preencha document com summary, amount, date, payer, payee, payer_tax_id, payee_tax_id, transaction_id e invoice_number; use null onde nao estiver legivel.",
+      "Um comprovante mostra uma alegacao de pagamento, nao confirma compensacao ou baixa financeira.",
+      "Se kind=prescription, preencha prescription com confidence (0, 1 ou 2), od_sphere, od_cylinder, od_axis, oe_sphere, oe_cylinder, oe_axis, addition, distance_pd, near_pd, patient_name, prescriber_name, prescriber_registration, prescription_date, expires_at e observations.",
+      "Leia receitas impressas ou manuscritas mesmo parcialmente. Nao invente valores ilegiveis.",
+      "Se kind=face, preencha face com face_shape, summary, hair, skin_tone e visual_features. Nao infira atributos sensiveis.",
+      "Inclua evidence como uma lista curta de sinais visiveis. Campos de outros tipos devem ser null.",
+    ].join("\n");
+    let lastError: unknown = null;
+    const firstAttempt = previous?.status === "running" ? Number(previous.attempt_count ?? 0) + 1 : 1;
+    for (let attempt = firstAttempt; attempt <= 3; attempt += 1) {
+      const { error: startError } = await this.serviceClient.from("inbound_media_analyses").upsert({
+        aces_id: agent.aces_id, lead_id: lead.id, message_id: message.messageId,
+        attachment_id: attachment.id, status: "running", attempt_count: attempt, error_code: null,
+      }, { onConflict: "attachment_id" });
+      if (startError) throw new HttpError(500, "Nao foi possivel registrar a analise do anexo", startError);
+      try {
+        const { data: file, error: downloadError } = await this.serviceClient.storage
+          .from(String(attachment.storage_bucket)).download(String(attachment.storage_path));
+        if (downloadError || !file) throw new Error("Falha ao baixar o anexo para leitura");
+        await requireAiBudget(this.serviceClient, agent.aces_id);
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const { result, modelName, usedFallback } = await this.generateGeminiContent(
+          this.prescriptionWorkerModel,
+          [prompt, { inlineData: { mimeType, data: buffer.toString("base64") } }],
+          0.2,
+          1,
+        );
+        const usage = asRecord((result.response as unknown as JsonRecord).usageMetadata);
+        await tryRecordAiUsage(this.serviceClient, {
+          idempotencyKey: `inbound_media:${attachment.id}:${attempt}`,
+          acesId: agent.aces_id, featureKey: "vision", provider: "google_gemini",
+          model: modelName, lineItems: geminiUsageLineItems(usage),
+          agentId: agent.id, leadId: lead.id, instanceName: agent.instance_name,
+          metadata: { used_fallback_model: usedFallback, generation_attempt: attempt },
+        });
+        const analysis = parseOpticsImageAnalysis(result.response.text());
+        const occurrenceKey = `message:${message.messageId}`;
+        let agentContext = this.formatOpticsImageContext(analysis);
+        if (analysis.kind === "prescription" && analysis.prescription) {
+          const extraction = analysis.prescription;
+          const readiness = evaluatePrescriptionReadiness(extraction);
+          const status = readiness.valid ? "parsed" : "needs_new_image";
+          agentContext = this.formatPrescriptionContext(extraction, status, false);
+          const { data: prior, error: priorError } = await this.serviceClient.from("receituarios")
+            .select("id").eq("aces_id", agent.aces_id).eq("occurrence_key", occurrenceKey).maybeSingle();
+          if (priorError) throw priorError;
+          if (!prior) {
+            const { error: prescriptionError } = await this.serviceClient.from("receituarios").insert({
+              lead_id: lead.id, aces_id: agent.aces_id, source_message_id: message.messageId,
+              source_attachment_id: attachment.id, agent_tool_run_id: null, occurrence_key: occurrenceKey,
+              status, od_sphere: extraction.odSphere, od_cylinder: extraction.odCylinder,
+              od_axis: extraction.odAxis, oe_sphere: extraction.oeSphere,
+              oe_cylinder: extraction.oeCylinder, oe_axis: extraction.oeAxis,
+              addition: extraction.addition, distance_pd: extraction.distancePd, near_pd: extraction.nearPd,
+              patient_name: extraction.patientName, prescriber_name: extraction.prescriberName,
+              prescriber_registration: extraction.prescriberRegistration,
+              prescription_date: extraction.prescriptionDate, expires_at: extraction.expiresAt,
+              observacoes: extraction.observations, analysis_model: modelName,
+              raw_extraction: { extraction, validation_errors: readiness.errors },
+              extraction_confidence: extraction.confidence,
+              lens_category: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+              tipo_lente: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+            });
+            if (prescriptionError && prescriptionError.code !== "23505") throw prescriptionError;
+          }
+          await this.upsertLeadState(agent.id, lead.id, {
+            optical_profile: {
+              has_prescription: true, od_sphere: extraction.odSphere, od_cylinder: extraction.odCylinder,
+              od_axis: extraction.odAxis, oe_sphere: extraction.oeSphere,
+              oe_cylinder: extraction.oeCylinder, oe_axis: extraction.oeAxis,
+              addition: extraction.addition, lens_type: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+              lens_category: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
+              patient_name: extraction.patientName, prescription_date: extraction.prescriptionDate,
+            },
+            memory_summary: `Cliente possui receita optica cadastrada. Grau OD: Esf ${extraction.odSphere ?? "?"} Cil ${extraction.odCylinder ?? "?"} Eixo ${extraction.odAxis ?? "?"} / OE: Esf ${extraction.oeSphere ?? "?"} Cil ${extraction.oeCylinder ?? "?"} Eixo ${extraction.oeAxis ?? "?"} Adicao: ${extraction.addition ?? "?"}`,
+          });
+        }
+        const { error: finishError } = await this.serviceClient.from("inbound_media_analyses")
+          .update({ status: "succeeded", kind: analysis.kind, result: { analysis, agent_context: agentContext }, error_code: null })
+          .eq("aces_id", agent.aces_id).eq("attachment_id", attachment.id);
+        if (finishError) throw finishError;
         return analysis;
+      } catch (error) {
+        lastError = error;
+        console.warn("[crm-ai] Falha ao analisar anexo:", {
+          acesId: agent.aces_id, leadId: lead.id, attachmentId: attachment.id, attempt,
+          error: error instanceof Error ? error.message : error,
+        });
+        if (shouldRetryInboundMediaRead(error, attempt)) await wait(400 * 2 ** (attempt - 1));
+        else break;
       }
-      const extraction = analysis.prescription;
-      const readiness = evaluatePrescriptionReadiness(extraction);
-      const validationErrors = readiness.errors;
-      const valid = readiness.valid;
-      const status = valid ? "parsed" : "needs_new_image";
-      // The prescription is a profile signal, never a price gate. Commercial values are
-      // resolved from optical_catalog_products on each customer request.
-      const { count: priorFailures } = await this.agentsClient.from("agent_tool_runs")
-        .select("id", { count: "exact", head: true }).eq("aces_id", agent.aces_id).eq("lead_id", lead.id)
-        .eq("tool_key", "prescription_analyst").eq("status", "waiting_input");
-      const handoffRequired = !valid && Number(priorFailures ?? 0) >= 1;
-      const agentContext = this.formatPrescriptionContext(extraction, status, handoffRequired);
-      const outputSnapshot = {
-        occurrence_key: occurrenceKey,
-        extraction,
-        validation_errors: validationErrors,
-        matched_rule: null,
-        handoff_required: handoffRequired,
-        agent_context: agentContext,
-        raw_model_response: rawText,
-        model_name: modelName,
-        used_fallback_model: usedFallback,
-        generation_attempt: attempt,
-      };
-      const { error: prescriptionError } = await this.serviceClient.from("receituarios").insert({
-        lead_id: lead.id,
-        aces_id: agent.aces_id,
-        source_message_id: message.messageId,
-        source_attachment_id: attachment.id,
-        agent_tool_run_id: toolRunId,
-        occurrence_key: occurrenceKey,
-        status,
-        od_sphere: extraction.odSphere,
-        od_cylinder: extraction.odCylinder,
-        od_axis: extraction.odAxis,
-        oe_sphere: extraction.oeSphere,
-        oe_cylinder: extraction.oeCylinder,
-        oe_axis: extraction.oeAxis,
-        addition: extraction.addition,
-        distance_pd: extraction.distancePd,
-        near_pd: extraction.nearPd,
-        patient_name: extraction.patientName,
-        prescriber_name: extraction.prescriberName,
-        prescriber_registration: extraction.prescriberRegistration,
-        prescription_date: extraction.prescriptionDate,
-        expires_at: extraction.expiresAt,
-        observacoes: extraction.observations,
-        analysis_model: modelName,
-        raw_extraction: outputSnapshot,
-        extraction_confidence: extraction.confidence,
-        lens_category: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
-        tipo_lente: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
-        matched_lens_price_rule_id: null,
-        quoted_price_cents: null,
-      });
-      if (prescriptionError) throw new HttpError(500, "Nao foi possivel salvar o receituario", prescriptionError);
-
-      const opticalProfileData = {
-        has_prescription: true,
-        od_sphere: extraction.odSphere,
-        od_cylinder: extraction.odCylinder,
-        od_axis: extraction.odAxis,
-        oe_sphere: extraction.oeSphere,
-        oe_cylinder: extraction.oeCylinder,
-        oe_axis: extraction.oeAxis,
-        addition: extraction.addition,
-        lens_type: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
-        lens_category: (extraction.addition ?? 0) > 0 ? "multifocal" : "single_vision",
-        patient_name: extraction.patientName,
-        prescription_date: extraction.prescriptionDate,
-      };
-      await this.upsertLeadState(agent.id, lead.id, {
-        optical_profile: opticalProfileData,
-        memory_summary: `Cliente possui receita óptica cadastrada. Lente: ${(extraction.addition ?? 0) > 0 ? "Multifocal" : "Visao Simples"}. Grau OD: Esf ${extraction.odSphere ?? "?"} Cil ${extraction.odCylinder ?? "?"} Eixo ${extraction.odAxis ?? "?"} / OE: Esf ${extraction.oeSphere ?? "?"} Cil ${extraction.oeCylinder ?? "?"} Eixo ${extraction.oeAxis ?? "?"} Adição: ${extraction.addition ?? "?"}`,
-      });
-      await this.serviceClient.from("message_history").update({ content: agentContext })
-        .eq("id", message.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
-      await this.agentsClient.from("agent_tool_runs").update({
-        status: valid ? "succeeded" : "waiting_input",
-        output_snapshot: outputSnapshot,
-        completed_at: new Date().toISOString(),
-      }).eq("id", toolRunId).eq("aces_id", agent.aces_id);
-      await this.enqueueBiEvent({
-        acesId: agent.aces_id,
-        aggregateType: "agent_tool_run",
-        aggregateId: toolRunId,
-        eventType: valid ? "tool.prescription_analyst.succeeded" : "tool.prescription_analyst.needs_new_image",
-        payload: {
-          tool_key: "prescription_analyst", tool_run_id: toolRunId, agent_id: agent.id, lead_id: lead.id,
-          status: valid ? "succeeded" : "waiting_input", duration_ms: Date.now() - startedAt.getTime(),
-          confidence: extraction.confidence, matched_rule_id: null, handoff_required: handoffRequired,
-        },
-      });
-      await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
-      return analysis;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Falha ao analisar receituario";
-      await this.agentsClient.from("agent_tool_runs").update({
-        status: "failed", error_code: "prescription_analysis_failed", error_message: errorMessage,
-        completed_at: new Date().toISOString(),
-      }).eq("id", toolRunId).eq("aces_id", agent.aces_id);
-      await this.enqueueBiEvent({
-        acesId: agent.aces_id, aggregateType: "agent_tool_run", aggregateId: toolRunId,
-        eventType: "tool.prescription_analyst.failed",
-        payload: { tool_key: "prescription_analyst", tool_run_id: toolRunId, agent_id: agent.id, lead_id: lead.id, status: "failed", error: errorMessage },
-      });
-      throw error;
     }
+    await this.serviceClient.from("inbound_media_analyses")
+      .update({ status: "failed", result: { agent_context: "Anexo recebido, mas a leitura automatica esta indisponivel. Nao invente os dados do documento." },
+        error_code: lastError instanceof Error ? truncateText(lastError.message, 120) : "analysis_failed" })
+      .eq("aces_id", agent.aces_id).eq("attachment_id", attachment.id);
+    return unreadable;
   }
 
   private async processBufferedOpticsImages(agent: AgentRow, lead: LeadRow, entries: ParsedWebhookMessage[]) {
     const analyses = new Map<string, OpticsImageAnalysis>();
     for (const entry of entries) {
-      if (entry.mediaKind !== "image" || !entry.messageId) continue;
+      if ((entry.mediaKind !== "image" && entry.mediaKind !== "document") || !entry.messageId) continue;
       try {
         const analysis = await this.processPrescriptionImage(agent, lead, entry);
-        if (analysis && typeof analysis === "object") analyses.set(entry.messageId, analysis);
+        if (analysis) analyses.set(entry.messageId, analysis);
       } catch (error) {
-        // Preserve the conversation even if the internal visual worker is temporarily unavailable.
-        // Without this fallback, message_history keeps the raw "[imagem recebida para analise
-        // optica]" placeholder with zero guidance, and the main agent (which only knows the
-        // ANALISE_DE_RECEITUARIO marker) defaults to assuming every image is a prescription.
-        console.warn("[crm-ai] Falha ao processar imagem otica, aplicando fallback de contexto:", {
-          acesId: agent.aces_id,
-          leadId: lead.id,
-          messageId: entry.messageId,
+        console.warn("[crm-ai] Analise do anexo indisponivel:", {
+          acesId: agent.aces_id, leadId: lead.id, messageId: entry.messageId,
           error: error instanceof Error ? error.message : error,
         });
-        const fallbackContext = [
-          "[ANALISE_DE_IMAGEM_OTICA]",
-          "kind=other",
-          "instrucao=nao foi possivel processar automaticamente esta imagem agora. Ela pode nao ser uma receita/receituario oftalmologico; nunca pergunte se e para leitura de receituario nem afirme que a imagem esta ilegivel. Responda de acordo com o que a pessoa pediu na mensagem ou pergunte com naturalidade do que se trata.",
-          "[/ANALISE_DE_IMAGEM_OTICA]",
-        ].join("\n");
-        await this.serviceClient.from("message_history").update({ content: fallbackContext })
-          .eq("id", entry.messageId).eq("aces_id", agent.aces_id).eq("lead_id", lead.id);
-        await this.invalidateChatMessagesCache(agent.aces_id, lead.id);
       }
     }
     return analyses;
   }
-
   private async findLatestFaceMessageId(acesId: number, leadId: string) {
     const { data, error } = await this.serviceClient.from("message_history")
       .select("id")
@@ -14431,6 +15129,7 @@ export class AgentManager {
     const activeDelegation = await this.resolveActiveSubagentSession(channelAgent, lead.id);
     let subagentSession = activeDelegation.session;
     if (activeDelegation.subagent) agent = activeDelegation.subagent;
+    let forwardingFacts = await this.resolveActiveIncomingAgentTransferFacts(agent, lead.id);
     const aiState = await this.resolveLeadAiState(
       lead.id,
       channelAgent,
@@ -14492,6 +15191,32 @@ export class AgentManager {
     let rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
     const tags = await this.getTagsForAccount(agent.aces_id);
     const conversation = await this.fetchRecentConversation(lead.id, agent.instance_name, customerConversationId);
+    const leadEvidenceSources: ForwardingEvidenceSource[] = conversation
+      .filter((entry) => entry.source_type === "lead")
+      .map((entry) => ({ source: "lead_message", content: entry.content }));
+    const mediaToolEvidenceSources: ForwardingEvidenceSource[] = [];
+    const mediaMessageIds = conversation.map((entry) => entry.id).filter(Boolean);
+    if (mediaMessageIds.length > 0) {
+      const { data: mediaContexts, error: mediaContextError } = await this.serviceClient
+        .from("inbound_media_analyses")
+        .select("message_id, status, result")
+        .eq("aces_id", agent.aces_id)
+        .eq("lead_id", lead.id)
+        .in("status", ["succeeded", "failed"])
+        .in("message_id", mediaMessageIds);
+      if (mediaContextError) console.warn("[crm-ai] Falha ao carregar contexto de anexos:", mediaContextError);
+      const byMessageId = new Map((mediaContexts ?? []).map((row) => {
+        const agentContext = asString(asRecord(row.result).agent_context);
+        if (row.status === "succeeded" && agentContext) {
+          mediaToolEvidenceSources.push({ source: "tool_result", content: agentContext });
+        }
+        return [String(row.message_id), agentContext] as const;
+      }));
+      for (const entry of conversation) {
+        const context = byMessageId.get(entry.id);
+        if (context) entry.content = `${entry.content}\n${context}`;
+      }
+    }
     const temporalContext = buildNativeTemporalContext();
     const inboundMessages = bufferedEntries
       .map((entry) => entry.messageId)
@@ -14511,6 +15236,7 @@ export class AgentManager {
         conversation,
         runId,
         customerConversationId,
+        forwardingFacts,
       );
 
       if (subagentSession && result.parsed.return_to_parent) {
@@ -14524,6 +15250,7 @@ export class AgentManager {
         agent = channelAgent;
         leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
         rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
+        forwardingFacts = await this.resolveActiveIncomingAgentTransferFacts(agent, lead.id);
         result = await this.classifyConversation(
           agent,
           lead,
@@ -14532,6 +15259,7 @@ export class AgentManager {
           conversation,
           runId,
           customerConversationId,
+          forwardingFacts,
         );
       }
 
@@ -14544,13 +15272,18 @@ export class AgentManager {
             subagent: selectedSubagent,
             activeSession: null,
             reason: result.parsed.reason || `Atendimento encaminhado para ${selectedSubagent.name}.`,
-            context: { run_id: runId, subagent_key: selectedSubagent.agent_key },
+            context: {
+              run_id: runId,
+              subagent_key: selectedSubagent.agent_key,
+              verified_facts: forwardingFacts,
+            },
           });
           if (!claim.ownsRun) return;
           subagentSession = claim.session;
           agent = selectedSubagent;
           leadState = await this.getLeadState(agent.id, lead.id, customerConversationId);
           rules = await this.getStageRulesForAgent(agent, pipelineAiSettings.pipelineId);
+          forwardingFacts = await this.resolveActiveIncomingAgentTransferFacts(agent, lead.id);
           result = await this.classifyConversation(
             agent,
             lead,
@@ -14559,6 +15292,7 @@ export class AgentManager {
             conversation,
             runId,
             customerConversationId,
+            forwardingFacts,
           );
         }
       } else if (subagentSession) {
@@ -14591,6 +15325,7 @@ export class AgentManager {
         lead,
         request: result.parsed.agenda_request,
         storedContext: leadState?.agenda_context,
+        customerMessage: latestInbound?.content,
         runId,
         customerConversationId,
       });
@@ -14600,11 +15335,10 @@ export class AgentManager {
         decision: result.parsed.store_locator,
         sourceMessageId: latestInbound?.id ?? null,
       });
-      const opticalCatalogApplication = await this.executeOpticalCatalogSearch({
+      const commercialCatalogApplication = await this.executeCommercialCatalogSearch({
         agent,
         lead,
-        decision: result.parsed.optical_catalog_request,
-        opticalProfile: leadState?.optical_profile ?? {},
+        decision: result.parsed.commercial_catalog_request,
         runId,
       });
       const delegatedToInternalAgent = agent.agent_type === "subagent";
@@ -14617,28 +15351,124 @@ export class AgentManager {
         result.parsed.handoff_reason =
           result.parsed.handoff_reason || "Solicitacao de agenda que exige atendimento humano.";
       }
-      const replyResult = await this.generateAgentReply(
-        agent,
-        lead,
-        conversation,
-        result.parsed,
-        runId,
-        customerConversationId,
-        {
-          nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
-          nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
-          handoffTriggered: result.parsed.should_handoff,
-          visagism: asRecord(visagismApplication),
-          agenda: agendaApplication,
-          storeLocator: asRecord(storeLocatorApplication),
-          opticalCatalog: opticalCatalogApplication,
-        },
+      const forwardingEvidenceSources: ForwardingEvidenceSource[] = [
+        ...leadEvidenceSources,
+        ...mediaToolEvidenceSources,
+        { source: "agent_configuration", content: agent.system_prompt },
+      ];
+      const addSuccessfulToolEvidence = (value: unknown, successfulStatuses: string[]) => {
+        const record = asRecord(value);
+        if (successfulStatuses.includes(String(record.status))) {
+          forwardingEvidenceSources.push({ source: "tool_result", content: JSON.stringify(record) });
+        }
+      };
+      addSuccessfulToolEvidence(agendaApplication, ["succeeded"]);
+      addSuccessfulToolEvidence(storeLocatorApplication, ["succeeded", "confirmed"]);
+      addSuccessfulToolEvidence(commercialCatalogApplication, ["exact", "alternatives"]);
+
+      let preparedAgentHandoff: HandoffExecutionResult | null = null;
+      if (result.parsed.should_handoff) {
+        try {
+          const handoffConfig = await this.getHandoffConfig(agent);
+          const destination = result.parsed.forwarding_destination_key
+            ? handoffConfig.destinations.find((item) => item.destination_key === result.parsed.forwarding_destination_key)
+            : null;
+          if (destination?.mode === "agent" && destination.target_agent_id) {
+            try {
+              preparedAgentHandoff = await this.triggerHandoff(
+                agent,
+                lead,
+                result.parsed,
+                conversation,
+                customerConversationId,
+                {
+                  messages: conversation,
+                  analysis: result.parsed,
+                  evidenceSources: forwardingEvidenceSources,
+                  inheritedFacts: forwardingFacts,
+                  customerConversationId,
+                  agenda: agendaApplication,
+                  storeLocator: asRecord(storeLocatorApplication),
+                  commercialCatalog: commercialCatalogApplication,
+                },
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error("[crm-ai] Falha ao iniciar o encaminhamento entre IAs:", error);
+              preparedAgentHandoff = {
+                triggered: false,
+                mode: "agent",
+                targetPhone: null,
+                targetAgentId: destination.target_agent_id,
+                reason: result.parsed.handoff_reason || message,
+                notification: message,
+              };
+            }
+          }
+        } catch (error) {
+          console.warn("[crm-ai] Nao foi possivel resolver antecipadamente o destino do encaminhamento:", error);
+        }
+      }
+      const sourceReplySuppressed = Boolean(
+        preparedAgentHandoff && shouldSuppressSourceReplyAfterAgentForwarding(preparedAgentHandoff),
       );
+      const deterministicRescheduleReply = agendaApplication.intent === "reschedule";
+      const rescheduleReplyText = agendaApplication.status === "denied"
+        ? "Nao consigo fazer essa alteracao automaticamente agora. Posso encaminhar seu pedido para um atendente."
+        : agendaApplication.status === "failed"
+          ? "Nao consegui concluir o reagendamento agora. Seu agendamento atual continua ativo."
+          : agendaApplication.message;
+      const replyResult: CentralAiExecutionResult<ReplyModelResponse> = sourceReplySuppressed
+        ? {
+          parsed: { reply_blocks: [], media_asset_key: null },
+          rawText: "",
+          provider: result.provider,
+          providerRequestId: null,
+          modelName: "source-reply-suppressed-after-agent-forwarding",
+          usedFallback: false,
+          attempt: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          usageLineItems: [],
+        }
+        : deterministicRescheduleReply
+        ? {
+          parsed: { reply_blocks: [rescheduleReplyText], media_asset_key: null },
+          rawText: rescheduleReplyText,
+          provider: result.provider,
+          providerRequestId: null,
+          modelName: "deterministic-agenda",
+          usedFallback: false,
+          attempt: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          usageLineItems: [],
+        }
+        : await this.generateAgentReply(
+          agent,
+          lead,
+          conversation,
+          result.parsed,
+          runId,
+          customerConversationId,
+          {
+            nativeFollowupShouldSchedule: result.parsed.native_followup.should_schedule,
+            nativeFollowupNeedsClarification: result.parsed.native_followup.needs_clarification,
+            handoffTriggered: result.parsed.should_handoff,
+            visagism: asRecord(visagismApplication),
+            agenda: agendaApplication,
+            storeLocator: asRecord(storeLocatorApplication),
+            commercialCatalog: commercialCatalogApplication,
+            forwardingContext: forwardingFacts.length > 0
+              ? { phase: "followup", facts: forwardingFacts }
+              : undefined,
+          },
+        );
       result.parsed.reply_blocks = replyResult.parsed.reply_blocks;
       const visagismRecord = asRecord(visagismApplication);
-      if (!delegatedToInternalAgent && visagismRecord.status === "succeeded") {
+      if (!deterministicRescheduleReply && !delegatedToInternalAgent && visagismRecord.status === "succeeded") {
         result.parsed.reply_blocks = [];
-      } else if (!delegatedToInternalAgent && visagismRecord.status === "waiting_input") {
+      } else if (!deterministicRescheduleReply && !delegatedToInternalAgent && visagismRecord.status === "waiting_input") {
         const missing = Array.isArray(visagismRecord.missingAnswerKeys)
           ? visagismRecord.missingAnswerKeys.map(String)
           : [];
@@ -14731,7 +15561,7 @@ export class AgentManager {
         }
       }
 
-      let handoffResult = await this.triggerHandoff(
+      let handoffResult = preparedAgentHandoff ?? await this.triggerHandoff(
         agent,
         lead,
         result.parsed,
@@ -14742,7 +15572,8 @@ export class AgentManager {
         subagentSession &&
         result.parsed.should_handoff &&
         !handoffResult.triggered &&
-        handoffResult.mode !== "external_notification"
+        handoffResult.mode !== "external_notification" &&
+        handoffResult.mode !== "agent"
       ) {
         handoffResult = await this.forceInternalAgentHumanHandoff({
           agent,
@@ -14783,6 +15614,7 @@ export class AgentManager {
       }
       if (handoffResult.triggered && handoffResult.mode !== "external_notification") {
         await this.saveAgendaContext(agent.id, lead.id, null, customerConversationId);
+        await this.finishActiveIncomingAgentTransfers(agent, lead.id);
       }
       const shouldFreezeLead = shouldFreezeAfterHandoff(result.parsed.should_pause, handoffResult);
 
@@ -15071,7 +15903,7 @@ export class AgentManager {
       const agent = instanceAuthorized ? candidateAgent : null;
     const ownerIdForLead = null;
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
-      ? "[imagem recebida para analise optica]"
+      ? (message.content.trim() || (message.mediaKind === "document" ? "[documento recebido]" : "[imagem recebida]"))
       : await this.normalizeInboundContent(
           message,
           undefined,
@@ -15429,7 +16261,7 @@ export class AgentManager {
       () => this.resolveMediaBytes(message),
     );
     const normalizedContent = await this.shouldAnalyzeOpticsImage(agent, message)
-      ? "[imagem recebida para analise optica]"
+      ? (message.content.trim() || (message.mediaKind === "document" ? "[documento recebido]" : "[imagem recebida]"))
       : await this.normalizeInboundContent(
           message,
           resolvedGupshupMedia,
@@ -17440,7 +18272,7 @@ export class AgentManager {
       params.answers.find((answer) => answer.question_key === "desired_feeling")?.answer_text ?? "";
     const prompt = [
       "Edite a foto do cliente para experimentar a armacao indicada.",
-      "Mantenha o rosto, pele, pose e cenario da foto original o mais fiéis possivel.",
+      "Mantenha o rosto, pele, pose e cenario da foto original o mais fiÃƒÂ©is possivel.",
       "Nao invente objetos, textos ou pessoas adicionais.",
       "Substitua os oculos existentes pela armacao selecionada quando houver oculos na imagem.",
       "A primeira imagem e a foto do cliente. A segunda imagem e a armacao exata que deve ser aplicada.",

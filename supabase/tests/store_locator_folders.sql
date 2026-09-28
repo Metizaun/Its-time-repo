@@ -5,7 +5,11 @@ SELECT plan(9);
 SELECT has_table('locator', 'store_folders', 'pastas da Busca de filiais existem');
 SELECT has_column('locator', 'stores', 'folder_id', 'filial pode pertencer a uma pasta');
 SELECT has_index('locator', 'store_folders', 'locator_store_folders_account_name_uidx', 'pastas possuem nome unico por conta');
-SELECT has_index('locator', 'stores', 'locator_stores_folder_id_idx', 'filiais possuem indice para cascata da pasta');
+SELECT ok(
+  NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'locator'
+    AND tablename = 'stores' AND indexname = 'locator_stores_folder_id_idx'),
+  'filiais nao mantem o indice secundario da pasta'
+);
 SELECT ok(
   NOT has_table_privilege('anon', 'locator.store_folders', 'SELECT')
   AND NOT has_table_privilege('authenticated', 'locator.store_folders', 'SELECT'),

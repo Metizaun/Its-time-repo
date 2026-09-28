@@ -5,12 +5,13 @@ import { toast } from "sonner";
 import { AgentBotIcon, ToolGlyph } from "@/components/agents/AgentCapabilityFlow";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { OpticsToolConfigPanel } from "@/components/agents/OpticsToolConfigPanel";
+import { VisagismCatalogPanel } from "@/components/agents/VisagismCatalogPanel";
 import { AudioToolConfigPanel } from "@/components/agents/AudioToolConfigPanel";
 import { ForwardingConfigPanel } from "@/components/agents/ForwardingConfigPanel";
 import { CalendarToolConfigPanel } from "@/components/agents/CalendarToolConfigPanel";
 import { StoreLocatorConfigPanel } from "@/components/agents/StoreLocatorConfigPanel";
 import { SendMediaCatalogPanel } from "@/components/agents/SendMediaCatalogPanel";
+import { CommercialCatalogPanel } from "@/components/agents/CommercialCatalogPanel";
 import {
   listAgentTools,
   updateAgentTool,
@@ -25,7 +26,7 @@ type AgentToolsPanelProps = {
   onConfigure?: (toolKey: ConfigurableToolKey) => void;
 };
 
-type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "send_media" | "prescription_analyst" | "visagism" | "store_locator";
+type ConfigurableToolKey = "ai_audio" | "calendar" | "forwarding" | "send_media" | "visagism" | "store_locator" | "commercial_catalog";
 
 function readinessCopy(tool: AgentTool) {
   if (tool.enabled) return "Ativa";
@@ -35,7 +36,7 @@ function readinessCopy(tool: AgentTool) {
 }
 
 function isConfigurableToolKey(value: string): value is ConfigurableToolKey {
-  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "send_media" || value === "prescription_analyst" || value === "visagism" || value === "store_locator";
+  return value === "ai_audio" || value === "calendar" || value === "forwarding" || value === "send_media" || value === "visagism" || value === "store_locator" || value === "commercial_catalog";
 }
 
 export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose, onCreateSubagent, onConfigure }: AgentToolsPanelProps) {
@@ -149,9 +150,9 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
                 <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-lg)] border border-[var(--cq-flow-icon-border)] bg-[var(--color-surface-1)] shadow-sm">
                   <ToolGlyph tool={tool} className="h-5 w-5" />
                 </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-[var(--color-gray-800)]">{tool.name}</p>
-                  <p className="mt-0.5 text-xs text-[var(--color-gray-500)]">{readinessCopy(tool)}</p>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <p className="min-w-0 truncate text-sm font-semibold text-[var(--color-gray-800)]">{tool.name}</p>
+                  <span className="text-xs text-[var(--color-gray-500)]">{readinessCopy(tool)}</span>
                 </div>
               </div>
               {saving ? (
@@ -214,10 +215,9 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
               onChanged={() => setReloadKey((value) => value + 1)}
             />
           ) : null}
-          {(tool.key === "prescription_analyst" || tool.key === "visagism") && toolFilterKey === tool.key ? (
-            <OpticsToolConfigPanel
+          {tool.key === "visagism" && toolFilterKey === tool.key ? (
+            <VisagismCatalogPanel
               agentId={agentId}
-              toolKey={tool.key}
               onClose={closeConfiguration}
               onChanged={() => setReloadKey((value) => value + 1)}
             />
@@ -229,6 +229,9 @@ export function AgentToolsPanel({ agentId, toolFilterKey = null, onRequestClose,
               onClose={closeConfiguration}
               onChanged={() => setReloadKey((value) => value + 1)}
             />
+          ) : null}
+          {tool.key === "commercial_catalog" && toolFilterKey === tool.key ? (
+            <CommercialCatalogPanel agentId={agentId} onClose={closeConfiguration} onChanged={() => setReloadKey((value) => value + 1)} />
           ) : null}
           {tool.key === "send_media" && toolFilterKey === tool.key ? (
             <SendMediaCatalogPanel

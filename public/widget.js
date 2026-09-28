@@ -757,7 +757,7 @@
     ".error{margin:0;font-size:13px;color:#d92d20;}",
     ".submit{background:var(--iw-accent);color:#fff;border:0;border-radius:999px;padding:12px 16px;font-size:14px;font-weight:600;cursor:pointer;}",
     ".submit[disabled]{opacity:.65;cursor:default;}",
-    "@media (max-width:440px){.panel{right:10px;left:10px;width:auto;bottom:90px;}.teaser{right:10px;bottom:80px;width:auto;max-width:calc(100vw - 20px);}}",
+    "@media (max-width:600px){.panel{inset:0;width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;border:0;border-radius:0;padding-bottom:env(safe-area-inset-bottom);}.header{padding-top:calc(16px + env(safe-area-inset-top));}.composer input,.field input{font-size:16px;}.teaser{right:10px;bottom:80px;width:auto;max-width:calc(100vw - 20px);}}",
   ].join("");
 
   if (document.readyState === "loading") {

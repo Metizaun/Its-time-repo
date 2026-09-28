@@ -26,7 +26,13 @@ const ATTACHMENT_PLACEHOLDERS = new Set([
   "[documento enviado]",
   "[imagem recebida]",
   "[audio recebido]",
+  "[documento recebido]",
+  "[imagem recebida para analise optica]",
 ]);
+
+function isInternalMediaContext(content: string) {
+  return /^\[(?:ANALISE_DE_IMAGEM_OTICA|ANALISE_DE_RECEITUARIO)\]/.test(content);
+}
 
 function formatInternalNote(content: string) {
   const withoutPrefix = content.replace("[Nota Interna - Handoff IA]", "").trim();
@@ -54,7 +60,7 @@ export function MessageBubble({
   const visibleContent = templateCard
     ? ""
     :
-    hasAudioAttachment || (attachments.length > 0 && ATTACHMENT_PLACEHOLDERS.has(normalizedContent.toLowerCase()))
+    hasAudioAttachment || isInternalMediaContext(normalizedContent) || (attachments.length > 0 && ATTACHMENT_PLACEHOLDERS.has(normalizedContent.toLowerCase()))
       ? ""
       : normalizedContent;
   const hasAttachments = attachments.length > 0;

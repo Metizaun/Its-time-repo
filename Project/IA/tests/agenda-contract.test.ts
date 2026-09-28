@@ -21,6 +21,7 @@ const ids = {
 function base(eventType: string, resource: unknown, resourceVersion: number | null = 1) {
   return {
     schemaVersion: "1.0",
+    publicConnectionId: "4f5a39c0d310a4b91f8de2c770a1b2c3d4e5f60718293a4b",
     eventId: ids.event,
     eventType,
     occurredAt: "2026-09-11T14:30:00-03:00",

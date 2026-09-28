@@ -10,6 +10,7 @@ import {
   ScanLine,
   Wallet,
   MapPinned,
+  ShoppingBag,
   Wrench,
 } from "lucide-react";
 
@@ -31,6 +32,7 @@ const TOOL_ICONS = {
   prescription_analyst: ScanLine,
   visagism: ScanFace,
   store_locator: MapPinned,
+  commercial_catalog: ShoppingBag,
 } as const;
 
 function toolStateLabel(tool: AgentTool) {

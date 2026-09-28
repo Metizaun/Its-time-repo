@@ -16,9 +16,10 @@ const TOOL_LABELS: Record<AgentTool["key"], string> = {
   forwarding: "Encaminhamento",
   send_media: "Enviar mídia",
   rb_billing: "Cobrança RB",
-  prescription_analyst: "Analista de receituário",
+  prescription_analyst: "Catálogo comercial",
   visagism: "Visagismo",
   store_locator: "Busca de filiais",
+  commercial_catalog: "Catálogo comercial",
 };
 
 export function AgentToolConfigurationDialog({
@@ -27,7 +28,8 @@ export function AgentToolConfigurationDialog({
   toolKey,
   onOpenChange,
 }: AgentToolConfigurationDialogProps) {
-  const isWideFlow = toolKey === "visagism" || toolKey === "prescription_analyst" || toolKey === "forwarding" || toolKey === "store_locator" || toolKey === "send_media";
+  const effectiveToolKey = toolKey === "prescription_analyst" ? "commercial_catalog" : toolKey;
+  const isWideFlow = effectiveToolKey === "visagism" || effectiveToolKey === "forwarding" || effectiveToolKey === "store_locator" || effectiveToolKey === "send_media" || effectiveToolKey === "commercial_catalog";
   const hasDedicatedEditor = toolKey !== null;
 
   return (
@@ -40,15 +42,15 @@ export function AgentToolConfigurationDialog({
             : "flex max-h-[90vh] max-w-3xl flex-col overflow-hidden"}
       >
         <DialogHeader className={hasDedicatedEditor ? "sr-only" : "shrink-0"}>
-          <DialogTitle>{toolKey ? TOOL_LABELS[toolKey] : "Configurar ferramenta"}</DialogTitle>
+          <DialogTitle>{effectiveToolKey ? TOOL_LABELS[effectiveToolKey] : "Configurar ferramenta"}</DialogTitle>
           <DialogDescription>Revise e salve as configurações desta ferramenta.</DialogDescription>
         </DialogHeader>
 
         <div className="min-w-0 min-h-0 flex-1 overflow-y-auto pr-1">
-          {open && agentId && toolKey ? (
+          {open && agentId && effectiveToolKey ? (
             <AgentToolsPanel
               agentId={agentId}
-              toolFilterKey={toolKey}
+              toolFilterKey={effectiveToolKey}
               onRequestClose={() => onOpenChange(false)}
             />
           ) : null}
