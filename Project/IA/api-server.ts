@@ -54,6 +54,11 @@ import { requireRbBillingAdmin } from "./rb-billing-authorization.js";
 import { LeadWebhookError, LeadWebhookService } from "./lead-webhook-service.js";
 import { WebsiteWidgetError, WebsiteWidgetService } from "./website-widget-service.js";
 
+const pipelineWorkerEnabled = requirePipelineWorkerEnabled({
+  nodeEnv: process.env.NODE_ENV,
+  pipelineWorkerEnabled: process.env.PIPELINE_WORKER_ENABLED,
+});
+
 type AuthenticatedRequest = Request & {
   authContext?: Awaited<ReturnType<AgentManager["authenticate"]>>;
 };
@@ -5780,10 +5785,6 @@ function validateInstagramOperationalConfig() {
 }
 
 async function bootstrap() {
-  const pipelineWorkerEnabled = requirePipelineWorkerEnabled({
-    nodeEnv: process.env.NODE_ENV,
-    pipelineWorkerEnabled: process.env.PIPELINE_WORKER_ENABLED,
-  });
   await assertRuntimeSchemaCompatibility({
     supabaseUrl: requireEnv("SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
