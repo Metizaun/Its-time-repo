@@ -207,7 +207,7 @@ if [[ "$VISAGISM_TOOL_ENABLED" == "true" ]]; then
   require_env_value OPENAI_API_KEY
 fi
 
-if [[ -d "$APP_DIR/.git" ]]; then
+if git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   IMAGE_REF_SUFFIX="$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo local)"
 else
   IMAGE_REF_SUFFIX="manual"
