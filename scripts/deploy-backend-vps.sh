@@ -96,6 +96,29 @@ wait_for_service() {
   fail "Servico $service_name nao ficou saudavel a tempo"
 }
 
+wait_for_pipeline_worker_health() {
+  local attempt protocol health_body
+
+  for attempt in $(seq 1 60); do
+    for protocol in https http; do
+      health_body="$(
+        curl --fail --silent --max-time 5 \
+          "${protocol}://${API_DOMAIN}/health" 2>/dev/null || true
+      )"
+
+      if printf '%s' "$health_body" | grep -Eq \
+        '"pipelineWorker"[[:space:]]*:[[:space:]]*\{[^}]*"enabled"[[:space:]]*:[[:space:]]*true[^}]*"started"[[:space:]]*:[[:space:]]*true[^}]*"lastCycleAt"[[:space:]]*:[[:space:]]*"[^"]+'; then
+        printf '%s\n' "$health_body"
+        return 0
+      fi
+    done
+
+    sleep 2
+  done
+
+  fail "A API nao confirmou pipelineWorker enabled=true, started=true e lastCycleAt em /health"
+}
+
 require_command docker
 require_command curl
 
@@ -116,6 +139,10 @@ else
 fi
 
 load_env_file
+
+if [[ "${PIPELINE_WORKER_ENABLED:-}" != "true" ]]; then
+  fail "PIPELINE_WORKER_ENABLED precisa ser true em $ENV_FILE"
+fi
 
 if [[ -z "${SUPABASE_ANON_KEY:-}" && -z "${SUPABASE_KEY:-}" ]]; then
   fail "Defina SUPABASE_ANON_KEY ou SUPABASE_KEY em $ENV_FILE"
@@ -231,6 +258,7 @@ export API_PORT
 export AUTOMATION_WORKER_ENABLED
 export AUTOMATION_WORKER_POLL_MS
 export AUTOMATION_WORKER_BATCH_SIZE
+export PIPELINE_WORKER_ENABLED
 export CHAT_IMAGE_RETENTION_DAYS
 export RB_BILLING_WORKER_ENABLED
 export RB_BILLING_WORKER_POLL_MS
@@ -278,14 +306,8 @@ wait_for_service "${STACK_NAME}_media-cleanup-worker" "$MEDIA_CLEANUP_WORKER_REP
 log "Status atual do servico"
 docker service ls
 
-log "Testando healthcheck publico"
-if curl --fail --silent --show-error "https://${API_DOMAIN}/health"; then
-  printf '\n'
-elif curl --fail --silent --show-error "http://${API_DOMAIN}/health"; then
-  printf '\n'
-else
-  log "Healthcheck publico ainda nao respondeu. Se for a primeira subida, confira DNS e Traefik."
-fi
+log "Aguardando /health confirmar o pipeline worker ativo"
+wait_for_pipeline_worker_health
 
 log "Deploy do backend concluido"
 log "Logs: docker service logs -f ${STACK_NAME}_api"

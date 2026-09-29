@@ -15,6 +15,11 @@ import {
 import { assertRuntimeSchemaCompatibility } from "./schema-preflight.js";
 import { startAutomationWorker } from "./automation-worker.js";
 import { startPipelineWorker } from "./pipeline-worker.js";
+import {
+  requirePipelineWorkerEnabled,
+  pipelineWorkerRuntimeStatus,
+  startPipelineWorkerIfEnabled,
+} from "./pipeline-worker-runtime.js";
 import { RbBillingWorker } from "./rb-billing-worker.js";
 import { RbConnectionService } from "./rb-connection-service.js";
 import { RbVisagismService } from "./rb-visagism-service.js";
@@ -1057,6 +1062,7 @@ app.get("/health", (_req, res) => {
     ok: true,
     service: "crm-ai-backend",
     defaultSystemMessage: DEFAULT_SYSTEM_MESSAGE,
+    pipelineWorker: pipelineWorkerRuntimeStatus.getStatus(),
   });
 });
 
@@ -5774,11 +5780,20 @@ function validateInstagramOperationalConfig() {
 }
 
 async function bootstrap() {
+  const pipelineWorkerEnabled = requirePipelineWorkerEnabled({
+    nodeEnv: process.env.NODE_ENV,
+    pipelineWorkerEnabled: process.env.PIPELINE_WORKER_ENABLED,
+  });
   await assertRuntimeSchemaCompatibility({
     supabaseUrl: requireEnv("SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
   });
   validateInstagramOperationalConfig();
+
+  stopPipelineWorker = startPipelineWorkerIfEnabled(
+    pipelineWorkerEnabled,
+    startPipelineWorker,
+  );
 
   app.listen(port, () => {
     console.log(`[crm-ai-backend] Servidor rodando na porta ${port}`);
@@ -5790,10 +5805,6 @@ async function bootstrap() {
 
   if (process.env.RB_BILLING_WORKER_ENABLED === "true") {
     rbBillingWorker.start();
-  }
-
-  if (process.env.PIPELINE_WORKER_ENABLED === "true") {
-    stopPipelineWorker = startPipelineWorker();
   }
 
   stopInstagramWebhookWorker = startInstagramWebhookWorker({

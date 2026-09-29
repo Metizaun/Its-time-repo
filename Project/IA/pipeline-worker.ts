@@ -4,6 +4,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { tryRecordAiUsage } from "./ai-costs.js";
 import { requireAiBudget } from "./ai-budget.js";
+import { pipelineWorkerRuntimeStatus } from "./pipeline-worker-runtime.js";
 import {
   PipelineClassifier,
   type PipelineClassifierMessage,
@@ -344,6 +345,7 @@ export function startPipelineWorker() {
   const runCycle = async () => {
     if (running) return;
     running = true;
+    pipelineWorkerRuntimeStatus.markCycleStarted();
 
     try {
       const { data, error } = await crmClient.rpc(
@@ -371,6 +373,7 @@ export function startPipelineWorker() {
     }
   };
 
+  pipelineWorkerRuntimeStatus.markStarted();
   console.log("[pipeline-worker] Iniciado:", {
     pollMs,
     batchSize,
@@ -380,5 +383,8 @@ export function startPipelineWorker() {
   void runCycle();
   const timer = setInterval(() => void runCycle(), pollMs);
 
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    pipelineWorkerRuntimeStatus.markStopped();
+  };
 }
