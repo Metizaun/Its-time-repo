@@ -819,6 +819,24 @@ export class StoreLocatorService {
     });
   }
 
+  async getLatestPendingRecommendation(acesId: number, agentId: string, leadId: string) {
+    const { data, error } = await this.locatorClient
+      .from("lead_location_events")
+      .select("recommended_store_id,selected_store_id,captured_at")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("lead_id", leadId)
+      .order("captured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel recuperar a filial apresentada", error);
+    if (!data?.recommended_store_id || data.selected_store_id) return null;
+    return {
+      storeId: String(data.recommended_store_id),
+      capturedAt: String(data.captured_at),
+    };
+  }
+
   async getLatestSelectedStoreId(acesId: number, agentId: string, leadId: string) {
     const { data, error } = await this.locatorClient
       .from("lead_location_events")

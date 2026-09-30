@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   enforceAgendaCompanyAddress,
+  enrichStoreLocationWithKnownCity,
+  isExplicitStoreConfirmationText,
   isSecureAgendaCompanyMatch,
   selectCalendarPoleStoreId,
 } from "../sdr-agent-gemini.js";
@@ -101,6 +103,55 @@ test("a city alone or an unknown neighborhood does not select an appointment pol
 
   assert.equal(selectCalendarPoleStoreId("Pode ser em Vila Velha", stores), null);
   assert.equal(selectCalendarPoleStoreId("Prefiro a unidade da Glória", stores), null);
+});
+
+test("an explicit store number disambiguates stores in the same neighborhood", () => {
+  const stores = [
+    {
+      id: "loja-28",
+      displayName: "Atacadão dos Óculos - Loja 28",
+      addressLine: "Av. Jerônimo Monteiro",
+      neighborhood: "Centro de Vila Velha",
+      city: "Vila Velha",
+      formattedAddress: "Av. Jerônimo Monteiro, 1395 - Centro de Vila Velha, Vila Velha - ES",
+    },
+    {
+      id: "loja-32",
+      displayName: "Atacadão dos Óculos - Loja 32",
+      addressLine: "Av. Jerônimo Monteiro",
+      neighborhood: "Centro de Vila Velha",
+      city: "Vila Velha",
+      formattedAddress: "Av. Jerônimo Monteiro, 1326 - Centro de Vila Velha, Vila Velha - ES",
+    },
+  ];
+
+  assert.equal(
+    selectCalendarPoleStoreId("Atacadão dos Óculos - Loja 32, Centro de Vila Velha", stores),
+    "loja-32",
+  );
+});
+
+test("a natural positive reply confirms the pending store", () => {
+  assert.equal(isExplicitStoreConfirmationText("Fica bom sim, qual o horário?"), true);
+  assert.equal(isExplicitStoreConfirmationText("Sim, confirmo essa unidade"), true);
+  assert.equal(isExplicitStoreConfirmationText("Não, prefiro outra unidade"), false);
+  assert.equal(isExplicitStoreConfirmationText("Fico no aguardo"), false);
+});
+
+test("a short neighborhood reply inherits the city from the immediately recent context", () => {
+  const stores = [{ city: "Vila Velha" }, { city: "Cariacica" }, { city: "Guarapari" }];
+  assert.equal(
+    enrichStoreLocationWithKnownCity(
+      "No centro ou Glória",
+      "Tem algum horário em Vila Velha? No centro ou Glória",
+      stores,
+    ),
+    "No centro ou Glória, Vila Velha",
+  );
+  assert.equal(
+    enrichStoreLocationWithKnownCity("Campo Grande, Cariacica", "", stores),
+    "Campo Grande, Cariacica",
+  );
 });
 
 test("official address data is not forced outside the configured customer process", () => {
