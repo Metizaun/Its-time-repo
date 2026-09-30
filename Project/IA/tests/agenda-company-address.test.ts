@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   enforceAgendaCompanyAddress,
   isSecureAgendaCompanyMatch,
+  selectCalendarPoleStoreId,
 } from "../sdr-agent-gemini.js";
 
 const agendaData = {
@@ -47,6 +48,59 @@ test("a routed appointment pole returns its configured address override", () => 
   assert.deepEqual(reply.reply_blocks, [
     "A unidade Marcílio de Noronha fica em Av. Vitória, 47, CEP 29135-368, ao lado da Papelaria Beger, Marcílio de Noronha, Viana - ES.",
   ]);
+});
+
+test("a confirmed calendar pole can be recovered from city and neighborhood text", () => {
+  const stores = [
+    {
+      id: "vila-velha-centro",
+      displayName: "Atacadão dos Óculos - Loja 28",
+      addressLine: "Av. Jerônimo Monteiro",
+      neighborhood: "Centro de Vila Velha",
+      city: "Vila Velha",
+      formattedAddress: "Av. Jerônimo Monteiro, 1395 - Centro de Vila Velha, Vila Velha - ES",
+    },
+    {
+      id: "guarapari-centro",
+      displayName: "Atacadão dos Óculos - Loja 29",
+      addressLine: "Av. Joaquim da Silva Lima",
+      neighborhood: "Centro",
+      city: "Guarapari",
+      formattedAddress: "Av. Joaquim da Silva Lima - Centro, Guarapari - ES",
+    },
+  ];
+
+  assert.equal(
+    selectCalendarPoleStoreId(
+      "Sim, confirmo! Pode verificar sexta e sábado no Centro de Vila Velha.",
+      stores,
+    ),
+    "vila-velha-centro",
+  );
+});
+
+test("a city alone or an unknown neighborhood does not select an appointment pole", () => {
+  const stores = [
+    {
+      id: "vila-velha-centro",
+      displayName: "Atacadão dos Óculos - Loja 28",
+      addressLine: "Av. Jerônimo Monteiro",
+      neighborhood: "Centro de Vila Velha",
+      city: "Vila Velha",
+      formattedAddress: "Av. Jerônimo Monteiro, 1395 - Centro de Vila Velha, Vila Velha - ES",
+    },
+    {
+      id: "vila-velha-itapua",
+      displayName: "Atacadão dos Óculos - Loja 18",
+      addressLine: "Rua Jair de Andrade",
+      neighborhood: "Itapuã",
+      city: "Vila Velha",
+      formattedAddress: "Rua Jair de Andrade - Itapuã, Vila Velha - ES",
+    },
+  ];
+
+  assert.equal(selectCalendarPoleStoreId("Pode ser em Vila Velha", stores), null);
+  assert.equal(selectCalendarPoleStoreId("Prefiro a unidade da Glória", stores), null);
 });
 
 test("official address data is not forced outside the configured customer process", () => {

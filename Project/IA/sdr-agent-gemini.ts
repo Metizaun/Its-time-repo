@@ -12,6 +12,7 @@ import {
   StoreLocatorError,
   StoreLocatorService,
   type StoreInput,
+  type StoreRecord,
 } from "./store-locator-service.js";
 
 import {
@@ -2166,6 +2167,64 @@ function normalizeAsciiText(value: string) {
 
 function isAgendaAddressQuestion(value: string) {
   return /\b(endereco|localizacao|onde fica|como chegar|cep)\b/u.test(normalizeAsciiText(value));
+}
+
+function storeReferenceTokens(value: string) {
+  const ignored = new Set([
+    "a", "ao", "aos", "as", "da", "das", "de", "do", "dos", "e", "em", "na", "nas", "no", "nos",
+    "o", "os", "para", "por", "prefiro", "pode", "confirmo", "unidade", "loja", "horario", "horarios",
+  ]);
+  return normalizeAsciiText(value)
+    .replace(/[^a-z0-9]+/gu, " ")
+    .split(/\s+/u)
+    .filter((token) => token.length >= 2 && !ignored.has(token));
+}
+
+export function selectCalendarPoleStoreId(
+  referenceText: string,
+  stores: Array<Pick<StoreRecord, "id" | "displayName" | "addressLine" | "neighborhood" | "city" | "formattedAddress">>,
+) {
+  const normalizedReference = normalizeAsciiText(referenceText);
+  const referenceTokens = new Set(storeReferenceTokens(referenceText));
+  if (!normalizedReference || referenceTokens.size === 0) return null;
+
+  const scored = stores.map((store) => {
+    const displayName = normalizeAsciiText(store.displayName);
+    const neighborhoodTokens = storeReferenceTokens(store.neighborhood);
+    const cityTokens = storeReferenceTokens(store.city);
+    const addressTokens = storeReferenceTokens(store.addressLine);
+    const allPresent = (tokens: string[]) => tokens.length > 0 && tokens.every((token) => referenceTokens.has(token));
+    const matchedNeighborhood = neighborhoodTokens.filter((token) => referenceTokens.has(token)).length;
+    const matchedCity = cityTokens.filter((token) => referenceTokens.has(token)).length;
+    const distinctiveAddressMatch = addressTokens.some((token) => token.length >= 5 && referenceTokens.has(token));
+    const distinctiveNeighborhoodMatch = neighborhoodTokens
+      .filter((token) => !cityTokens.includes(token))
+      .some((token) => referenceTokens.has(token));
+    const storeNumber = displayName.match(/\bloja\s*0*(\d+)\b/u)?.[1] ?? null;
+    const storeNumberMatch = storeNumber
+      ? new RegExp(`\\bloja\\s*0*${storeNumber}\\b`, "u").test(normalizedReference)
+      : false;
+
+    let score = 0;
+    if (displayName && normalizedReference.includes(displayName)) score += 120;
+    if (storeNumberMatch) score += 100;
+    if (allPresent(neighborhoodTokens)) score += 60 + neighborhoodTokens.length;
+    else score += matchedNeighborhood * 18;
+    if (allPresent(cityTokens)) score += 25 + cityTokens.length;
+    else score += matchedCity * 8;
+    if (matchedNeighborhood > 0 && matchedCity > 0) score += 25;
+    if (distinctiveAddressMatch) score += 45;
+    return {
+      id: store.id,
+      score,
+      specificMatch: storeNumberMatch || distinctiveNeighborhoodMatch || distinctiveAddressMatch,
+    };
+  }).filter((candidate) => candidate.specificMatch).sort((left, right) => right.score - left.score);
+
+  const top = scored[0];
+  const second = scored[1];
+  if (!top || top.score < 45 || (second && top.score - second.score < 10)) return null;
+  return top.id;
 }
 
 function normalizeAgendaCompany(value: Record<string, unknown> | null): JsonRecord | null {
@@ -13941,11 +14000,32 @@ export class AgentManager {
     }
   }
 
+  private async resolveCalendarPoleStoreId(agentId: string, acesId: number, referenceText: string) {
+    const { data: mappings, error } = await this.locatorClient
+      .from("agent_store_calendar_poles")
+      .select("pole_store_id")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("is_active", true);
+    if (error) {
+      throw buildSupabaseOperationError(error, "Nao foi possivel localizar o polo de agenda informado");
+    }
+
+    const poleStoreIds = new Set((mappings ?? []).map((mapping) => String(mapping.pole_store_id)));
+    if (!poleStoreIds.size) return null;
+    const stores = await this.storeLocator.listStores(acesId, agentId, { status: "active" });
+    return selectCalendarPoleStoreId(
+      referenceText,
+      stores.filter((store) => store.aiVisible && store.isVisibleForAgent && poleStoreIds.has(store.id)),
+    );
+  }
+
   private async executeStoreLocator(params: {
     agent: AgentRow;
     lead: LeadRow;
     decision: StoreLocatorDecision;
     sourceMessageId: string | null;
+    referenceText?: string | null;
   }) {
     const ignored = (message = "Nenhuma operacao de filial solicitada.") => ({
       status: "ignored",
@@ -14001,13 +14081,34 @@ export class AgentManager {
       if (params.decision.confirmation !== "yes") {
         return { status: "needs_confirmation", message: "A filial apresentada ainda nao foi confirmada.", data: {} };
       }
-      const confirmed = await this.storeLocator.confirmLatestStore({
-        acesId: params.agent.aces_id,
-        agentId: params.agent.id,
-        leadId: params.lead.id,
-        requestedPreferenceType: params.decision.preferenceType,
-        sourceMessageId: params.sourceMessageId,
-      });
+      let confirmed;
+      try {
+        confirmed = await this.storeLocator.confirmLatestStore({
+          acesId: params.agent.aces_id,
+          agentId: params.agent.id,
+          leadId: params.lead.id,
+          requestedPreferenceType: params.decision.preferenceType,
+          sourceMessageId: params.sourceMessageId,
+        });
+      } catch (error) {
+        if (!(error instanceof StoreLocatorError) || error.code !== "not_found" || !params.referenceText?.trim()) {
+          throw error;
+        }
+        const poleStoreId = await this.resolveCalendarPoleStoreId(
+          params.agent.id,
+          params.agent.aces_id,
+          params.referenceText,
+        );
+        if (!poleStoreId) throw error;
+        confirmed = await this.storeLocator.confirmStore({
+          acesId: params.agent.aces_id,
+          agentId: params.agent.id,
+          leadId: params.lead.id,
+          storeId: poleStoreId,
+          preferenceType: params.decision.preferenceType,
+          sourceMessageId: params.sourceMessageId,
+        });
+      }
       return {
         status: "confirmed",
         message: `${confirmed.store.displayName} foi salva como filial ${params.decision.preferenceType === "secondary" ? "secundaria" : "favorita"}.`,
@@ -15504,23 +15605,40 @@ export class AgentManager {
         bufferedEntries,
         imageAnalyses: opticsImageAnalyses,
       });
+      const recoverConfirmedAgendaStore = result.parsed.store_locator.action === "none"
+        && ["availability", "book"].includes(result.parsed.agenda_request.intent)
+        && result.parsed.agenda_request.confirmation === "yes"
+        && Boolean(result.parsed.agenda_request.companyQuery?.trim());
+      const priorSelectedStoreId = recoverConfirmedAgendaStore
+        ? await this.storeLocator.getLatestSelectedStoreId(agent.aces_id, agent.id, lead.id)
+        : null;
+      const effectiveStoreLocatorDecision: StoreLocatorDecision = recoverConfirmedAgendaStore && !priorSelectedStoreId
+        ? { ...result.parsed.store_locator, action: "confirm", confirmation: "yes" }
+        : result.parsed.store_locator;
+      const storeReferenceText = [
+        effectiveStoreLocatorDecision.locationText,
+        latestInbound?.content,
+        result.parsed.agenda_request.companyQuery,
+      ].filter((value): value is string => Boolean(value?.trim())).join(" ");
       const storeLocatorApplication = await this.executeStoreLocator({
         agent,
         lead,
-        decision: result.parsed.store_locator,
+        decision: effectiveStoreLocatorDecision,
         sourceMessageId: latestInbound?.id ?? null,
+        referenceText: storeReferenceText,
       });
       const currentConfirmedStore = asRecord(asRecord(storeLocatorApplication.data).store);
       const addressFollowup = isAgendaAddressQuestion(latestInbound?.content ?? "");
       const selectedStoreId = storeLocatorApplication.status === "confirmed"
         ? asString(currentConfirmedStore.id)
-        : addressFollowup || result.parsed.store_locator.action === "none"
-          ? await this.storeLocator.getLatestSelectedStoreId(agent.aces_id, agent.id, lead.id)
-          : null;
+        : priorSelectedStoreId
+          ?? (addressFollowup || effectiveStoreLocatorDecision.action === "none"
+            ? await this.storeLocator.getLatestSelectedStoreId(agent.aces_id, agent.id, lead.id)
+            : null);
       const storeSelectionPending =
         !selectedStoreId
         && ["succeeded", "needs_confirmation"].includes(storeLocatorApplication.status)
-        && result.parsed.store_locator.action !== "none";
+        && effectiveStoreLocatorDecision.action !== "none";
       const agendaApplication = await this.executeAgendaSubworkflow({
         agent,
         lead,
