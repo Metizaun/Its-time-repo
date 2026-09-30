@@ -39,6 +39,7 @@ export type AgendaConversationContext = {
   version: 1;
   updatedAt: string;
   expiresAt: string;
+  selectedStoreId: string | null;
   companyId: string | null;
   companyQuery: string | null;
   professionalId: string | null;
@@ -202,6 +203,36 @@ export function buildAgendaAvailabilityAttempts(input: {
   }));
 }
 
+export type AgendaSlotLocationBatch = {
+  professionalLocationId: string;
+  locationLabel: string;
+  slots: Array<Record<string, unknown>>;
+};
+
+export function mergeAgendaSlotsByProfessionalLocation(batches: AgendaSlotLocationBatch[]) {
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const batch of batches) {
+    for (const slot of batch.slots) {
+      const key = [
+        batch.professionalLocationId,
+        String(slot.professional_id ?? ""),
+        String(slot.service_id ?? ""),
+        String(slot.slot_start ?? ""),
+      ].join(":");
+      merged.set(key, {
+        ...slot,
+        professional_location_id: batch.professionalLocationId,
+        location_label: batch.locationLabel,
+      });
+    }
+  }
+
+  return [...merged.values()].sort((left, right) => {
+    const byStart = String(left.slot_start ?? "").localeCompare(String(right.slot_start ?? ""));
+    return byStart || String(left.location_label ?? "").localeCompare(String(right.location_label ?? ""));
+  });
+}
+
 export function isGenericAgendaServiceQuery(value: string | null | undefined): boolean {
   if (!value) return false;
   const normalized = normalizeAgendaText(value);
@@ -237,6 +268,7 @@ export function createAgendaContext(now = new Date()): AgendaConversationContext
     version: 1,
     updatedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + CONTEXT_TTL_MS).toISOString(),
+    selectedStoreId: null,
     companyId: null,
     companyQuery: null,
     professionalId: null,
@@ -289,6 +321,7 @@ export function readAgendaContext(value: unknown, now = new Date()): AgendaConve
   const base = createAgendaContext(now);
   return {
     ...base,
+    selectedStoreId: optionalText(input.selectedStoreId, 80) ?? null,
     companyId: optionalText(input.companyId, 80) ?? null,
     companyQuery: optionalText(input.companyQuery) ?? null,
     professionalId: optionalText(input.professionalId, 80) ?? null,
@@ -308,6 +341,25 @@ export function readAgendaContext(value: unknown, now = new Date()): AgendaConve
     confirmation:
       input.confirmation === "yes" || input.confirmation === "no" ? input.confirmation : "unknown",
     selectedOption,
+  };
+}
+
+export function setAgendaSelectedStore(context: AgendaConversationContext, selectedStoreId: string) {
+  if (context.selectedStoreId === selectedStoreId) return context;
+
+  return {
+    ...context,
+    selectedStoreId,
+    companyId: null,
+    companyQuery: null,
+    professionalId: null,
+    professionalLocationId: null,
+    serviceId: null,
+    appointmentEventId: null,
+    presentedOptions: [],
+    optionsPresentedAt: null,
+    selectedOption: null,
+    confirmation: "unknown" as const,
   };
 }
 

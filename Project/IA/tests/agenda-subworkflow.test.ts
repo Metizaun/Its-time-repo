@@ -7,9 +7,11 @@ import {
   buildCompanyLookupAttempts,
   createAgendaContext,
   isGenericAgendaServiceQuery,
+  mergeAgendaSlotsByProfessionalLocation,
   mergeAgendaRequest,
   parseAgendaRequest,
   readAgendaContext,
+  setAgendaSelectedStore,
   setPresentedAgendaOptions,
   validateRescheduleRequest,
 } from "../agenda-subworkflow.js";
@@ -59,6 +61,67 @@ test("availability recovery expands five windows without changing the selected u
     "2026-09-08",
     "2026-09-24",
   ]);
+});
+
+test("availability keeps identical times separate across different appointment poles", () => {
+  const slots = mergeAgendaSlotsByProfessionalLocation([
+    {
+      professionalLocationId: "calendar-pole-a",
+      locationLabel: "Loja 01 - Muquiçaba",
+      slots: [{ professional_id: "professional-1", service_id: "service-1", slot_start: "2026-10-01T13:00:00Z" }],
+    },
+    {
+      professionalLocationId: "calendar-pole-b",
+      locationLabel: "Loja 09 - Aeroporto",
+      slots: [{ professional_id: "professional-1", service_id: "service-1", slot_start: "2026-10-01T13:00:00Z" }],
+    },
+  ]);
+
+  assert.equal(slots.length, 2);
+  assert.deepEqual(slots.map((slot) => slot.professional_location_id), ["calendar-pole-a", "calendar-pole-b"]);
+  assert.deepEqual(slots.map((slot) => slot.location_label), ["Loja 01 - Muquiçaba", "Loja 09 - Aeroporto"]);
+});
+
+test("changing the selected store clears stale agenda choices but keeps date and service query", () => {
+  const now = new Date("2026-09-30T15:00:00.000Z");
+  const option = {
+    reference: "1",
+    kind: "slot" as const,
+    id: "pole-a:professional-1:service-1:2026-10-01T13:00:00Z",
+    label: "01/10/2026 10:00 — Loja 01",
+    companyId: null,
+    professionalId: "professional-1",
+    professionalLocationId: "pole-a",
+    serviceId: "service-1",
+    startTime: "2026-10-01T13:00:00Z",
+  };
+  const previous = {
+    ...createAgendaContext(now),
+    selectedStoreId: "store-a",
+    companyId: "company-a",
+    professionalId: "professional-1",
+    professionalLocationId: "pole-a",
+    serviceId: "service-1",
+    serviceQuery: "exame completo",
+    dateFrom: "2026-10-01",
+    presentedOptions: [option],
+    optionsPresentedAt: now.toISOString(),
+    selectedOption: option,
+    confirmation: "yes" as const,
+  };
+
+  const changed = setAgendaSelectedStore(previous, "store-b");
+
+  assert.equal(changed.selectedStoreId, "store-b");
+  assert.equal(changed.companyId, null);
+  assert.equal(changed.professionalId, null);
+  assert.equal(changed.professionalLocationId, null);
+  assert.equal(changed.serviceId, null);
+  assert.equal(changed.selectedOption, null);
+  assert.deepEqual(changed.presentedOptions, []);
+  assert.equal(changed.confirmation, "unknown");
+  assert.equal(changed.dateFrom, "2026-10-01");
+  assert.equal(changed.serviceQuery, "exame completo");
 });
 
 test("parseAgendaRequest sanitizes structured model output", () => {

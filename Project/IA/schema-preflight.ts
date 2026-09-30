@@ -39,6 +39,8 @@ const STORE_LOCATOR_AGENT_VISIBILITY_MIGRATION =
   "supabase/migrations/20260922215152_store_locator_agent_visibility.sql";
 const STORE_LOCATOR_FOLDERS_MIGRATION =
   "supabase/migrations/20260923123853_store_locator_folders.sql";
+const STORE_CALENDAR_POLES_MIGRATION =
+  "supabase/migrations/20260930150346_map_agent_stores_to_calendar_poles.sql";
 const RB_BILLING_REFACTOR_MIGRATION =
   "supabase/migrations/20260707223000_refactor_rb_billing_automation.sql";
 const CHAT_NOTIFICATIONS_AUDIO_MIGRATION =
@@ -1321,6 +1323,21 @@ export async function assertRuntimeSchemaCompatibility(
       ["aces_id", "agent_id", "store_id", "is_visible"],
       "locator.agent_store_visibility",
       STORE_LOCATOR_AGENT_VISIBILITY_MIGRATION,
+    ),
+    validateSelectedColumns(
+      locatorClient,
+      "agent_store_calendar_poles",
+      [
+        "aces_id",
+        "agent_id",
+        "source_store_id",
+        "pole_store_id",
+        "professional_location_id",
+        "pole_address_override",
+        "is_active",
+      ],
+      "locator.agent_store_calendar_poles",
+      STORE_CALENDAR_POLES_MIGRATION,
     ),
     validateSelectedColumns(
       locatorClient,

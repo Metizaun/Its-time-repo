@@ -73,9 +73,11 @@ import {
   buildCompanyLookupAttempts,
   createAgendaContext,
   isGenericAgendaServiceQuery,
+  mergeAgendaSlotsByProfessionalLocation,
   mergeAgendaRequest,
   parseAgendaRequest,
   readAgendaContext,
+  setAgendaSelectedStore,
   setPresentedAgendaOptions,
   validateRescheduleRequest,
   type AgendaConversationContext,
@@ -12576,6 +12578,73 @@ export class AgentManager {
     throw lastError instanceof Error ? lastError : new Error(`Falha persistente ao executar ${label}`);
   }
 
+  private async getStoreCalendarPoleRouting(agentId: string, acesId: number, sourceStoreId: string | null) {
+    const { data: mappings, error: mappingError } = await this.locatorClient
+      .from("agent_store_calendar_poles")
+      .select("source_store_id, pole_store_id, professional_location_id, pole_address_override")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("is_active", true);
+    if (mappingError) {
+      throw buildSupabaseOperationError(mappingError, "Nao foi possivel consultar os polos de agenda da filial");
+    }
+
+    const agentHasRouting = Boolean(mappings?.length);
+    const storeMappings = sourceStoreId
+      ? (mappings ?? []).filter((mapping) => String(mapping.source_store_id) === sourceStoreId)
+      : [];
+    if (!storeMappings.length) {
+      return {
+        agentHasRouting,
+        sourceStoreMapped: false,
+        professionalLocationIds: [] as string[],
+        locationLabels: new Map<string, string>(),
+      };
+    }
+
+    const poleStoreIds = [...new Set(storeMappings.map((mapping) => String(mapping.pole_store_id)))];
+    const { data: poleStores, error: poleStoreError } = await this.locatorClient
+      .from("stores")
+      .select("id, display_name, address_line, address_number, address_complement, neighborhood, city, state")
+      .eq("aces_id", acesId)
+      .eq("is_active", true)
+      .in("id", poleStoreIds);
+    if (poleStoreError) {
+      throw buildSupabaseOperationError(poleStoreError, "Nao foi possivel consultar os enderecos dos polos");
+    }
+
+    const poleStoreMap = new Map((poleStores ?? []).map((store) => [String(store.id), store]));
+    const professionalLocationIds: string[] = [];
+    const locationLabels = new Map<string, string>();
+    for (const mapping of storeMappings) {
+      const poleStoreId = String(mapping.pole_store_id);
+      const poleStore = poleStoreMap.get(poleStoreId);
+      if (!poleStore) continue;
+      const professionalLocationId = String(mapping.professional_location_id);
+      const address = asString(mapping.pole_address_override) ?? [
+        asString(poleStore.address_line),
+        asString(poleStore.address_number),
+        asString(poleStore.address_complement),
+        asString(poleStore.neighborhood),
+        asString(poleStore.city),
+        asString(poleStore.state),
+      ].filter(Boolean).join(", ");
+      const displayName = asString(poleStore.display_name) ?? "Polo de atendimento";
+      professionalLocationIds.push(professionalLocationId);
+      locationLabels.set(
+        professionalLocationId,
+        address ? `${displayName} — ${address}` : displayName,
+      );
+    }
+
+    return {
+      agentHasRouting,
+      sourceStoreMapped: true,
+      professionalLocationIds: [...new Set(professionalLocationIds)],
+      locationLabels,
+    };
+  }
+
   private async getStoreLocatorAllowedCompanyIds(agentId: string, acesId: number): Promise<string[]> {
     const { data, error } = await this.agentsClient
       .from("agent_tools")
@@ -12761,6 +12830,8 @@ export class AgentManager {
     companyId: string | null,
     professionalQuery: string | null,
     serviceQuery: string | null,
+    routeLocationIds: string[] | null = null,
+    routeLocationLabels: Map<string, string> = new Map(),
   ) {
     const calendarClient = this.serviceClient.schema("calendar");
     let locationsQuery = calendarClient
@@ -12770,9 +12841,13 @@ export class AgentManager {
       .eq("is_active", true)
       .eq("is_ai_visible", true)
       .limit(40);
-    locationsQuery = companyId
-      ? locationsQuery.eq("empresa_id", companyId)
-      : locationsQuery.is("empresa_id", null);
+    if (routeLocationIds?.length) {
+      locationsQuery = locationsQuery.in("id", routeLocationIds);
+    } else {
+      locationsQuery = companyId
+        ? locationsQuery.eq("empresa_id", companyId)
+        : locationsQuery.is("empresa_id", null);
+    }
     const { data: locations, error: locationsError } = await locationsQuery;
     if (locationsError) {
       throw buildSupabaseOperationError(locationsError, "Nao foi possivel consultar os profissionais");
@@ -12842,6 +12917,10 @@ export class AgentManager {
           if (!service) return [];
           return [{
             professionalLocationId: String(location.id),
+            locationName: asString(location.location_name) ?? "",
+            scheduleLocationLabel: routeLocationLabels.get(String(location.id))
+              ?? asString(location.location_name)
+              ?? "unidade selecionada",
             companyId: location.empresa_id ? String(location.empresa_id) : null,
             professionalId: String(professional.id),
             professionalName: String(professional.name),
@@ -12874,6 +12953,8 @@ export class AgentManager {
     companyId: string | null;
     professionalQuery: string | null;
     serviceQuery: string | null;
+    routeLocationIds?: string[] | null;
+    routeLocationLabels?: Map<string, string>;
   }) {
     const attempts = [
       { professionalQuery: params.professionalQuery, serviceQuery: params.serviceQuery },
@@ -12891,10 +12972,12 @@ export class AgentManager {
           params.companyId,
           attempt.professionalQuery,
           attempt.serviceQuery,
+          params.routeLocationIds ?? null,
+          params.routeLocationLabels ?? new Map(),
         ),
       );
       const companyLockedDirectory = directory.filter((entry) =>
-        !params.companyId || entry.companyId === params.companyId,
+        Boolean(params.routeLocationIds?.length) || !params.companyId || entry.companyId === params.companyId,
       );
       if (companyLockedDirectory.length) return { directory: companyLockedDirectory, attemptsUsed };
     }
@@ -13057,6 +13140,8 @@ export class AgentManager {
     lead: LeadRow;
     request: AgendaRequest;
     storedContext: unknown;
+    selectedStoreId: string | null;
+    storeSelectionPending: boolean;
     customerMessage?: string | null;
     runId: string;
     customerConversationId?: string | null;
@@ -13102,7 +13187,40 @@ export class AgentManager {
     if (params.request.intent === "none") return result("ignored", "Nenhuma acao de agenda identificada.");
 
     try {
-      const allowedCompanyIds = await this.getStoreLocatorAllowedCompanyIds(params.agent.id, params.agent.aces_id);
+      const storeRoutingIntent = ["availability", "book", "professionals", "price"].includes(validatedRequest.intent);
+      const storeRouting = storeRoutingIntent
+        ? await this.getStoreCalendarPoleRouting(params.agent.id, params.agent.aces_id, params.selectedStoreId)
+        : null;
+      let routeLocationIds: string[] | null = null;
+      let routeLocationLabels = new Map<string, string>();
+      if (storeRouting?.agentHasRouting) {
+        if (!params.selectedStoreId) {
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
+          return result(
+            "needs_input",
+            params.storeSelectionPending
+              ? "Confirme a filial sugerida antes de eu consultar os horarios dos polos disponiveis."
+              : "Informe seu bairro ou cidade para eu indicar e confirmar uma filial antes de consultar os horarios.",
+            { requiresStoreConfirmation: true },
+          );
+        }
+        if (!storeRouting.sourceStoreMapped || !storeRouting.professionalLocationIds.length) {
+          await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
+          return result(
+            "empty",
+            "Ainda nao consigo consultar horarios para essa filial. Posso verificar uma unidade proxima com agenda?",
+            { selectedStoreId: params.selectedStoreId },
+          );
+        }
+        routeLocationIds = storeRouting.professionalLocationIds;
+        routeLocationLabels = storeRouting.locationLabels;
+        context = setAgendaSelectedStore(context, params.selectedStoreId);
+        context.companyId = null;
+      }
+
+      const allowedCompanyIds = routeLocationIds
+        ? []
+        : await this.getStoreLocatorAllowedCompanyIds(params.agent.id, params.agent.aces_id);
       const pendingCompanyHypothesis = context.selectedOption?.kind === "company"
         ? context.selectedOption
         : null;
@@ -13118,7 +13236,7 @@ export class AgentManager {
         });
       }
       const directoryCompanyQuery = context.companyQuery ?? context.professionalQuery;
-      if (!context.companyId && directoryCompanyQuery) {
+      if (!routeLocationIds && !context.companyId && directoryCompanyQuery) {
         const requireCalendar = params.request.intent !== "company_info";
         const { matches, attemptsUsed } = await this.lookupAgendaCompany({
           acesId: params.agent.aces_id,
@@ -13214,6 +13332,7 @@ export class AgentManager {
       }
 
       if (
+        !routeLocationIds &&
         !context.companyId &&
         !context.companyQuery &&
         !context.professionalQuery &&
@@ -13327,6 +13446,8 @@ export class AgentManager {
         companyId: context.companyId,
         professionalQuery: context.professionalQuery,
         serviceQuery: context.serviceQuery,
+        routeLocationIds,
+        routeLocationLabels,
       });
       const directory = directoryLookup.directory;
       const professionalOptions = [...new Map(directory.map((entry) => [entry.professionalId, entry])).values()]
@@ -13438,6 +13559,11 @@ export class AgentManager {
       if (context.professionalId) {
         eligibleDirectory = eligibleDirectory.filter((entry) => entry.professionalId === context.professionalId);
       }
+      if (context.professionalLocationId) {
+        eligibleDirectory = eligibleDirectory.filter(
+          (entry) => entry.professionalLocationId === context.professionalLocationId,
+        );
+      }
       if (context.serviceId) {
         eligibleDirectory = eligibleDirectory.filter((entry) => entry.serviceId === context.serviceId);
       }
@@ -13486,7 +13612,7 @@ export class AgentManager {
       let availabilityAttemptsUsed = 0;
       for (const search of availabilityAttempts) {
         availabilityAttemptsUsed += 1;
-        const slotResults = await Promise.all(
+        const slotBatches = await Promise.all(
           eligibleDirectory.slice(0, 12).map((entry) =>
             this.retryAgendaRead("horarios disponiveis na unidade escolhida", async () => {
               const { data, error } = await this.serviceClient.schema("calendar").rpc("list_available_slots", {
@@ -13500,16 +13626,15 @@ export class AgentManager {
                 p_aces_id: params.agent.aces_id,
               });
               if (error) throw buildSupabaseOperationError(error, "Nao foi possivel consultar os horarios");
-              return (data ?? []) as Array<Record<string, unknown>>;
+              return {
+                professionalLocationId: entry.professionalLocationId,
+                locationLabel: entry.scheduleLocationLabel,
+                slots: (data ?? []) as Array<Record<string, unknown>>,
+              };
             }),
           ),
         );
-        slots = [...new Map(slotResults.flat().map((slot) => [
-          `${slot.professional_id}:${slot.service_id}:${slot.slot_start}`,
-          slot,
-        ])).values()].sort((left, right) =>
-          String(left.slot_start).localeCompare(String(right.slot_start)),
-        );
+        slots = mergeAgendaSlotsByProfessionalLocation(slotBatches);
         if (slots.length) break;
       }
       if (!slots.length) {
@@ -13552,48 +13677,52 @@ export class AgentManager {
         return result("needs_input", "Apresente somente as tres datas retornadas.", { options });
       }
 
-      const options = slots.slice(0, 3).map((slot, index): AgendaPresentedOption => ({
-        reference: String(index + 1),
-        kind: "slot",
-        id: `${slot.professional_id}:${slot.service_id}:${slot.slot_start}`,
-        companyId: slot.empresa_id ? String(slot.empresa_id) : null,
-        professionalId: String(slot.professional_id),
-        professionalLocationId: eligibleDirectory.find(
-          (entry) => entry.professionalId === String(slot.professional_id) && entry.serviceId === String(slot.service_id),
-        )?.professionalLocationId ?? null,
-        serviceId: String(slot.service_id),
-        startTime: String(slot.slot_start),
-        label: this.formatAgendaSlotLabel(
-          String(slot.slot_start),
-          capabilities.professionalsRepresentLocations
+      const options = slots.slice(0, 3).map((slot, index): AgendaPresentedOption => {
+        const professionalLocationId = asString(slot.professional_location_id);
+        const locationLabel = asString(slot.location_label);
+        const professionalLabel = locationLabel
+          ? locationLabel
+          : capabilities.professionalsRepresentLocations
             ? asString(company?.name) ?? "unidade selecionada"
-            : String(slot.professional_name),
-          capabilities.timezone,
-        ),
-      }));
+            : String(slot.professional_name);
+        return {
+          reference: String(index + 1),
+          kind: "slot",
+          id: `${professionalLocationId ?? ""}:${slot.professional_id}:${slot.service_id}:${slot.slot_start}`,
+          companyId: slot.empresa_id ? String(slot.empresa_id) : null,
+          professionalId: String(slot.professional_id),
+          professionalLocationId,
+          serviceId: String(slot.service_id),
+          startTime: String(slot.slot_start),
+          label: this.formatAgendaSlotLabel(
+            String(slot.slot_start),
+            professionalLabel,
+            capabilities.timezone,
+          ),
+        };
+      });
 
       const selectedSlotCandidate = context.selectedOption?.kind === "slot" ? context.selectedOption : null;
       const selectedSlotRow = selectedSlotCandidate
         ? slots.find((slot) =>
           String(slot.professional_id) === selectedSlotCandidate.professionalId
           && String(slot.service_id) === selectedSlotCandidate.serviceId
-          && String(slot.slot_start) === selectedSlotCandidate.startTime,
+          && String(slot.slot_start) === selectedSlotCandidate.startTime
+          && String(slot.professional_location_id) === String(selectedSlotCandidate.professionalLocationId ?? ""),
         ) ?? null
         : null;
       const selectedSlot = selectedSlotCandidate && selectedSlotRow
         ? {
           ...selectedSlotCandidate,
           companyId: selectedSlotRow.empresa_id ? String(selectedSlotRow.empresa_id) : selectedSlotCandidate.companyId,
-          professionalLocationId: eligibleDirectory.find((entry) =>
-            entry.professionalId === String(selectedSlotRow.professional_id)
-            && entry.serviceId === String(selectedSlotRow.service_id),
-          )?.professionalLocationId ?? selectedSlotCandidate.professionalLocationId,
+          professionalLocationId: asString(selectedSlotRow.professional_location_id),
           startTime: String(selectedSlotRow.slot_start),
           label: this.formatAgendaSlotLabel(
             String(selectedSlotRow.slot_start),
-            capabilities.professionalsRepresentLocations
-              ? asString(company?.name) ?? "unidade selecionada"
-              : String(selectedSlotRow.professional_name),
+            asString(selectedSlotRow.location_label)
+              ?? (capabilities.professionalsRepresentLocations
+                ? asString(company?.name) ?? "unidade selecionada"
+                : String(selectedSlotRow.professional_name)),
             capabilities.timezone,
           ),
         }
@@ -15320,20 +15449,32 @@ export class AgentManager {
         bufferedEntries,
         imageAnalyses: opticsImageAnalyses,
       });
-      const agendaApplication = await this.executeAgendaSubworkflow({
-        agent,
-        lead,
-        request: result.parsed.agenda_request,
-        storedContext: leadState?.agenda_context,
-        customerMessage: latestInbound?.content,
-        runId,
-        customerConversationId,
-      });
       const storeLocatorApplication = await this.executeStoreLocator({
         agent,
         lead,
         decision: result.parsed.store_locator,
         sourceMessageId: latestInbound?.id ?? null,
+      });
+      const currentConfirmedStore = asRecord(asRecord(storeLocatorApplication.data).store);
+      const selectedStoreId = storeLocatorApplication.status === "confirmed"
+        ? asString(currentConfirmedStore.id)
+        : result.parsed.store_locator.action === "none"
+          ? await this.storeLocator.getLatestSelectedStoreId(agent.aces_id, agent.id, lead.id)
+          : null;
+      const storeSelectionPending =
+        !selectedStoreId
+        && ["succeeded", "needs_confirmation"].includes(storeLocatorApplication.status)
+        && result.parsed.store_locator.action !== "none";
+      const agendaApplication = await this.executeAgendaSubworkflow({
+        agent,
+        lead,
+        request: result.parsed.agenda_request,
+        storedContext: leadState?.agenda_context,
+        selectedStoreId,
+        storeSelectionPending,
+        customerMessage: latestInbound?.content,
+        runId,
+        customerConversationId,
       });
       const commercialCatalogApplication = await this.executeCommercialCatalogSearch({
         agent,

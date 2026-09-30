@@ -819,6 +819,20 @@ export class StoreLocatorService {
     });
   }
 
+  async getLatestSelectedStoreId(acesId: number, agentId: string, leadId: string) {
+    const { data, error } = await this.locatorClient
+      .from("lead_location_events")
+      .select("selected_store_id")
+      .eq("aces_id", acesId)
+      .eq("agent_id", agentId)
+      .eq("lead_id", leadId)
+      .order("captured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel recuperar a filial confirmada", error);
+    return data?.selected_store_id ? String(data.selected_store_id) : null;
+  }
+
   private async tryReuseRecommendation(acesId: number, agentId: string, leadId: string, normalizedLocation: string) {
     const { data: event, error: eventError } = await this.locatorClient
       .from("lead_location_events")
