@@ -83,7 +83,10 @@ BEGIN
     AND agent.agent_type = 'primary'
     AND agent.is_active;
 
-  IF v_agent_count <> 1 THEN
+  IF v_agent_count = 0 THEN
+    RAISE NOTICE 'Account 13 Emilia agent is absent; skipping tenant-specific route seed';
+    RETURN;
+  ELSIF v_agent_count <> 1 THEN
     RAISE EXCEPTION 'Expected one active primary Emilia agent for account 13; found %', v_agent_count;
   END IF;
 
