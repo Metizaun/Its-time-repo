@@ -28,6 +28,27 @@ test("an address question is answered with the selected company's official data"
   ]);
 });
 
+test("a routed appointment pole returns its configured address override", () => {
+  const routedPole = {
+    company: {
+      id: "viana-pole-id",
+      name: "Marcílio de Noronha",
+      address: "Av. Vitória, 47, CEP 29135-368, ao lado da Papelaria Beger, Marcílio de Noronha, Viana - ES",
+      city: null,
+      state: null,
+      postalCode: null,
+    },
+  };
+  const reply = enforceAgendaCompanyAddress({
+    reply_blocks: ["Não tenho o endereço oficial disponível aqui para te passar com segurança."],
+    media_asset_key: null,
+  }, routedPole, "Pode me enviar o endereço, por gentileza?");
+
+  assert.deepEqual(reply.reply_blocks, [
+    "A unidade Marcílio de Noronha fica em Av. Vitória, 47, CEP 29135-368, ao lado da Papelaria Beger, Marcílio de Noronha, Viana - ES.",
+  ]);
+});
+
 test("official address data is not forced outside the configured customer process", () => {
   const original = {
     reply_blocks: ["Seu horário foi confirmado."],

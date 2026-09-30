@@ -2164,6 +2164,10 @@ function normalizeAsciiText(value: string) {
     .toLowerCase();
 }
 
+function isAgendaAddressQuestion(value: string) {
+  return /\b(endereco|localizacao|onde fica|como chegar|cep)\b/u.test(normalizeAsciiText(value));
+}
+
 function normalizeAgendaCompany(value: Record<string, unknown> | null): JsonRecord | null {
   if (!value) return null;
   const id = asString(value.company_id) ?? asString(value.id);
@@ -2203,8 +2207,7 @@ export function enforceAgendaCompanyAddress(
 ) {
   const canonicalAddress = canonicalCompanyAddress(agendaData.company);
   if (!canonicalAddress) return reply;
-  const normalizedLeadMessage = normalizeAsciiText(latestLeadMessage);
-  const addressRequested = /\b(endereco|localizacao|onde fica|como chegar|cep)\b/u.test(normalizedLeadMessage);
+  const addressRequested = isAgendaAddressQuestion(latestLeadMessage);
   const falseMissingAddress = reply.reply_blocks.some((block) => {
     const normalizedBlock = normalizeAsciiText(block);
     return /\b(endereco|localizacao)\b/u.test(normalizedBlock)
@@ -12599,6 +12602,7 @@ export class AgentManager {
         sourceStoreMapped: false,
         professionalLocationIds: [] as string[],
         locationLabels: new Map<string, string>(),
+        locationCompanies: new Map<string, JsonRecord>(),
       };
     }
 
@@ -12616,6 +12620,7 @@ export class AgentManager {
     const poleStoreMap = new Map((poleStores ?? []).map((store) => [String(store.id), store]));
     const professionalLocationIds: string[] = [];
     const locationLabels = new Map<string, string>();
+    const locationCompanies = new Map<string, JsonRecord>();
     for (const mapping of storeMappings) {
       const poleStoreId = String(mapping.pole_store_id);
       const poleStore = poleStoreMap.get(poleStoreId);
@@ -12631,6 +12636,14 @@ export class AgentManager {
       ].filter(Boolean).join(", ");
       const displayName = asString(poleStore.display_name) ?? "Polo de atendimento";
       professionalLocationIds.push(professionalLocationId);
+      locationCompanies.set(professionalLocationId, {
+        id: professionalLocationId,
+        name: displayName,
+        address: address || null,
+        city: null,
+        state: null,
+        postalCode: null,
+      });
       locationLabels.set(
         professionalLocationId,
         address ? `${displayName} — ${address}` : displayName,
@@ -12642,7 +12655,37 @@ export class AgentManager {
       sourceStoreMapped: true,
       professionalLocationIds: [...new Set(professionalLocationIds)],
       locationLabels,
+      locationCompanies,
     };
+  }
+
+  private async getBookedStoreCalendarPoleCompany(
+    acesId: number,
+    leadId: string,
+    locationCompanies: Map<string, JsonRecord>,
+  ): Promise<JsonRecord | null> {
+    if (locationCompanies.size === 1) {
+      return locationCompanies.values().next().value ?? null;
+    }
+    if (locationCompanies.size === 0) return null;
+
+    const calendarClient = this.serviceClient.schema("calendar");
+    const { data, error } = await calendarClient
+      .from("events")
+      .select("professional_location_id")
+      .eq("aces_id", acesId)
+      .eq("lead_id", leadId)
+      .in("professional_location_id", [...locationCompanies.keys()])
+      .in("status", ["scheduled", "confirmed"])
+      .is("deleted_at", null)
+      .gte("start_time", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw buildSupabaseOperationError(error, "Nao foi possivel localizar o polo do agendamento");
+
+    const professionalLocationId = asString(data?.professional_location_id);
+    return professionalLocationId ? locationCompanies.get(professionalLocationId) ?? null : null;
   }
 
   private async getStoreLocatorAllowedCompanyIds(agentId: string, acesId: number): Promise<string[]> {
@@ -13187,12 +13230,16 @@ export class AgentManager {
     if (params.request.intent === "none") return result("ignored", "Nenhuma acao de agenda identificada.");
 
     try {
-      const storeRoutingIntent = ["availability", "book", "professionals", "price"].includes(validatedRequest.intent);
+      const addressLookupIntent = validatedRequest.intent === "company_info"
+        && isAgendaAddressQuestion(params.customerMessage ?? "");
+      const storeRoutingIntent = ["availability", "book", "professionals", "price"].includes(validatedRequest.intent)
+        || addressLookupIntent;
       const storeRouting = storeRoutingIntent
         ? await this.getStoreCalendarPoleRouting(params.agent.id, params.agent.aces_id, params.selectedStoreId)
         : null;
       let routeLocationIds: string[] | null = null;
       let routeLocationLabels = new Map<string, string>();
+      let routeLocationCompanies = new Map<string, JsonRecord>();
       if (storeRouting?.agentHasRouting) {
         if (!params.selectedStoreId) {
           await this.saveAgendaContext(params.agent.id, params.lead.id, context, params.customerConversationId);
@@ -13214,8 +13261,16 @@ export class AgentManager {
         }
         routeLocationIds = storeRouting.professionalLocationIds;
         routeLocationLabels = storeRouting.locationLabels;
+        routeLocationCompanies = storeRouting.locationCompanies;
         context = setAgendaSelectedStore(context, params.selectedStoreId);
         context.companyId = null;
+        if (addressLookupIntent) {
+          company = await this.getBookedStoreCalendarPoleCompany(
+            params.agent.aces_id,
+            params.lead.id,
+            routeLocationCompanies,
+          );
+        }
       }
 
       const allowedCompanyIds = routeLocationIds
@@ -15456,9 +15511,10 @@ export class AgentManager {
         sourceMessageId: latestInbound?.id ?? null,
       });
       const currentConfirmedStore = asRecord(asRecord(storeLocatorApplication.data).store);
+      const addressFollowup = isAgendaAddressQuestion(latestInbound?.content ?? "");
       const selectedStoreId = storeLocatorApplication.status === "confirmed"
         ? asString(currentConfirmedStore.id)
-        : result.parsed.store_locator.action === "none"
+        : addressFollowup || result.parsed.store_locator.action === "none"
           ? await this.storeLocator.getLatestSelectedStoreId(agent.aces_id, agent.id, lead.id)
           : null;
       const storeSelectionPending =
@@ -15468,7 +15524,9 @@ export class AgentManager {
       const agendaApplication = await this.executeAgendaSubworkflow({
         agent,
         lead,
-        request: result.parsed.agenda_request,
+        request: addressFollowup && result.parsed.agenda_request.intent === "none"
+          ? { ...result.parsed.agenda_request, intent: "company_info" }
+          : result.parsed.agenda_request,
         storedContext: leadState?.agenda_context,
         selectedStoreId,
         storeSelectionPending,
