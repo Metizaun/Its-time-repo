@@ -79,6 +79,10 @@ test("a confirmed calendar pole can be recovered from city and neighborhood text
     ),
     "vila-velha-centro",
   );
+  assert.equal(
+    selectCalendarPoleStoreId("No centro ou Glória, Vila Velha", stores),
+    "vila-velha-centro",
+  );
 });
 
 test("a city alone or an unknown neighborhood does not select an appointment pole", () => {

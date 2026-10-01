@@ -14062,6 +14062,7 @@ export class AgentManager {
     sourceMessageId: string | null;
     referenceText?: string | null;
     locationContextText?: string | null;
+    preferCalendarPole?: boolean;
   }) {
     const ignored = (message = "Nenhuma operacao de filial solicitada.") => ({
       status: "ignored",
@@ -14095,17 +14096,29 @@ export class AgentManager {
           params.locationContextText ?? "",
           visibleStores,
         );
-        const result = await this.storeLocator.recommend({
-          acesId: params.agent.aces_id,
-          leadId: params.lead.id,
-          agentId: params.agent.id,
-          locationText,
-          sourceMessageId: params.sourceMessageId,
-          candidateLimit: parsePositiveInteger(
-            typeof config.candidateLimit === "number" ? config.candidateLimit : undefined,
-            5,
-          ),
-        });
+        const calendarPoleStoreId = params.preferCalendarPole
+          ? await this.resolveCalendarPoleStoreId(params.agent.id, params.agent.aces_id, locationText)
+          : null;
+        const result = calendarPoleStoreId
+          ? await this.storeLocator.recommendStore({
+              acesId: params.agent.aces_id,
+              leadId: params.lead.id,
+              agentId: params.agent.id,
+              storeId: calendarPoleStoreId,
+              locationText,
+              sourceMessageId: params.sourceMessageId,
+            })
+          : await this.storeLocator.recommend({
+              acesId: params.agent.aces_id,
+              leadId: params.lead.id,
+              agentId: params.agent.id,
+              locationText,
+              sourceMessageId: params.sourceMessageId,
+              candidateLimit: parsePositiveInteger(
+                typeof config.candidateLimit === "number" ? config.candidateLimit : undefined,
+                5,
+              ),
+            });
         return { status: result.status, message: result.message, data: result };
       }
 
@@ -15715,6 +15728,7 @@ export class AgentManager {
         sourceMessageId: latestInbound?.id ?? null,
         referenceText: storeReferenceText,
         locationContextText: recentLeadLocationContext,
+        preferCalendarPole: agendaNeedsStore,
       });
       const currentConfirmedStore = asRecord(asRecord(storeLocatorApplication.data).store);
       const addressFollowup = isAgendaAddressQuestion(latestInbound?.content ?? "");

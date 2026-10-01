@@ -837,6 +837,73 @@ export class StoreLocatorService {
     };
   }
 
+  async recommendStore(input: {
+    acesId: number;
+    leadId: string;
+    agentId: string;
+    storeId: string;
+    locationText: string;
+    sourceMessageId?: string | null;
+  }): Promise<StoreLocatorRecommendationResult> {
+    const { data: row, error } = await this.locatorClient
+      .from("stores")
+      .select("*")
+      .eq("id", input.storeId)
+      .eq("aces_id", input.acesId)
+      .eq("is_active", true)
+      .eq("ai_visible", true)
+      .maybeSingle();
+    if (error) throw new StoreLocatorError("database_error", "Nao foi possivel carregar a filial indicada", error);
+    if (!row) throw new StoreLocatorError("not_found", "Filial nao encontrada ou inativa");
+    const hiddenStoreIds = await this.getHiddenStoreIds(input.acesId, input.agentId, [input.storeId]);
+    if (hiddenStoreIds.has(input.storeId)) throw new StoreLocatorError("not_found", "Filial nao encontrada para este agente");
+
+    const latitude = Number(row.latitude);
+    const longitude = Number(row.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      throw new StoreLocatorError("not_found", "A filial indicada ainda nao possui localizacao validada");
+    }
+    const store = mapStore(row as Record<string, unknown>);
+    const recommendation: StoreRecommendation = {
+      ...store,
+      latitude,
+      longitude,
+      straightLineDistanceMeters: 0,
+      routeDistanceMeters: 0,
+      routeDurationSeconds: 0,
+    };
+    const locationText = input.locationText.trim();
+    const { error: eventError } = await this.locatorClient.from("lead_location_events").insert({
+      aces_id: input.acesId,
+      lead_id: input.leadId,
+      agent_id: input.agentId,
+      source_message_id: input.sourceMessageId ?? null,
+      raw_location_text: locationText,
+      normalized_location_text: normalizeLocationText(locationText),
+      latitude,
+      longitude,
+      location: `SRID=4326;POINT(${longitude} ${latitude})`,
+      neighborhood: store.neighborhood,
+      city: store.city,
+      state: store.state,
+      recommended_store_id: store.id,
+      recommended_store_address_hash: store.addressHash,
+      candidate_store_ids: [store.id],
+      route_distance_meters: 0,
+      route_duration_seconds: 0,
+    });
+    if (eventError) throw new StoreLocatorError("database_error", "A filial foi identificada, mas a recomendacao nao foi registrada", eventError);
+
+    return {
+      status: "succeeded",
+      normalizedLocation: normalizeLocationText(locationText),
+      recommendation,
+      alternatives: [],
+      message: this.buildRecommendationMessage(recommendation),
+      externalCalls: { geocoding: 0, routes: 0 },
+    };
+  }
+
   async getLatestSelectedStoreId(acesId: number, agentId: string, leadId: string) {
     const { data, error } = await this.locatorClient
       .from("lead_location_events")
@@ -1035,6 +1102,6 @@ export class StoreLocatorService {
 
   private buildRecommendationMessage(store: StoreRecommendation) {
     const number = store.addressNumber ? `, ${store.addressNumber}` : "";
-    return `A unidade mais indicada para voce e a ${store.displayName}, na ${store.addressLine}${number}, ${store.neighborhood}.`;
+    return `A unidade mais indicada para voce e a ${store.displayName}, na ${store.addressLine}${number}, ${store.neighborhood}. Voce confirma essa unidade?`;
   }
 }
