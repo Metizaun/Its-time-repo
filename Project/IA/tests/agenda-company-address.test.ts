@@ -8,6 +8,7 @@ import {
   isSecureAgendaCompanyMatch,
   selectCalendarPoleStoreId,
 } from "../sdr-agent-gemini.js";
+import { parseStoreLocationCoordinates } from "../store-locator-service.js";
 
 const agendaData = {
   company: {
@@ -156,6 +157,19 @@ test("a short neighborhood reply inherits the city from the immediately recent c
     enrichStoreLocationWithKnownCity("Campo Grande, Cariacica", "", stores),
     "Campo Grande, Cariacica",
   );
+});
+
+test("a PostGIS EWKB point exposes the stored longitude and latitude", () => {
+  const point = Buffer.alloc(25);
+  point.writeUInt8(1, 0);
+  point.writeUInt32LE(0x20000001, 1);
+  point.writeUInt32LE(4326, 5);
+  point.writeDoubleLE(-40.292, 9);
+  point.writeDoubleLE(-20.329, 17);
+  assert.deepEqual(parseStoreLocationCoordinates(point.toString("hex")), {
+    latitude: -20.329,
+    longitude: -40.292,
+  });
 });
 
 test("official address data is not forced outside the configured customer process", () => {

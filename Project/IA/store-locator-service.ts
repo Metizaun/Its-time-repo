@@ -216,6 +216,31 @@ function mapStore(row: Record<string, unknown>): StoreRecord {
   };
 }
 
+export function parseStoreLocationCoordinates(value: unknown) {
+  if (value && typeof value === "object") {
+    const coordinates = (value as { coordinates?: unknown }).coordinates;
+    if (Array.isArray(coordinates) && coordinates.length >= 2) {
+      const longitude = Number(coordinates[0]);
+      const latitude = Number(coordinates[1]);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) return { latitude, longitude };
+    }
+  }
+  if (typeof value !== "string" || !/^[0-9a-f]+$/iu.test(value) || value.length < 42) return null;
+  try {
+    const buffer = Buffer.from(value, "hex");
+    const littleEndian = buffer.readUInt8(0) === 1;
+    const readUInt32 = (offset: number) => littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+    const readDouble = (offset: number) => littleEndian ? buffer.readDoubleLE(offset) : buffer.readDoubleBE(offset);
+    const geometryType = readUInt32(1);
+    const coordinateOffset = 5 + ((geometryType & 0x20000000) !== 0 ? 4 : 0);
+    const longitude = readDouble(coordinateOffset);
+    const latitude = readDouble(coordinateOffset + 8);
+    return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null;
+  } catch {
+    return null;
+  }
+}
+
 function mapFolder(row: Record<string, unknown>): StoreFolderRecord {
   return {
     id: String(row.id),
@@ -858,11 +883,11 @@ export class StoreLocatorService {
     const hiddenStoreIds = await this.getHiddenStoreIds(input.acesId, input.agentId, [input.storeId]);
     if (hiddenStoreIds.has(input.storeId)) throw new StoreLocatorError("not_found", "Filial nao encontrada para este agente");
 
-    const latitude = Number(row.latitude);
-    const longitude = Number(row.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    const coordinates = parseStoreLocationCoordinates(row.location);
+    if (!coordinates) {
       throw new StoreLocatorError("not_found", "A filial indicada ainda nao possui localizacao validada");
     }
+    const { latitude, longitude } = coordinates;
     const store = mapStore(row as Record<string, unknown>);
     const recommendation: StoreRecommendation = {
       ...store,
