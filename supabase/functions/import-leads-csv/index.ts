@@ -1,6 +1,11 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import { normalizePhoneDigits, normalizePhoneIdentity } from "../_shared/phone-normalization.ts";
+import {
+  canImportLeadsToInstance,
+  type InstanceAccessLevel,
+  resolveImportedLeadOwner,
+} from "./access-rules.ts";
 
 type ImportLeadCsvRow = {
   nome?: unknown;
@@ -203,7 +208,7 @@ function sanitizeRows(rows: ImportLeadCsvRow[]) {
 
 async function ensureImportOptionsAccess(
   adminClient: ReturnType<typeof createClient>,
-  crmUser: { id: string; aces_id: number },
+  crmUser: { id: string; aces_id: number; role: string },
   importOptions: { stageId: string; source: string; ownerId: string; instanceName: string }
 ) {
   const acesId = crmUser.aces_id;
@@ -239,21 +244,57 @@ async function ensureImportOptionsAccess(
   const { data: instance, error: instanceError } = await adminClient
     .schema("crm")
     .from("instance")
-    .select("instancia")
+    .select("instancia, created_by")
     .eq("instancia", importOptions.instanceName)
     .eq("aces_id", acesId)
-    .eq("created_by", crmUser.id)
+    .or("setup_status.is.null,setup_status.neq.cancelled")
     .maybeSingle();
 
   if (instanceError || !instance) {
     throw new Error("Instancia invalida para o usuario atual.");
+  }
+
+  let membershipAccessLevel: InstanceAccessLevel = null;
+  if (crmUser.role !== "ADMIN" && instance.created_by !== crmUser.id) {
+    const { data: membership, error: membershipError } = await adminClient
+      .schema("crm")
+      .from("instance_access_memberships")
+      .select("access_level")
+      .eq("aces_id", acesId)
+      .eq("instance_name", importOptions.instanceName)
+      .eq("crm_user_id", crmUser.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (membershipError) {
+      throw new Error(
+        "Nao foi possivel validar o acesso a instancia selecionada.",
+      );
+    }
+
+    membershipAccessLevel =
+      (membership?.access_level as InstanceAccessLevel | undefined) ?? null;
+  }
+
+  if (
+    !canImportLeadsToInstance({
+      userId: crmUser.id,
+      userRole: crmUser.role,
+      instanceCreatedBy: instance.created_by,
+      membershipAccessLevel,
+    })
+  ) {
+    throw new Error(
+      "Usuario sem permissao para importar leads nesta instancia.",
+    );
   }
 }
 
 async function resolveLeadOwnerId(
   adminClient: ReturnType<typeof createClient>,
   acesId: number,
-  instanceName: string
+  instanceName: string,
+  requestingUserId: string,
 ) {
   const { data: instance, error } = await adminClient
     .schema("crm")
@@ -264,11 +305,13 @@ async function resolveLeadOwnerId(
     .or("setup_status.is.null,setup_status.neq.cancelled")
     .maybeSingle();
 
-  if (error || !instance?.created_by) {
-    throw new Error("Nao foi possivel identificar o responsavel da instancia selecionada.");
+  if (error || !instance) {
+    throw new Error(
+      "Nao foi possivel identificar o responsavel da instancia selecionada.",
+    );
   }
 
-  return instance.created_by;
+  return resolveImportedLeadOwner(instance.created_by, requestingUserId);
 }
 
 async function insertRowsInChunks(
@@ -285,7 +328,12 @@ async function insertRowsInChunks(
 ) {
   const CHUNK_SIZE = 500;
   let inserted = 0;
-  const resolvedOwnerId = await resolveLeadOwnerId(adminClient, acesId, importOptions.instanceName);
+  const resolvedOwnerId = await resolveLeadOwnerId(
+    adminClient,
+    acesId,
+    importOptions.instanceName,
+    importOptions.ownerId,
+  );
 
   for (let index = 0; index < rows.length; index += CHUNK_SIZE) {
     const chunk = rows.slice(index, index + CHUNK_SIZE).map((row) => ({
